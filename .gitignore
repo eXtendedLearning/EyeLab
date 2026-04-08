@@ -1,0 +1,13 @@
+#Documents with sensitive information or not relevant for the repository
+.docs
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Generated files
+python/markers/
+python/config/camera_params.yaml
+python/screenshot_*.png
+*.mp4

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la README* CHANGELOG*)",
+      "Bash(source venv/Scripts/activate)",
+      "Bash(python python/unv_to_json.py C:/Users/gcmdn/Downloads/geometry.unv -o /tmp/geometry.json --pretty --verbose)"
+    ]
+  }
+}

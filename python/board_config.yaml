@@ -1,0 +1,146 @@
+# EyeLab — Custom Non-Planar ArUco Board Configuration
+# L-shaped flangia marker layout
+#
+# Dictionary : DICT_4X4_50
+# Marker size : 12 mm  (0.012 m)
+# Grid spacing: 16 mm  (0.016 m)  — markers centred on a 16 mm grid
+#
+# The flangia has two planar faces joined at a right angle (L-shape):
+#   Face A — horizontal base (XZ plane, Y = 0)
+#   Face B — vertical riser  (XY plane, Z = 0)
+#
+# Corner order per marker (OpenCV convention, looking at face from outside):
+#   [top-left, top-right, bottom-right, bottom-left]
+#
+# All coordinates in METRES.
+# ─────────────────────────────────────────────────────────────────────────────
+# TODO: Replace placeholder coordinates with measured values after Visit 1.
+#       Measure with calipers / coordinate measuring machine (CMM).
+#       Update grid_origin_* values to reflect the actual flangia geometry.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Grid origin of Face A (bottom-left corner of first marker, in world/board frame)
+# Face A lies in the XZ plane (Y=0); grid grows along +X and +Z.
+face_a_origin: [0.0, 0.0, 0.0]  # metres [x, y, z]
+
+# Grid origin of Face B (bottom-left corner of first marker on the riser)
+# Face B is perpendicular to Face A; grows along +X and +Y.
+face_b_origin: [0.0, 0.0, 0.0]  # placeholder — measure from flangia
+
+markers:
+  # ── Face A: horizontal base ──────────────────────────────────────────────
+  # Markers at grid positions (col, row), Face A, Y=0
+  # Corner positions: half = 0.006 m (marker half-size)
+  #   [x_grid + 0,       0, z_grid + 0      ]  ← top-left
+  #   [x_grid + 0.012,   0, z_grid + 0      ]  ← top-right
+  #   [x_grid + 0.012,   0, z_grid + 0.012  ]  ← bottom-right
+  #   [x_grid + 0,       0, z_grid + 0.012  ]  ← bottom-left
+  # where x_grid = col * 0.016,  z_grid = row * 0.016
+
+  - id: 0
+    face: A
+    grid: [0, 0]
+    corners:
+      - [0.000, 0.0, 0.000]
+      - [0.012, 0.0, 0.000]
+      - [0.012, 0.0, 0.012]
+      - [0.000, 0.0, 0.012]
+
+  - id: 1
+    face: A
+    grid: [1, 0]
+    corners:
+      - [0.016, 0.0, 0.000]
+      - [0.028, 0.0, 0.000]
+      - [0.028, 0.0, 0.012]
+      - [0.016, 0.0, 0.012]
+
+  - id: 2
+    face: A
+    grid: [2, 0]
+    corners:
+      - [0.032, 0.0, 0.000]
+      - [0.044, 0.0, 0.000]
+      - [0.044, 0.0, 0.012]
+      - [0.032, 0.0, 0.012]
+
+  - id: 3
+    face: A
+    grid: [3, 0]
+    corners:
+      - [0.048, 0.0, 0.000]
+      - [0.060, 0.0, 0.000]
+      - [0.060, 0.0, 0.012]
+      - [0.048, 0.0, 0.012]
+
+  - id: 4
+    face: A
+    grid: [0, 1]
+    corners:
+      - [0.000, 0.0, 0.016]
+      - [0.012, 0.0, 0.016]
+      - [0.012, 0.0, 0.028]
+      - [0.000, 0.0, 0.028]
+
+  - id: 5
+    face: A
+    grid: [1, 1]
+    corners:
+      - [0.016, 0.0, 0.016]
+      - [0.028, 0.0, 0.016]
+      - [0.028, 0.0, 0.028]
+      - [0.016, 0.0, 0.028]
+
+  # ── Face B: vertical riser ───────────────────────────────────────────────
+  # Face B is perpendicular to Face A, sharing the X axis.
+  # In board frame: Face B lies in XY plane (Z=0), growing along +Y.
+  # Corner positions for Face B (row=0 is at Y=0, same as Face A base):
+  #   [x_grid + 0,       y_grid + 0,      0  ]  ← top-left  (looking from +Z)
+  #   [x_grid + 0.012,   y_grid + 0,      0  ]  ← top-right
+  #   [x_grid + 0.012,   y_grid + 0.012,  0  ]  ← bottom-right
+  #   [x_grid + 0,       y_grid + 0.012,  0  ]  ← bottom-left
+
+  - id: 10
+    face: B
+    grid: [0, 0]
+    corners:
+      - [0.000, 0.000, 0.0]
+      - [0.012, 0.000, 0.0]
+      - [0.012, 0.012, 0.0]
+      - [0.000, 0.012, 0.0]
+
+  - id: 11
+    face: B
+    grid: [1, 0]
+    corners:
+      - [0.016, 0.000, 0.0]
+      - [0.028, 0.000, 0.0]
+      - [0.028, 0.012, 0.0]
+      - [0.016, 0.012, 0.0]
+
+  - id: 12
+    face: B
+    grid: [2, 0]
+    corners:
+      - [0.032, 0.000, 0.0]
+      - [0.044, 0.000, 0.0]
+      - [0.044, 0.012, 0.0]
+      - [0.032, 0.012, 0.0]
+
+  - id: 13
+    face: B
+    grid: [0, 1]
+    corners:
+      - [0.000, 0.016, 0.0]
+      - [0.012, 0.016, 0.0]
+      - [0.012, 0.028, 0.0]
+      - [0.000, 0.028, 0.0]
+
+  - id: 14
+    face: B
+    grid: [1, 1]
+    corners:
+      - [0.016, 0.016, 0.0]
+      - [0.028, 0.016, 0.0]
+      - [0.028, 0.028, 0.0]
+      - [0.016, 0.028, 0.0]
