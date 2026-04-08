@@ -1,5 +1,6 @@
 #Documents with sensitive information or not relevant for the repository
 .docs
+.claude
 
 # Python
 venv/
@@ -11,3 +12,7 @@ python/markers/
 python/config/camera_params.yaml
 python/screenshot_*.png
 *.mp4
+
+# Runtime logs
+python/.logs/
+.logs/
