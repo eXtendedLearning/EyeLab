@@ -39,6 +39,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers 3D projectio
 
 # EyeLab modules
 from calibrate import load_calibration, save_calibration, make_charuco_board
+from eyelab_logger import SessionLogger
 from generate_markers import generate_markers, MARKER_SIZE_MM, GRID_SPACING_MM
 from pose_estimator import ArucoPipeline, ThreadedCapture, FrameResult
 from registration import (
@@ -57,6 +58,7 @@ WINDOW_SIZE = "1400x860"
 PREVIEW_W, PREVIEW_H = 640, 480
 CONFIG_DIR = Path(__file__).parent / "config"
 MARKERS_DIR = Path(__file__).parent / "markers"
+LOG_DIR = Path(__file__).parent / ".logs"
 CALIBRATION_FILE = CONFIG_DIR / "camera_params.yaml"
 MARKER_CONFIG_FILE = CONFIG_DIR / "marker_config.json"
 
@@ -85,6 +87,26 @@ class EyeLabApp:
 
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         MARKERS_DIR.mkdir(parents=True, exist_ok=True)
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Start session logger (captures stdout/stderr/exceptions to .logs/*.jsonl)
+        self.session_log = SessionLogger.start(LOG_DIR)
+
+        # Route uncaught Tk callback errors into the session log
+        def _tk_callback_exception(exc, val, tb):
+            import traceback as _tb
+            text = "".join(_tb.format_exception(exc, val, tb))
+            self.session_log.error(f"Tk callback exception:\n{text}")
+            # Show in GUI log too
+            try:
+                self.log(f"Tk callback exception: {val}", level="ERROR")
+            except Exception:
+                pass
+        self.root.report_callback_exception = _tk_callback_exception
+
+        # Replace the default tkinter "feather" icon with a custom EyeLab one
+        self._app_icon: Optional[ImageTk.PhotoImage] = None
+        self._set_app_icon()
 
         # ── State ─────────────────────────────────────────────────────────
         self.geometry_data: Optional[dict] = None       # parsed UNV JSON
@@ -118,15 +140,53 @@ class EyeLabApp:
         file_menu.add_command(label="Load UNV file...", command=self._load_unv)
         file_menu.add_command(label="Load wireframe JSON...", command=self._load_json)
         file_menu.add_separator()
+        file_menu.add_command(label="Open log folder", command=self._open_log_folder)
+        file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self._on_close)
         menubar.add_cascade(label="File", menu=file_menu)
 
         tools_menu = tk.Menu(menubar, tearoff=0)
         tools_menu.add_command(label="Generate markers...", command=self._show_marker_gen)
+        tools_menu.add_command(label="Load markers from directory...", command=self._show_marker_loader)
         tools_menu.add_command(label="Calibrate camera...", command=self._start_calibration)
         menubar.add_cascade(label="Tools", menu=tools_menu)
 
         self.root.config(menu=menubar)
+
+    def _set_app_icon(self) -> None:
+        """
+        Replace the default tkinter feather icon. The feather icon is the same
+        one used by another tool the user runs, so we draw a small EyeLab icon
+        (an eye) in-memory and apply it via iconphoto so we don't need any
+        external asset file.
+        """
+        try:
+            size = 64
+            img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            from PIL import ImageDraw
+            d = ImageDraw.Draw(img)
+            # Outer eye almond shape (two arcs would be ideal; ellipse is good enough)
+            d.ellipse((4, 16, 60, 48), outline=(20, 80, 160, 255), width=4,
+                      fill=(230, 240, 255, 255))
+            # Iris
+            d.ellipse((22, 18, 42, 46), fill=(20, 110, 200, 255))
+            # Pupil
+            d.ellipse((28, 24, 36, 40), fill=(0, 0, 0, 255))
+            # Highlight
+            d.ellipse((30, 26, 33, 29), fill=(255, 255, 255, 255))
+            self._app_icon = ImageTk.PhotoImage(img)
+            self.root.iconphoto(True, self._app_icon)
+        except Exception as e:
+            # Non-fatal — keep going with whatever Tk gives us
+            if SessionLogger.get():
+                SessionLogger.get().warning(f"Failed to set app icon: {e}")
+
+    def _open_log_folder(self) -> None:
+        try:
+            import os
+            os.startfile(str(LOG_DIR))  # Windows
+        except Exception as e:
+            messagebox.showinfo("Logs", f"Log directory:\n{LOG_DIR}\n\n({e})")
 
     def _build_layout(self) -> None:
         # Main paned window: left panel | right panel
@@ -174,10 +234,11 @@ class EyeLabApp:
         ttk.Entry(mk_frame, textvariable=self.marker_size_var, width=8).grid(row=0, column=1, padx=4, pady=2)
 
         ttk.Button(mk_frame, text="Generate markers", command=self._show_marker_gen).grid(row=1, column=0, columnspan=2, sticky="w", padx=4, pady=2)
-        ttk.Button(mk_frame, text="Edit correspondences...", command=self._show_correspondence_editor).grid(row=2, column=0, columnspan=2, sticky="w", padx=4, pady=2)
+        ttk.Button(mk_frame, text="Load markers from folder...", command=self._show_marker_loader).grid(row=2, column=0, columnspan=2, sticky="w", padx=4, pady=2)
+        ttk.Button(mk_frame, text="Edit correspondences...", command=self._show_correspondence_editor).grid(row=3, column=0, columnspan=2, sticky="w", padx=4, pady=2)
 
         self.corr_status_var = tk.StringVar(value="0 correspondences")
-        ttk.Label(mk_frame, textvariable=self.corr_status_var).grid(row=3, column=0, columnspan=2, sticky="w", padx=4)
+        ttk.Label(mk_frame, textvariable=self.corr_status_var).grid(row=4, column=0, columnspan=2, sticky="w", padx=4)
 
         # AR controls
         ar_frame = ttk.LabelFrame(left, text="AR Overlay")
@@ -228,12 +289,23 @@ class EyeLabApp:
     #  Logging
     # ══════════════════════════════════════════════════════════════════════
 
-    def log(self, msg: str) -> None:
+    def log(self, msg: str, level: str = "INFO") -> None:
         ts = datetime.now().strftime("%H:%M:%S")
         self.log_text.configure(state="normal")
         self.log_text.insert("end", f"[{ts}] {msg}\n")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
+        # Mirror into the persistent session log
+        sl = SessionLogger.get()
+        if sl is not None:
+            if level == "ERROR":
+                sl.error(msg)
+            elif level == "WARNING":
+                sl.warning(msg)
+            elif level == "DEBUG":
+                sl.debug(msg)
+            else:
+                sl.info(msg)
 
     # ══════════════════════════════════════════════════════════════════════
     #  Camera
@@ -575,7 +647,15 @@ class EyeLabApp:
         if self.ar_running:
             self._stop_ar()
         plt.close("all")
+        SessionLogger.shutdown()
         self.root.destroy()
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  Marker loading from directory
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _show_marker_loader(self) -> None:
+        MarkerLoaderWindow(self.root, self)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -622,6 +702,162 @@ class MarkerGenWindow:
             self.win.destroy()
         except Exception as e:
             messagebox.showerror("Error", str(e))
+
+
+class MarkerLoaderWindow:
+    """
+    Dialog to load existing ArUco marker images from any directory and
+    re-render them at a user-specified physical size (mm) and DPI, so the
+    printed result matches the dimensions used by the AR pipeline.
+
+    The loaded marker PNGs are scaled (nearest-neighbour, no smoothing) to the
+    exact pixel count corresponding to `marker_size_mm` at the chosen DPI,
+    then padded with the same proportional white border that
+    generate_markers.py uses, and written to MARKERS_DIR.
+
+    The chosen marker size is also pushed into the main app's
+    `marker_size_var` so the AR pipeline uses the matching physical size.
+    """
+
+    def __init__(self, parent: tk.Tk, app: "EyeLabApp"):
+        self.app = app
+        self.win = tk.Toplevel(parent)
+        self.win.title("Load Markers From Directory")
+        self.win.geometry("480x300")
+        self.win.transient(parent)
+
+        # Source directory
+        ttk.Label(self.win, text="Source folder containing marker images (PNG):").grid(
+            row=0, column=0, columnspan=3, padx=8, pady=(10, 2), sticky="w")
+        self.src_var = tk.StringVar(value="")
+        ttk.Entry(self.win, textvariable=self.src_var, width=48).grid(
+            row=1, column=0, columnspan=2, padx=8, sticky="we")
+        ttk.Button(self.win, text="Browse...", command=self._browse).grid(
+            row=1, column=2, padx=4)
+
+        # Marker size (mm)
+        ttk.Label(self.win, text="Marker physical size (mm):").grid(
+            row=2, column=0, padx=8, pady=(12, 2), sticky="w")
+        self.size_var = tk.DoubleVar(value=app.marker_size_var.get())
+        ttk.Entry(self.win, textvariable=self.size_var, width=10).grid(
+            row=2, column=1, padx=8, pady=(12, 2), sticky="w")
+
+        # Grid spacing (mm) — used only for the white border padding
+        ttk.Label(self.win, text="Grid cell size (mm):").grid(
+            row=3, column=0, padx=8, pady=2, sticky="w")
+        self.grid_var = tk.DoubleVar(value=GRID_SPACING_MM)
+        ttk.Entry(self.win, textvariable=self.grid_var, width=10).grid(
+            row=3, column=1, padx=8, pady=2, sticky="w")
+
+        # DPI
+        ttk.Label(self.win, text="Output DPI:").grid(
+            row=4, column=0, padx=8, pady=2, sticky="w")
+        self.dpi_var = tk.IntVar(value=300)
+        ttk.Entry(self.win, textvariable=self.dpi_var, width=10).grid(
+            row=4, column=1, padx=8, pady=2, sticky="w")
+
+        # Apply pipeline size
+        self.update_pipeline_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            self.win,
+            text="Also set this size as the AR pipeline marker size",
+            variable=self.update_pipeline_var,
+        ).grid(row=5, column=0, columnspan=3, padx=8, pady=(8, 2), sticky="w")
+
+        ttk.Label(
+            self.win,
+            text=(
+                f"Output: {MARKERS_DIR}\n"
+                "Markers will be re-rendered (nearest-neighbour) at the\n"
+                "exact pixel count for the requested physical size."
+            ),
+            justify="left",
+        ).grid(row=6, column=0, columnspan=3, padx=8, pady=(8, 4), sticky="w")
+
+        ttk.Button(self.win, text="Load & Re-render", command=self._load).grid(
+            row=7, column=0, columnspan=3, pady=10)
+
+    def _browse(self) -> None:
+        d = filedialog.askdirectory(title="Select marker source directory")
+        if d:
+            self.src_var.set(d)
+
+    def _load(self) -> None:
+        src = Path(self.src_var.get().strip())
+        if not src.is_dir():
+            messagebox.showerror("Invalid Source", f"Not a directory:\n{src}")
+            return
+        try:
+            size_mm = float(self.size_var.get())
+            grid_mm = float(self.grid_var.get())
+            dpi = int(self.dpi_var.get())
+        except (ValueError, tk.TclError) as e:
+            messagebox.showerror("Invalid Input", str(e))
+            return
+        if size_mm <= 0 or dpi <= 0:
+            messagebox.showerror("Invalid Input", "Size and DPI must be positive.")
+            return
+        if grid_mm < size_mm:
+            messagebox.showerror("Invalid Input",
+                                 "Grid cell size must be ≥ marker size.")
+            return
+
+        files = sorted(
+            [p for p in src.iterdir()
+             if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}]
+        )
+        if not files:
+            messagebox.showwarning("No Images", "No image files found in that folder.")
+            return
+
+        marker_px = int(round(size_mm * dpi / 25.4))
+        border_px = int(round((grid_mm - size_mm) / 2.0 * dpi / 25.4))
+        MARKERS_DIR.mkdir(parents=True, exist_ok=True)
+
+        count = 0
+        for f in files:
+            img = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                self.app.log(f"Skipped (not an image): {f.name}", level="WARNING")
+                continue
+            # Crop any existing white padding by tight-binarising and bounding box.
+            # Falls back to the original image if cropping fails.
+            try:
+                _, bw = cv2.threshold(img, 200, 255, cv2.THRESH_BINARY_INV)
+                ys, xs = np.where(bw > 0)
+                if ys.size and xs.size:
+                    y0, y1 = ys.min(), ys.max() + 1
+                    x0, x1 = xs.min(), xs.max() + 1
+                    img = img[y0:y1, x0:x1]
+            except Exception:
+                pass
+            # Resize to exact pixel count for the requested physical size
+            resized = cv2.resize(img, (marker_px, marker_px),
+                                 interpolation=cv2.INTER_NEAREST)
+            # Pad with white border to reach the grid cell size
+            if border_px > 0:
+                resized = cv2.copyMakeBorder(
+                    resized, border_px, border_px, border_px, border_px,
+                    cv2.BORDER_CONSTANT, value=255,
+                )
+            out = MARKERS_DIR / f.name
+            cv2.imwrite(str(out), resized)
+            count += 1
+
+        if self.update_pipeline_var.get():
+            self.app.marker_size_var.set(size_mm)
+
+        self.app.log(
+            f"Loaded {count} marker(s) from {src} at {size_mm} mm "
+            f"({marker_px}px @ {dpi} DPI). Output: {MARKERS_DIR}"
+        )
+        messagebox.showinfo(
+            "Done",
+            f"Re-rendered {count} marker(s) at {size_mm} mm.\n"
+            f"Saved to:\n{MARKERS_DIR}\n\n"
+            "Print at 100% scale (no 'fit to page')."
+        )
+        self.win.destroy()
 
 
 class CorrespondenceEditor:
