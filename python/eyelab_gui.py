@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tkinter as tk
 from datetime import datetime
@@ -25,6 +26,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Optional
 
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
@@ -35,10 +37,11 @@ import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers 3D projection
+from mpl_toolkits.mplot3d import Axes3D, proj3d  # noqa: F401 - registers 3D projection
 
 # EyeLab modules
-from calibrate import load_calibration, save_calibration, make_charuco_board
+from calibrate import load_calibration, save_calibration, make_charuco_board, generate_board_image
+from camera_utils import list_cameras, open_camera
 from eyelab_logger import SessionLogger
 from generate_markers import generate_markers, MARKER_SIZE_MM, GRID_SPACING_MM
 from pose_estimator import ArucoPipeline, ThreadedCapture, FrameResult
@@ -62,18 +65,83 @@ LOG_DIR = Path(__file__).parent / ".logs"
 CALIBRATION_FILE = CONFIG_DIR / "camera_params.yaml"
 MARKER_CONFIG_FILE = CONFIG_DIR / "marker_config.json"
 
+HELP_TOPICS = {
+    "Quick start": (
+        "1. Select the camera in the Camera panel.\n"
+        "2. Calibrate the camera with a printed ChArUco board.\n"
+        "3. Load a UNV file and inspect it in the 3D Preview tab.\n"
+        "4. Generate or load ArUco marker images and print them at 100% scale.\n"
+        "5. Link marker IDs to UNV nodes in Edit correspondences.\n"
+        "6. Start AR and check that the wireframe follows the physical structure.\n\n"
+        "Good results depend on three things: a camera calibration with low RMS error, "
+        "markers printed at the physical size entered in EyeLab, and correct marker-to-node "
+        "correspondences."
+    ),
+    "UNV geometry viewer": (
+        "Load UNV accepts Siemens/Testlab .unv or .uff geometry files. EyeLab parses nodes, "
+        "trace lines, coordinate systems, and units, then shows the nodes and wireframe in "
+        "the 3D preview.\n\n"
+        "Drag in the plot to rotate the model. The bottom-right orientation globe stays pinned "
+        "to the screen and shows the current X/Y/Z direction. Click an arrow on that globe to "
+        "snap the model to the X, Y, or Z view."
+    ),
+    "Markers and registration": (
+        "EyeLab uses printed ArUco markers as known physical anchors. Every marker used for "
+        "registration needs a matching UNV position. Use Edit correspondences to assign marker "
+        "numbers such as aruco01 to a UNV node or a measured XYZ position.\n\n"
+        "Use at least 3 non-collinear correspondences. Four or more are better because EyeLab "
+        "can report residual error and is less sensitive to one bad point."
+    ),
+    "Camera calibration": (
+        "Camera calibration estimates the camera matrix and lens distortion. EyeLab stores the "
+        "result in python/config/camera_params.yaml and uses it for marker pose and wireframe "
+        "projection.\n\n"
+        "Aim for RMS reprojection error below 1.0 px. If the error is higher, capture more varied "
+        "views of the board: near, far, tilted, left/right, and close to the image corners."
+    ),
+    "AR overlay": (
+        "Start AR opens the selected camera and runs ArUco detection. With calibration loaded and "
+        "registration solved, EyeLab projects the UNV wireframe onto the camera frame.\n\n"
+        "If the overlay jumps, check that the marker size in millimetres matches the printed marker "
+        "size, and that the correspondences point to the real marker locations on the structure."
+    ),
+    "Troubleshooting": (
+        "No camera found: press Refresh, close other apps using the webcam, or try another camera index.\n\n"
+        "Markers not detected: improve lighting, keep the full black border visible, and avoid glossy paper.\n\n"
+        "Wireframe mirrored or shifted: re-check marker-to-node assignments and units in the UNV file.\n\n"
+        "Calibration RMS too high: recapture with more board angles and avoid blurred frames."
+    ),
+}
 
-# ── Helper: list available cameras ────────────────────────────────────────────
-
-def list_cameras(max_test: int = 8) -> list[int]:
-    """Probe camera indices 0..max_test and return those that open successfully."""
-    available = []
-    for i in range(max_test):
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            available.append(i)
-            cap.release()
-    return available
+ARUCO_CALIBRATION_STEPS = [
+    (
+        "1. Print the ChArUco board",
+        "Generate the ChArUco board image and print it at 100% scale. Do not use 'fit to page'. "
+        "The default EyeLab board is 5 x 7 squares, with 25 mm squares and 19 mm ArUco markers."
+    ),
+    (
+        "2. Prepare the camera view",
+        "Select the camera in the main Camera panel. Use even lighting, keep the board flat, and "
+        "make sure the black/white pattern is sharp. Avoid reflections and motion blur."
+    ),
+    (
+        "3. Capture varied frames",
+        "Open the live calibration window. Press SPACE only when the board corners are detected. "
+        "Capture at least 15 frames with different board positions: center, corners, near, far, "
+        "and several tilted angles."
+    ),
+    (
+        "4. Finish and read RMS",
+        "Press ESC after the target frame count is reached. EyeLab computes calibration and reports "
+        "RMS reprojection error. Below 1.0 px is the normal target; lower is better."
+    ),
+    (
+        "5. Use the saved calibration",
+        "EyeLab saves python/config/camera_params.yaml. After calibration, load UNV geometry, assign "
+        "marker correspondences, and start AR. If the overlay is unstable, redo calibration with "
+        "sharper and more varied frames."
+    ),
+]
 
 
 # ── Main application ──────────────────────────────────────────────────────────
@@ -122,6 +190,9 @@ class EyeLabApp:
         self.registration = SpatialRegistration([])
         self.correspondences: list[MarkerCorrespondence] = []
         self._camera_indices: list[int] = []
+        self._preview_elev = 24.0
+        self._preview_azim = -60.0
+        self._preview_roll = 0.0
 
         # ── Build UI ──────────────────────────────────────────────────────
         self._build_menu()
@@ -150,6 +221,11 @@ class EyeLabApp:
         tools_menu.add_command(label="Load markers from directory...", command=self._show_marker_loader)
         tools_menu.add_command(label="Calibrate camera...", command=self._start_calibration)
         menubar.add_cascade(label="Tools", menu=tools_menu)
+
+        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="Information center...", command=self._show_info_center)
+        help_menu.add_command(label="ArUco calibration wizard...", command=self._show_aruco_wizard)
+        menubar.add_cascade(label="Help", menu=help_menu)
 
         self.root.config(menu=menubar)
 
@@ -188,6 +264,12 @@ class EyeLabApp:
         except Exception as e:
             messagebox.showinfo("Logs", f"Log directory:\n{LOG_DIR}\n\n({e})")
 
+    def _show_info_center(self) -> None:
+        InfoCenterWindow(self.root, self)
+
+    def _show_aruco_wizard(self) -> None:
+        ArucoCalibrationWizard(self.root, self)
+
     def _build_layout(self) -> None:
         # Main paned window: left panel | right panel
         pw = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
@@ -214,6 +296,7 @@ class EyeLabApp:
         self.cal_status_var = tk.StringVar(value="Not loaded")
         ttk.Label(cal_frame, textvariable=self.cal_status_var, wraplength=300).pack(anchor="w", padx=4, pady=2)
         ttk.Button(cal_frame, text="Calibrate (ChArUco)...", command=self._start_calibration).pack(anchor="w", padx=4, pady=2)
+        ttk.Button(cal_frame, text="ArUco tutorial...", command=self._show_aruco_wizard).pack(anchor="w", padx=4, pady=2)
         ttk.Button(cal_frame, text="Load calibration file...", command=self._load_calibration_file).pack(anchor="w", padx=4, pady=2)
 
         # Geometry
@@ -278,11 +361,18 @@ class EyeLabApp:
     def _build_3d_preview(self, parent: ttk.Frame) -> None:
         self.fig = plt.Figure(figsize=(6, 4.5), dpi=100)
         self.ax3d = self.fig.add_subplot(111, projection="3d")
+        self._set_3d_view(self.ax3d)
         self.ax3d.set_xlabel("X")
         self.ax3d.set_ylabel("Y")
         self.ax3d.set_zlabel("Z")
         self.ax3d.set_title("No geometry loaded")
+        self._style_3d_axes()
+        self.orient_ax = self.fig.add_axes([0.80, 0.05, 0.16, 0.16], projection="3d")
+        self.orient_ax.set_navigate(False)
+        self._draw_orientation_globe()
         self.canvas_3d = FigureCanvasTkAgg(self.fig, master=parent)
+        self.canvas_3d.mpl_connect("button_press_event", self._on_3d_canvas_press)
+        self.canvas_3d.mpl_connect("button_release_event", self._on_3d_canvas_release)
         self.canvas_3d.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
     # ══════════════════════════════════════════════════════════════════════
@@ -317,6 +407,8 @@ class EyeLabApp:
         self.camera_combo["values"] = labels
         if labels:
             self.camera_combo.current(0)
+        else:
+            self.camera_var.set("No camera found")
         self._camera_indices = cams
 
     def _get_camera_index(self) -> int:
@@ -468,12 +560,192 @@ class EyeLabApp:
             self.ax3d.scatter([p[0]], [p[1]], [p[2]], c="red", s=60, marker="^",
                              zorder=10, label=f"aruco{corr.marker_id + 1:02d}")
 
+        self._apply_equal_3d_limits(xs, ys, zs)
+        self._style_3d_axes()
+        self._draw_fixed_reference_grid()
+        self._set_3d_view(self.ax3d)
+        self._draw_orientation_globe()
+
         self.ax3d.set_xlabel("X")
         self.ax3d.set_ylabel("Y")
         self.ax3d.set_zlabel("Z")
         title = self.geometry_path.name if self.geometry_path else "Geometry"
         self.ax3d.set_title(f"{title} — {len(nodes)} nodes, {len(edges)} edges")
         self.canvas_3d.draw()
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  3D preview helpers
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _set_3d_view(self, axes) -> None:
+        try:
+            axes.view_init(
+                elev=self._preview_elev,
+                azim=self._preview_azim,
+                roll=self._preview_roll,
+            )
+        except TypeError:
+            axes.view_init(elev=self._preview_elev, azim=self._preview_azim)
+
+    def _remember_3d_view(self) -> None:
+        self._preview_elev = float(getattr(self.ax3d, "elev", self._preview_elev))
+        self._preview_azim = float(getattr(self.ax3d, "azim", self._preview_azim))
+        self._preview_roll = float(getattr(self.ax3d, "roll", self._preview_roll))
+
+    def _on_3d_canvas_release(self, event) -> None:
+        if event.inaxes is self.ax3d:
+            self._remember_3d_view()
+            self._draw_orientation_globe()
+            self.canvas_3d.draw_idle()
+
+    def _on_3d_canvas_press(self, event) -> None:
+        if event.inaxes is not getattr(self, "orient_ax", None) or event.button != 1:
+            return
+
+        nearest_axis = None
+        nearest_distance = float("inf")
+        arrow_tips = {
+            "X": (1.0, 0.0, 0.0),
+            "Y": (0.0, 1.0, 0.0),
+            "Z": (0.0, 0.0, 1.0),
+        }
+        for axis_name, point in arrow_tips.items():
+            x2d, y2d, _ = proj3d.proj_transform(*point, self.orient_ax.get_proj())
+            px, py = self.orient_ax.transData.transform((x2d, y2d))
+            distance = float(np.hypot(px - event.x, py - event.y))
+            if distance < nearest_distance:
+                nearest_axis = axis_name
+                nearest_distance = distance
+
+        if nearest_axis and nearest_distance < 55:
+            self._snap_preview_to_axis(nearest_axis)
+
+    def _snap_preview_to_axis(self, axis_name: str) -> None:
+        views = {
+            "X": (0.0, -90.0),
+            "Y": (0.0, 0.0),
+            "Z": (90.0, -90.0),
+        }
+        self._preview_elev, self._preview_azim = views[axis_name]
+        self._preview_roll = 0.0
+        self._set_3d_view(self.ax3d)
+        self._draw_orientation_globe()
+        self.canvas_3d.draw_idle()
+        self.log(f"3D preview snapped to {axis_name}-axis view.")
+
+    def _draw_orientation_globe(self) -> None:
+        if not hasattr(self, "orient_ax"):
+            return
+
+        ax = self.orient_ax
+        ax.clear()
+        self._set_3d_view(ax)
+        ax.set_axis_off()
+        ax.set_xlim(-1.15, 1.15)
+        ax.set_ylim(-1.15, 1.15)
+        ax.set_zlim(-1.15, 1.15)
+        try:
+            ax.set_box_aspect((1, 1, 1))
+        except Exception:
+            pass
+
+        u = np.linspace(0, 2 * np.pi, 18)
+        v = np.linspace(0, np.pi, 10)
+        xs = 0.68 * np.outer(np.cos(u), np.sin(v))
+        ys = 0.68 * np.outer(np.sin(u), np.sin(v))
+        zs = 0.68 * np.outer(np.ones_like(u), np.cos(v))
+        ax.plot_wireframe(xs, ys, zs, color=(0.55, 0.58, 0.62, 0.35), linewidth=0.4)
+
+        axes = (
+            ("X", (1.0, 0.0, 0.0), "crimson"),
+            ("Y", (0.0, 1.0, 0.0), "seagreen"),
+            ("Z", (0.0, 0.0, 1.0), "royalblue"),
+        )
+        for label, direction, color in axes:
+            dx, dy, dz = direction
+            ax.quiver(
+                0.0, 0.0, 0.0, dx, dy, dz,
+                color=color, arrow_length_ratio=0.22, linewidth=2.0, normalize=False,
+            )
+            ax.text(
+                dx * 1.15, dy * 1.15, dz * 1.15,
+                label, color=color, fontsize=8, ha="center", va="center",
+            )
+
+    def _apply_equal_3d_limits(self, xs: list[float], ys: list[float], zs: list[float]) -> None:
+        """Set stable equal-ish limits so custom grid/axes do not jump on redraw."""
+        mins = np.array([min(xs), min(ys), min(zs)], dtype=float)
+        maxs = np.array([max(xs), max(ys), max(zs)], dtype=float)
+        center = (mins + maxs) / 2.0
+        span = float(np.max(maxs - mins))
+        if span <= 0:
+            span = 1.0
+        radius = span * 0.58
+        self.ax3d.set_xlim(center[0] - radius, center[0] + radius)
+        self.ax3d.set_ylim(center[1] - radius, center[1] + radius)
+        self.ax3d.set_zlim(center[2] - radius, center[2] + radius)
+        try:
+            self.ax3d.set_box_aspect((1, 1, 1))
+        except Exception:
+            pass
+
+    def _style_3d_axes(self) -> None:
+        """Hide mplot3d's dynamic box so axes do not jump between cube sides."""
+        self.ax3d.set_axis_off()
+        self.ax3d.grid(False)
+        for axis in (self.ax3d.xaxis, self.ax3d.yaxis, self.ax3d.zaxis):
+            axis.set_pane_color((1.0, 1.0, 1.0, 0.0))
+            axis._axinfo["grid"]["linewidth"] = 0.0
+
+    def _draw_fixed_reference_grid(self) -> None:
+        """Draw a stable world-space box, XY grid, and colored axes."""
+        x0, x1 = self.ax3d.get_xlim3d()
+        y0, y1 = self.ax3d.get_ylim3d()
+        z0, z1 = self.ax3d.get_zlim3d()
+        z = z0
+        grid_color = (0.72, 0.72, 0.72, 0.55)
+        box_color = (0.48, 0.50, 0.54, 0.55)
+
+        for x in np.linspace(x0, x1, 9):
+            self.ax3d.plot([x, x], [y0, y1], [z, z], color=grid_color, linewidth=0.6, zorder=0)
+        for y in np.linspace(y0, y1, 9):
+            self.ax3d.plot([x0, x1], [y, y], [z, z], color=grid_color, linewidth=0.6, zorder=0)
+
+        corners = {
+            "000": (x0, y0, z0), "100": (x1, y0, z0),
+            "010": (x0, y1, z0), "110": (x1, y1, z0),
+            "001": (x0, y0, z1), "101": (x1, y0, z1),
+            "011": (x0, y1, z1), "111": (x1, y1, z1),
+        }
+        for a, b in (
+            ("000", "100"), ("010", "110"), ("001", "101"), ("011", "111"),
+            ("000", "010"), ("100", "110"), ("001", "011"), ("101", "111"),
+            ("000", "001"), ("100", "101"), ("010", "011"), ("110", "111"),
+        ):
+            pa, pb = corners[a], corners[b]
+            self.ax3d.plot(
+                [pa[0], pb[0]], [pa[1], pb[1]], [pa[2], pb[2]],
+                color=box_color, linewidth=0.7, zorder=0,
+            )
+
+        span = max(x1 - x0, y1 - y0, z1 - z0)
+        origin = np.array([x0, y0, z], dtype=float)
+        axis_len = span * 0.18
+        axes = (
+            ("X", (axis_len, 0.0, 0.0), "crimson"),
+            ("Y", (0.0, axis_len, 0.0), "seagreen"),
+            ("Z", (0.0, 0.0, axis_len), "royalblue"),
+        )
+        for label, direction, color in axes:
+            dx, dy, dz = direction
+            self.ax3d.quiver(
+                origin[0], origin[1], origin[2], dx, dy, dz,
+                color=color, arrow_length_ratio=0.12, linewidth=1.4, normalize=False,
+            )
+            self.ax3d.text(
+                origin[0] + dx, origin[1] + dy, origin[2] + dz,
+                f" {label}", color=color, fontsize=8,
+            )
 
     # ══════════════════════════════════════════════════════════════════════
     #  Marker generation
@@ -549,12 +821,9 @@ class EyeLabApp:
 
         result = self.pipeline.process_frame()
         if result is not None:
+            registration_result = None
             # Draw overlay
             vis = self.pipeline.draw_overlay(result, draw_markers=True, draw_axes=True)
-
-            # Draw wireframe if geometry loaded and registration done
-            if self.geometry_data and result.pose and self.registration.is_registered:
-                self._draw_registered_wireframe(vis, result)
 
             # Display registration info on frame
             if result.pose:
@@ -564,11 +833,17 @@ class EyeLabApp:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
                 # Update registration detected positions
+                self.registration.clear_detected_positions()
                 for m in result.markers:
                     if m.rvec is not None and m.tvec is not None:
                         self.registration.update_detected_position(
                             m.marker_id, m.tvec.flatten()
                         )
+                registration_result = self.registration.compute()
+
+            # Draw wireframe if geometry loaded and registration done
+            if self.geometry_data and result.pose and registration_result is not None:
+                self._draw_registered_wireframe(vis, result)
 
             # Convert to tkinter image
             rgb = cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
@@ -661,6 +936,141 @@ class EyeLabApp:
 # ══════════════════════════════════════════════════════════════════════════
 #  Sub-windows
 # ══════════════════════════════════════════════════════════════════════════
+
+class InfoCenterWindow:
+    """Browsable, in-app help for the main EyeLab workflows."""
+
+    def __init__(self, parent: tk.Tk, app: EyeLabApp):
+        self.app = app
+        self.win = tk.Toplevel(parent)
+        self.win.title("EyeLab Information Center")
+        self.win.geometry("760x460")
+        self.win.transient(parent)
+
+        outer = ttk.Frame(self.win)
+        outer.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        self.topic_list = tk.Listbox(outer, exportselection=False, width=28)
+        self.topic_list.pack(side=tk.LEFT, fill=tk.Y)
+        for topic in HELP_TOPICS:
+            self.topic_list.insert(tk.END, topic)
+
+        right = ttk.Frame(outer)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0))
+
+        self.title_var = tk.StringVar()
+        ttk.Label(right, textvariable=self.title_var, font=("", 12, "bold")).pack(anchor="w")
+
+        self.text = tk.Text(right, wrap=tk.WORD, height=16)
+        self.text.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
+        self.text.configure(state="disabled")
+
+        btns = ttk.Frame(right)
+        btns.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(btns, text="ArUco calibration wizard", command=app._show_aruco_wizard).pack(side=tk.LEFT)
+        ttk.Button(btns, text="Close", command=self.win.destroy).pack(side=tk.RIGHT)
+
+        self.topic_list.bind("<<ListboxSelect>>", self._show_selected)
+        self.topic_list.selection_set(0)
+        self._show_topic(next(iter(HELP_TOPICS)))
+
+    def _show_selected(self, event=None) -> None:
+        sel = self.topic_list.curselection()
+        if not sel:
+            return
+        self._show_topic(self.topic_list.get(sel[0]))
+
+    def _show_topic(self, topic: str) -> None:
+        self.title_var.set(topic)
+        self.text.configure(state="normal")
+        self.text.delete("1.0", tk.END)
+        self.text.insert("1.0", HELP_TOPICS[topic])
+        self.text.configure(state="disabled")
+
+
+class ArucoCalibrationWizard:
+    """Step-by-step ChArUco calibration tutorial with direct actions."""
+
+    def __init__(self, parent: tk.Tk, app: EyeLabApp):
+        self.app = app
+        self.index = 0
+        self.win = tk.Toplevel(parent)
+        self.win.title("ArUco Calibration Wizard")
+        self.win.geometry("620x380")
+        self.win.transient(parent)
+
+        main = ttk.Frame(self.win)
+        main.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        self.step_var = tk.StringVar()
+        ttk.Label(main, textvariable=self.step_var, font=("", 13, "bold")).pack(anchor="w")
+
+        self.body = tk.Text(main, wrap=tk.WORD, height=9)
+        self.body.pack(fill=tk.BOTH, expand=True, pady=(8, 8))
+        self.body.configure(state="disabled")
+
+        actions = ttk.Frame(main)
+        actions.pack(fill=tk.X)
+        ttk.Button(actions, text="Generate board image...", command=self._generate_board).pack(side=tk.LEFT)
+        ttk.Button(actions, text="Start live calibration", command=self._start_calibration).pack(side=tk.LEFT, padx=6)
+
+        nav = ttk.Frame(main)
+        nav.pack(fill=tk.X, pady=(12, 0))
+        self.back_btn = ttk.Button(nav, text="Back", command=self._back)
+        self.back_btn.pack(side=tk.LEFT)
+        self.next_btn = ttk.Button(nav, text="Next", command=self._next)
+        self.next_btn.pack(side=tk.LEFT, padx=6)
+        ttk.Button(nav, text="Close", command=self.win.destroy).pack(side=tk.RIGHT)
+
+        self._render()
+
+    def _render(self) -> None:
+        title, text = ARUCO_CALIBRATION_STEPS[self.index]
+        self.step_var.set(f"{title}  ({self.index + 1}/{len(ARUCO_CALIBRATION_STEPS)})")
+        self.body.configure(state="normal")
+        self.body.delete("1.0", tk.END)
+        self.body.insert("1.0", text)
+        self.body.configure(state="disabled")
+        self.back_btn.configure(state="normal" if self.index > 0 else "disabled")
+        self.next_btn.configure(
+            text="Next" if self.index < len(ARUCO_CALIBRATION_STEPS) - 1 else "Done"
+        )
+
+    def _back(self) -> None:
+        if self.index > 0:
+            self.index -= 1
+            self._render()
+
+    def _next(self) -> None:
+        if self.index < len(ARUCO_CALIBRATION_STEPS) - 1:
+            self.index += 1
+            self._render()
+        else:
+            self.win.destroy()
+
+    def _generate_board(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Save ChArUco board image",
+            initialfile="charuco_board.png",
+            defaultextension=".png",
+            filetypes=[("PNG image", "*.png"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            board = make_charuco_board(5, 7, 0.025, 0.019)
+            generate_board_image(board, path)
+            self.app.log(f"Generated ChArUco board image: {path}")
+            messagebox.showinfo(
+                "Board Generated",
+                f"Saved ChArUco board image:\n{path}\n\nPrint at 100% scale.",
+            )
+        except Exception as e:
+            messagebox.showerror("Board Generation Error", str(e))
+
+    def _start_calibration(self) -> None:
+        self.app._start_calibration()
+
 
 class MarkerGenWindow:
     """Dialog for generating ArUco markers."""
@@ -1050,9 +1460,11 @@ class CalibrationWindow:
         self.win.transient(parent)
         self.win.protocol("WM_DELETE_WINDOW", self._abort)
 
-        self.cap = cv2.VideoCapture(camera_index)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        self.cap = open_camera(camera_index)
+        if not self.cap.isOpened():
+            messagebox.showerror("Camera Error", f"Cannot open camera {camera_index}.")
+            self.win.destroy()
+            return
 
         self.board = make_charuco_board(5, 7, 0.025, 0.019)
         self.detector = cv2.aruco.CharucoDetector(self.board)

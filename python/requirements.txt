@@ -7,8 +7,7 @@ numpy>=1.21.0
 scipy>=1.7.0
 
 # Computer vision — ArUco moved to objdetect in 4.8+; 4.11+ recommended
-opencv-python>=4.8.0
-opencv-contrib-python>=4.8.0  # includes aruco module
+opencv-contrib-python>=4.8.0  # includes main cv2 modules and aruco module
 
 # Modal analysis — UNV/UFF file I/O
 pyuff>=1.0.0

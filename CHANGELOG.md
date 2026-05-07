@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `python/eyelab_gui.py` - in-app Help menu with an information center covering
+  quick start, UNV preview, marker registration, camera calibration, AR overlay,
+  and troubleshooting.
+- `python/eyelab_gui.py` - step-by-step ArUco/ChArUco calibration wizard with
+  direct actions for board generation and live calibration.
+- `python/calibrate.py` - `--wizard` CLI mode that prints a lightweight
+  calibration tutorial even when OpenCV is not available in the active Python
+  environment.
+- `python/eyelab_gui.py` - bottom-right 3-axis orientation globe in the UNV
+  geometry preview; clicking X/Y/Z snaps the model to that axis view.
+
+### Fixed
+- `python/unv_to_json.py` - replaced deprecated `datetime.utcnow()` with a
+  timezone-aware UTC timestamp.
+- `python/eyelab_gui.py` - stopped the UNV preview's visual axis reference from
+  flipping between sides of Matplotlib's 3D box during model rotation by using a
+  stable custom box/grid/axis overlay.
+
 ### Added — Phase 1 Webcam MVP
 
 Initial end-to-end webcam pipeline covering UNV ingest, ArUco detection,

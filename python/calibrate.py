@@ -31,12 +31,46 @@ Acceptance criteria:
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
+CALIBRATION_WIZARD_TEXT = """
+EyeLab ChArUco calibration wizard
+=================================
+
+1. Generate and print the board
+   python calibrate.py --generate --board-image charuco_board.png
+   Print at 100% scale. Do not use 'fit to page'.
+
+2. Measure or confirm physical sizes
+   Defaults are square=0.025 m and marker=0.019 m. If your print is
+   different, pass the measured values with --square and --marker.
+
+3. Capture live frames
+   python calibrate.py --live --camera 0 --output config/camera_params.yaml
+   Press SPACE only when corners are detected. Capture at least 15 frames:
+   center, corners, near, far, and tilted views.
+
+4. Finish and check RMS
+   Press ESC after enough frames are captured. Aim for RMS < 1.0 px.
+   If RMS is high, repeat with sharper, more varied board views.
+
+5. Use the result in EyeLab
+   Load the generated camera_params.yaml in the GUI, then run marker
+   correspondences and AR overlay.
+""".strip()
+
+if Path(sys.argv[0]).name.lower() == "calibrate.py" and "--wizard" in sys.argv[1:]:
+    print(CALIBRATION_WIZARD_TEXT)
+    sys.exit(0)
+
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import cv2
 import numpy as np
 import yaml
+
+from camera_utils import open_camera
 
 
 # ── Board defaults ────────────────────────────────────────────────────────────
@@ -144,12 +178,9 @@ def collect_from_webcam(
     board: cv2.aruco.CharucoBoard,
     target_frames: int = MIN_FRAMES,
 ) -> tuple[list, list, tuple[int, int]]:
-    cap = cv2.VideoCapture(camera_index)
+    cap = open_camera(camera_index, fps=None)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open camera index {camera_index}.")
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
     all_corners, all_ids = [], []
     image_size = None
@@ -289,6 +320,8 @@ def main() -> int:
                       help="Calibrate from existing image files")
     mode.add_argument("--live", action="store_true",
                       help="Calibrate from live webcam feed")
+    mode.add_argument("--wizard", action="store_true",
+                      help="Print a step-by-step calibration tutorial")
 
     parser.add_argument("--camera", type=int, default=0,
                         help="Camera index for --live mode (default: 0)")
@@ -310,6 +343,10 @@ def main() -> int:
                         help=f"Minimum captured frames (default: {MIN_FRAMES})")
 
     args = parser.parse_args()
+
+    if args.wizard:
+        print(CALIBRATION_WIZARD_TEXT)
+        return 0
 
     board = make_charuco_board(args.cols, args.rows, args.square, args.marker)
 

@@ -16,6 +16,7 @@ Designed to be imported by the GUI (eyelab_gui.py) or used standalone for benchm
 from __future__ import annotations
 
 import json
+import os
 import socket
 import struct
 import threading
@@ -24,11 +25,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import cv2
 import numpy as np
 import yaml
 
 from calibrate import load_calibration
+from camera_utils import open_camera
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -73,10 +76,7 @@ class ThreadedCapture:
     """Non-blocking webcam capture running in a daemon thread."""
 
     def __init__(self, camera_index: int = 0, width: int = 1280, height: int = 720):
-        self.cap = cv2.VideoCapture(camera_index)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        self.cap = open_camera(camera_index, width=width, height=height, fps=30)
 
         self._frame: Optional[np.ndarray] = None
         self._lock = threading.Lock()

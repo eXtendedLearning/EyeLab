@@ -30,13 +30,17 @@ Controls (window must be focused):
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import cv2
 import numpy as np
 import yaml
+
+from camera_utils import open_camera
 
 from calibrate import load_calibration
 
@@ -297,14 +301,10 @@ def run_pipeline(args: argparse.Namespace) -> int:
     kf = PoseKalmanFilter()
 
     # Open camera
-    cap = cv2.VideoCapture(args.camera)
+    cap = open_camera(args.camera)
     if not cap.isOpened():
         print(f"ERROR: Cannot open camera {args.camera}.", file=sys.stderr)
         return 1
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT,  720)
-    cap.set(cv2.CAP_PROP_FPS,           30)
 
     actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))

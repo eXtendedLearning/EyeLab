@@ -15,17 +15,17 @@ import sys
 
 
 def _ok(msg: str) -> None:
-    print(f"  \u2713  {msg}")
+    print(f"  OK  {msg}")
 
 
 def _fail(msg: str) -> None:
-    print(f"  \u2717  {msg}", file=sys.stderr)
+    print(f"  FAIL  {msg}", file=sys.stderr)
 
 
 def _section(title: str) -> None:
-    print(f"\n{'─' * 50}")
+    print(f"\n{'-' * 50}")
     print(f"  {title}")
-    print(f"{'─' * 50}")
+    print(f"{'-' * 50}")
 
 
 # ── Individual checks ─────────────────────────────────────────────────────────
@@ -56,9 +56,9 @@ def check_scipy() -> bool:
 def check_opencv() -> bool:
     try:
         import cv2
-        _ok(f"opencv-python {cv2.__version__}")
+        _ok(f"OpenCV {cv2.__version__}")
     except Exception as e:
-        _fail(f"opencv-python import failed: {e}")
+        _fail(f"OpenCV import failed: {e}")
         return False
 
     # Verify ArUco sub-module
@@ -85,7 +85,7 @@ def check_opencv() -> bool:
             markerLength=0.019,
             dictionary=aruco_dict,
         )
-        _ok(f"cv2.aruco.CharucoBoard  (5×7, squareLength=25 mm)")
+        _ok(f"cv2.aruco.CharucoBoard  (5x7, squareLength=25 mm)")
     except Exception as e:
         _fail(f"CharucoBoard constructor failed: {e}")
         return False
@@ -106,7 +106,7 @@ def check_pyuff() -> bool:
 def check_matplotlib() -> bool:
     try:
         import matplotlib
-        matplotlib.use("Agg")        # headless — no display required for this test
+        matplotlib.use("Agg")        # headless; no display required for this test
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots()
         ax.plot([0, 1], [0, 1])
@@ -142,13 +142,13 @@ def check_yaml() -> bool:
 
 
 def check_open3d() -> bool:
-    """open3d is optional — warn but do not count as failure."""
+    """open3d is optional; warn but do not count as failure."""
     try:
         import open3d as o3d
-        _ok(f"open3d {o3d.__version__}  (optional — available)")
+        _ok(f"open3d {o3d.__version__}  (optional; available)")
         return True
     except Exception:
-        print(f"  -  open3d not installed (optional — needed for T2.3 marker registration)")
+        print(f"  -  open3d not installed (optional; needed for T2.3 marker registration)")
         return True   # not counted as failure
 
 
@@ -156,8 +156,8 @@ def check_open3d() -> bool:
 
 def check_camera(camera_index: int = 0) -> bool:
     try:
-        import cv2
-        cap = cv2.VideoCapture(camera_index)
+        from camera_utils import open_camera
+        cap = open_camera(camera_index)
         if not cap.isOpened():
             _fail(f"Camera {camera_index} could not be opened.")
             return False
@@ -167,7 +167,7 @@ def check_camera(camera_index: int = 0) -> bool:
             _fail(f"Camera {camera_index} opened but returned no frame.")
             return False
         h, w = frame.shape[:2]
-        _ok(f"Camera {camera_index}: {w}×{h} frame captured")
+        _ok(f"Camera {camera_index}: {w}x{h} frame captured")
         return True
     except Exception as e:
         _fail(f"Camera check failed: {e}")
