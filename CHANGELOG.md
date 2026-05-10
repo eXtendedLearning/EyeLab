@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `eyelab_xreal/` - tracked Unity project baseline for the XREAL One Pro + Eye
+  port, with Unity-safe Git ignore policy and local XREAL SDK install convention.
+- `eyelab_xreal/Assets/EyeLab/` - Phase 0 folder skeleton for Bridge, Frames,
+  Pose, Geometry, Calibration, and Scenes.
 - `python/eyelab_gui.py` - in-app Help menu with an information center covering
   quick start, UNV preview, marker registration, camera calibration, AR overlay,
   and troubleshooting.
@@ -20,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   geometry preview; clicking X/Y/Z snaps the model to that axis view.
 
 ### Fixed
+- `README.md`, `CONTEXT.md`, and `docs/tasks/T2.6-implementation-checklist.md`
+  - updated the XREAL project layout from the old external `xreal_test` path to
+  the in-repo `eyelab_xreal/` project and documented what Unity files belong in
+  Git.
 - `python/unv_to_json.py` - replaced deprecated `datetime.utcnow()` with a
   timezone-aware UTC timestamp.
 - `python/eyelab_gui.py` - stopped the UNV preview's visual axis reference from

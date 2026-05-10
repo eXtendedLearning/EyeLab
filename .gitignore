@@ -41,6 +41,7 @@ python/.logs/
 **/*.csproj
 **/*.unityproj
 **/*.sln
+**/*.slnx
 **/*.suo
 **/*.tmp
 **/*.user
@@ -56,6 +57,11 @@ python/.logs/
 **/*.apk
 **/*.aab
 **/*.unitypackage
+
+# Local vendor SDKs
+# XREAL's package is installed locally for development and is large; keep
+# manifest/lock files tracked, but do not publish the unpacked SDK bundle.
+eyelab_xreal/Packages/com.xreal.xr/
 
 # IDE / editor scratch
 .vscode/

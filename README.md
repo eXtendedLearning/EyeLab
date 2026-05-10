@@ -7,7 +7,8 @@ registration, so the operator can see exactly where each excitation point sits o
 structure.
 
 This repository contains the **Phase 1 Webcam MVP** — the full pipeline runs on a standard
-webcam in Python + OpenCV. A Unity / XREAL port is planned for Phase 2.
+webcam in Python + OpenCV — plus the tracked Unity project for the XREAL bring-up.
+Current XREAL planning lives in `CONTEXT.md`, `docs/adr/`, and `docs/tasks/`.
 
 ---
 
@@ -48,8 +49,22 @@ EyeLab/
 │   ├── test_env.py          Dev-environment smoke test
 │   ├── board_config.yaml    Multi-face ArUco board layout
 │   └── wireframe.json       Placeholder geometry for the standalone pipeline
-└── .docs/                   Project specification & per-task design notes (not tracked)
+├── eyelab_xreal/            Unity project for the XREAL One Pro + Eye port
+│   ├── Assets/              Tracked Unity assets and scenes
+│   ├── Packages/            Tracked manifest/lock files; local XREAL SDK folder is ignored
+│   └── ProjectSettings/     Tracked Unity project settings
+├── docs/                    Public-safe engineering docs, ADRs, and implementation checklists
+└── .docs/                   Private project specification & per-task design notes (not tracked)
 ```
+
+Unity-generated folders such as `Library/`, `Logs/`, `Temp/`, `UserSettings/`,
+C# project files, builds, and local vendor SDK bundles are ignored. Commit Unity
+source assets, scenes, package manifests, and project settings.
+
+The Unity project expects XREAL XR Plugin 3.1.0 to be installed locally as
+`eyelab_xreal/Packages/com.xreal.xr/`. That unpacked SDK folder is intentionally
+ignored because it is a large vendor bundle; keep the downloaded SDK tarball or
+package folder locally and reinstall it after a fresh clone.
 
 ---
 
@@ -98,8 +113,9 @@ python python/webcam_pipeline.py --camera 0 --calibration python/config/camera_p
 **Phase A — Webcam MVP (this repo).** Validate the full UNV → registration → AR overlay
 chain on a desktop webcam before any glasses-specific code.
 
-**Phase B — XREAL port.** Move the same pipeline to Unity + XREAL Beam Pro AR glasses.
-Core logic is camera-agnostic by design; only the capture / display layer needs to change.
+**Phase B — XREAL port.** Move the same pipeline to Unity + XREAL One Pro + Eye,
+targeting a generic Android APK. The first bridge is an off-device Python WebSocket
+service, with native Android/OpenCV options reserved as pivots if quality requires it.
 
 **Phase C — Impact verification & Testlab integration.** Hammer-tip tracking, hit-point
 matching, and a Simcenter Testlab COM bridge for live state synchronisation.

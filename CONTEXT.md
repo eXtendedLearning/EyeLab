@@ -2,18 +2,18 @@
 
 > Living glossary and shared-mental-model notes. Captures terms, decisions, and open issues surfaced during grilling. Authoritative scope/plan lives in `.docs/PROJECT.md`, theory in `.docs/THEORY.md`, task plan in `.docs/TASKS.md`, decisions in `.docs/adr/`. This file holds **deltas the project plan does not capture** plus the live "open question" board.
 >
-> Last updated: 2026-05-08 (XREAL One Pro + Eye received).
+> Last updated: 2026-05-10 (Unity project moved into repo and hygiene baseline completed).
 
 ## Status
 
 - **Hardware in hand:** XREAL One Pro + XREAL Eye (planned for Aug 2026 — arrived ~3 months early).
 - **Webcam phase (Python, in `python/`):** ChArUco calibration, ArUco detection, pose estimation, registration, wireframe overlay all implemented. Recent activity in `python/.logs/` through Apr 29 2026.
-- **Unity project:** `C:\Users\gcmdn\unity_projects\xreal_test` — fresh URP project with `com.xreal.xr@3.1.0` installed locally from `com.xreal.xr.tar.gz`. Default scene only, no app code yet. The empty repo sub-folder `EyeLab - Siemens XR Project/` is reserved for AR-app-specific documentation and screenshots; the Unity project itself lives outside this repo to avoid bloating it with `Library/` and `Logs/`.
+- **Unity project:** `eyelab_xreal/` — fresh URP project for the XREAL One Pro + Eye port, opened successfully in Unity after the repo move. Unity-generated folders (`Library/`, `Logs/`, `UserSettings/`, project files, builds) are ignored. The local `Packages/com.xreal.xr/` SDK folder is also ignored because it is a large vendor package; install XREAL XR Plugin 3.1.0 locally into that path before opening the project.
 - **A second Unity project** (`unity_projects/My project`) exists in MR Template (OpenXR / AR Foundation / XR Hands). Not the XREAL target — pending decision (archive / delete / repurpose).
 
 ## Verified XREAL XR Plugin 3.1.0 surface
 
-Source: `unity_projects/xreal_test/Packages/com.xreal.xr/Runtime/Scripts/`. Namespace `Unity.XR.XREAL`. Static facade `XREALPlugin`. **None of the legacy `NR*` names exist in this version** — see open issue 1.
+Source: local `eyelab_xreal/Packages/com.xreal.xr/Runtime/Scripts/` SDK install. Namespace `Unity.XR.XREAL`. Static facade `XREALPlugin`. **None of the legacy `NR*` names exist in this version** — see open issue 1.
 
 - **Raw RGB camera (XREAL Eye)** — `XREALPlugin.StartRGBCameraDataCapture(callback)` → `RGBCameraDataFrame { ulong timeStamp, Vector2Int resolution, ulong rawDataSize, IntPtr rawData }`. Poll path: `TryAcquireLatestImage` → `TryGetRGBCameraDataPlane(handle, planeIdx, out IntPtr, out size)`.
 - **High-level texture path** — `XREALRGBCameraTexture.CreateSingleton().GetYUVFormatTextures()` → 3× `Texture2D` (Y/U/V, YUV_420_888) ready to bind to materials. Sample: `RGBCameraExample.cs`.
@@ -25,7 +25,7 @@ Source: `unity_projects/xreal_test/Packages/com.xreal.xr/Runtime/Scripts/`. Name
 
 ## Workspace / collaboration constraints
 
-- I (Claude) have file-level Read/Write/Edit access to `C:\Users\gcmdn\unity_projects\xreal_test` and `C:\Users\gcmdn\GitHub_Uni\EyeLab\`. I author C# scripts, edit `Packages/manifest.json`, `ProjectSettings`, and read `Logs/`.
+- I (Claude) have file-level Read/Write/Edit access to `C:\Users\gcmdn\GitHub_Uni\EyeLab\`, including `eyelab_xreal/`. I author C# scripts, edit `Packages/manifest.json`, `ProjectSettings`, and read Unity `Logs/`.
 - I cannot launch the Unity Editor, hit Play, build APKs, or deploy to a device. Loop: I write code → Jack runs Play/build in Unity → I read `Logs/Editor.log` and (eventually) `adb logcat` output to iterate.
 - Python: virtualenv preferred (`python/venv/` already exists).
 

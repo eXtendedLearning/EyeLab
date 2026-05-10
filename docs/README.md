@@ -23,13 +23,13 @@ ADRs are numbered sequentially (`NNNN-kebab-case-title.md`). The format is Micha
 
 Implementation guides under `tasks/` follow the work-package numbering from the (private) `.docs/TASKS.md`. Each has an "Acceptance" or "Done when" section that defines completion.
 
-## Status snapshot (last updated 2026-05-09)
+## Status snapshot (last updated 2026-05-10)
 
 | Item | Status |
 |---|---|
 | ADR-001 — OpenCV bridging staircase | Accepted |
 | Pose-timing strategy | Decided: option (iii) `EwmaStructureAnchor`, with option (i) AR Foundation `XRAnchor` as the future upgrade path. Captured in CONTEXT.md "Resolved decisions" §3 and in T2.6-implementation-checklist Phase 5. |
-| T2.6 implementation | Specified (this file's `tasks/`); Phases 0–8 ready to pick up |
+| T2.6 implementation | Specified (this file's `tasks/`); Phase 0 repo/Unity hygiene baseline complete, empty APK build gate still pending |
 | Hardware | XREAL One Pro + Eye received 2026-05-08 |
 
 ## Conventions
