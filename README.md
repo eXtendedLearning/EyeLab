@@ -63,8 +63,10 @@ source assets, scenes, package manifests, and project settings.
 
 The Unity project expects XREAL XR Plugin 3.1.0 to be installed locally as
 `eyelab_xreal/Packages/com.xreal.xr/`. That unpacked SDK folder is intentionally
-ignored because it is a large vendor bundle; keep the downloaded SDK tarball or
-package folder locally and reinstall it after a fresh clone.
+ignored: the SDK is publicly downloadable, but the local package does not include
+a license file granting redistribution of modified SDK binaries. After installing
+the SDK locally, run `tools/patch_xreal_sdk.ps1` to apply the Android Gradle
+namespace compatibility patch needed by Unity 6000.4.5f1.
 
 ---
 

@@ -23,14 +23,14 @@ ADRs are numbered sequentially (`NNNN-kebab-case-title.md`). The format is Micha
 
 Implementation guides under `tasks/` follow the work-package numbering from the (private) `.docs/TASKS.md`. Each has an "Acceptance" or "Done when" section that defines completion.
 
-## Status snapshot (last updated 2026-05-10)
+## Status snapshot (last updated 2026-05-14)
 
 | Item | Status |
 |---|---|
 | ADR-001 — OpenCV bridging staircase | Accepted |
 | Pose-timing strategy | Decided: option (iii) `EwmaStructureAnchor`, with option (i) AR Foundation `XRAnchor` as the future upgrade path. Captured in CONTEXT.md "Resolved decisions" §3 and in T2.6-implementation-checklist Phase 5. |
-| T2.6 implementation | Specified (this file's `tasks/`); Phase 0 repo/Unity hygiene baseline complete, empty APK build gate still pending |
-| Hardware | XREAL One Pro + Eye received 2026-05-08 |
+| T2.6 implementation | Specified (this file's `tasks/`); Phase 0 repo/Unity hygiene and empty Android APK build gate complete. Local XREAL SDK copy required an `nr_common.aar` manifest-package patch to avoid duplicate `nrsdk.pack` namespace with `nr_loader.aar`; reapply with `tools/patch_xreal_sdk.ps1`. |
+| Hardware | XREAL One Pro + Eye received 2026-05-08; Beam Pro 8 GB / 256 GB ordered 2026-05-14, expected mid-to-late June 2026 |
 
 ## Conventions
 

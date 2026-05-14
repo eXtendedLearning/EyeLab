@@ -13,7 +13,7 @@ Three viable paths to get OpenCV's ArUco running with Unity:
 
 - **Option A — DIY native plugin (.aar wrapping OpenCV 4.11+ Android SDK).** $0. Java side does ArUco + solvePnP, returns pose to C# via `AndroidJavaObject`. ~1–2 weeks of build-system + JNI marshalling work. Risk: image-data marshalling across JNI is the painful part. Reference exists (Wu, June 2025).
 - **Option B — OpenCV for Unity (EnoxSoftware), $95.** Near-1:1 Python OpenCV API. Proven XREAL compatibility (their `NrealLightWithOpenCVForUnityExample`, but against the legacy NRSDK — would need re-verification on `com.xreal.xr@3.1.0`). ~2–3 days integration. Procuring even small funds at UNIVPM has non-trivial latency.
-- **Option C — Off-device ArUco service.** Unity app streams XREAL Eye frames to a Python service running on the Testlab PC (or the dev's Surface 6 when remote). Service runs the existing webcam pipeline and returns poses. Maximum reuse of completed Python work; introduces network round-trip latency; service dependency breaks the "any student with an APK" deployment story.
+- **Option C — Off-device ArUco service.** Unity app streams XREAL Eye frames to a Python service running on the Testlab PC (or the dev's Surface Pro 7 when remote). Service runs the existing webcam pipeline and returns poses. Maximum reuse of completed Python work; introduces network round-trip latency; service dependency breaks the "any student with an APK" deployment story.
 
 The previously assumed `OpenCvSharp` route in `T2.6-xreal-port.md` is removed from consideration: OpenCvSharp4 has no official Android runtime, and unofficial Android builds are historically painful. (OpenCvSharp on Windows is fine, and remains an option for the .NET Testlab Bridge — see Consequences.)
 
@@ -25,7 +25,7 @@ We adopt a **staircase: Option C → Option A → Option B**, with the explicit 
 
 **Step C — first** (target: working demo before Leuven Visit B, July 2026):
 - Extend `python/webcam_pipeline.py` to receive JPEG-compressed frames over a WebSocket server instead of `cv2.VideoCapture`.
-- Service runs as a standalone Python process on Windows. Deployment targets: the Testlab PC at the UNIVPM lab; Jack's Microsoft Surface 6 for remote development from Modena.
+- Service runs as a standalone Python process on Windows. Deployment targets: the Testlab PC at the UNIVPM lab; Jack's Microsoft Surface Pro 7 for remote development from Modena.
 - Unity side: capture frames from the XREAL Eye via `XREALRGBCameraTexture` (Y plane is sufficient for ArUco), JPEG-encode, send over WebSocket, receive pose JSON, apply to overlay.
 - Frame transport: JPEG over WebSocket at ~15 fps initial target, re-evaluated.
 - Pose response payload: `{ rvec, tvec, timestamp_in_ns, marker_ids, rms_reprojection_px, registration_rms_mm }`.
@@ -71,7 +71,7 @@ The rest of the Unity app (geometry overlay, registration application, hammer lo
 
 ### Service location
 
-- v0 (C): standalone Python process on Windows. Same `requirements.txt` as `../python/`. Listens on a configurable port; default `ws://localhost:8765/aruco`. Runs on the Testlab PC at lab; runs on Surface 6 in Modena for remote dev.
+- v0 (C): standalone Python process on Windows. Same `requirements.txt` as `../python/`. Listens on a configurable port; default `ws://localhost:8765/aruco`. Runs on the Testlab PC at lab; runs on Surface Pro 7 in Modena for remote dev.
 - WP4: when the .NET Testlab Bridge is built, OpenCV moves into the bridge process (using OpenCvSharp/Emgu CV — both fine on Windows). Standalone Python service is retired. The Unity side still talks to the same `IArucoPoseBridge` interface — only the URL/protocol changes.
 
 ## Consequences
@@ -79,7 +79,7 @@ The rest of the Unity app (geometry overlay, registration application, hammer lo
 ### Easier
 
 - Step C reuses every line of working Python from the webcam phase. Time from "hardware in hand" to "demoable AR overlay" goes from weeks to days.
-- The same Python pipeline serves Unity-in-Editor (mock or USB webcam frames) and Unity-on-glasses (XREAL Eye frames). Iteration is fast on Surface 6 in Modena, not blocked on lab access.
+- The same Python pipeline serves Unity-in-Editor (mock or USB webcam frames) and Unity-on-glasses (XREAL Eye frames). Iteration is fast on Surface Pro 7 in Modena, not blocked on lab access.
 - The Testlab Bridge (T4.1) gets to absorb OpenCV when it's built anyway, so we don't end up with an orphan Python service in the long-term architecture.
 - The `IArucoPoseBridge` abstraction makes A and B drop-in replacements; future maintainers (PostDoc / successor) can re-evaluate the trade-off without unwinding application code.
 - Procurement risk is pushed to the very end: B is only approached if both C and A fail, and only then does anyone need to ask UNIVPM for $95.
