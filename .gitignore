@@ -73,6 +73,11 @@ eyelab_xreal/Packages/com.xreal.xr/
 .DS_Store
 Thumbs.db
 
+# Local scratch / throwaway extraction dirs (e.g. an unpacked wheel for inspection)
+tmp/
+tmp_*/
+scratch/
+
 # Backup
 *.bak
 *~
