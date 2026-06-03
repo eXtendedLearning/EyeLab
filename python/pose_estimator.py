@@ -356,10 +356,15 @@ class LStructureDetector:
         board: Optional[cv2.aruco.Board] = None,
         marker_size_m: float = DEFAULT_MARKER_SIZE_M,
         allowed_ids: Optional[set[int]] = None,
+        marker_size_by_id_m: Optional[dict[int, float]] = None,
     ):
         self.board = board
         self.marker_size_m = marker_size_m
         self.allowed_ids = allowed_ids
+        self.marker_size_by_id_m = {
+            int(marker_id): float(size_m)
+            for marker_id, size_m in (marker_size_by_id_m or {}).items()
+        }
 
         self.dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
         self.det_params = cv2.aruco.DetectorParameters()
@@ -384,6 +389,20 @@ class LStructureDetector:
             ids = ids[keep]
 
         return corners, ids
+
+    def marker_size_for_id(self, marker_id: int) -> float:
+        """Return the physical marker edge size in metres for one ArUco ID."""
+        return self.marker_size_by_id_m.get(int(marker_id), self.marker_size_m)
+
+    def single_marker_object_points(self, marker_id: int) -> np.ndarray:
+        """Return square object points for one marker, centered at marker origin."""
+        half = self.marker_size_for_id(marker_id) / 2.0
+        return np.array([
+            [-half,  half, 0],
+            [ half,  half, 0],
+            [ half, -half, 0],
+            [-half, -half, 0],
+        ], dtype=np.float32)
 
     def estimate_pose(
         self,
@@ -418,13 +437,7 @@ class LStructureDetector:
 
         # Fallback: single marker
         if rvec is None and len(corners) > 0:
-            half = self.marker_size_m / 2.0
-            obj_pts = np.array([
-                [-half,  half, 0],
-                [ half,  half, 0],
-                [ half, -half, 0],
-                [-half, -half, 0],
-            ], dtype=np.float32)
+            obj_pts = self.single_marker_object_points(ids_flat[0])
             img_pts = corners[0].reshape(4, 1, 2).astype(np.float32)
             ok, rvec, tvec = cv2.solvePnP(
                 obj_pts, img_pts, camera_matrix, dist_coeffs,
@@ -462,6 +475,7 @@ class ArucoPipeline:
         board_path: Optional[str] = None,
         marker_size_mm: float = 12.0,
         allowed_ids: Optional[set[int]] = None,
+        marker_size_by_id_mm: Optional[dict[int, float]] = None,
         use_optical_flow: bool = True,
         optical_flow_interval: int = 3,
         udp_host: Optional[str] = None,
@@ -469,6 +483,10 @@ class ArucoPipeline:
     ):
         self.camera_index = camera_index
         self.marker_size_m = marker_size_mm / 1000.0
+        marker_size_by_id_m = {
+            int(marker_id): float(size_mm) / 1000.0
+            for marker_id, size_mm in (marker_size_by_id_mm or {}).items()
+        }
         self.use_optical_flow = use_optical_flow
 
         # Camera calibration
@@ -486,6 +504,7 @@ class ArucoPipeline:
             board=board,
             marker_size_m=self.marker_size_m,
             allowed_ids=allowed_ids,
+            marker_size_by_id_m=marker_size_by_id_m,
         )
 
         self.kalman = PoseKalmanFilter()
@@ -559,17 +578,11 @@ class ArucoPipeline:
         # (tvec = marker centre in camera frame — used by registration)
         markers: list[DetectedMarker] = []
         if ids is not None:
-            half = self.l_detector.marker_size_m / 2.0
-            obj_pts_single = np.array([
-                [-half,  half, 0],
-                [ half,  half, 0],
-                [ half, -half, 0],
-                [-half, -half, 0],
-            ], dtype=np.float32)
             ids_flat = ids.flatten().tolist()
             for i, mid in enumerate(ids_flat):
                 dm = DetectedMarker(marker_id=int(mid), corners=corners[i].reshape(4, 2))
                 if self.camera_matrix is not None:
+                    obj_pts_single = self.l_detector.single_marker_object_points(int(mid))
                     img_pts = corners[i].reshape(4, 1, 2).astype(np.float32)
                     ok, rv, tv = cv2.solvePnP(
                         obj_pts_single, img_pts,

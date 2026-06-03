@@ -36,6 +36,9 @@ def generate_markers(
     dpi: int = 300,
     marker_ids: list[int] | None = None,
     add_id_label: bool = True,
+    marker_size_mm: float = MARKER_SIZE_MM,
+    grid_spacing_mm: float = GRID_SPACING_MM,
+    label_prefix: str = "aruco",
 ) -> None:
     """
     Generate ArUco markers as PNG images ready for printing.
@@ -56,17 +59,21 @@ def generate_markers(
 
     if marker_ids is None:
         marker_ids = list(range(10))
+    if marker_size_mm <= 0:
+        raise ValueError("marker_size_mm must be greater than zero.")
+    if grid_spacing_mm < marker_size_mm:
+        raise ValueError("grid_spacing_mm must be greater than or equal to marker_size_mm.")
 
     # Pixel sizes at the requested DPI
-    marker_px = mm_to_px(MARKER_SIZE_MM, dpi)    # black pattern region
-    border_px = mm_to_px((GRID_SPACING_MM - MARKER_SIZE_MM) / 2.0, dpi)  # 2 mm each side
-    total_px = marker_px + 2 * border_px          # one grid cell = 16 mm
+    marker_px = mm_to_px(marker_size_mm, dpi)    # black pattern region
+    border_px = mm_to_px((grid_spacing_mm - marker_size_mm) / 2.0, dpi)
+    total_px = marker_px + 2 * border_px
 
     print(f"Generating {len(marker_ids)} marker(s):")
     print(f"  Dictionary   : DICT_4X4_50 (4×4 bit, 50 unique IDs)")
-    print(f"  Marker size  : {MARKER_SIZE_MM} mm ({marker_px} px at {dpi} DPI)")
-    print(f"  Grid spacing : {GRID_SPACING_MM} mm ({total_px} px per cell)")
-    print(f"  Border       : {(GRID_SPACING_MM - MARKER_SIZE_MM) / 2:.1f} mm ({border_px} px)")
+    print(f"  Marker size  : {marker_size_mm} mm ({marker_px} px at {dpi} DPI)")
+    print(f"  Grid spacing : {grid_spacing_mm} mm ({total_px} px per cell)")
+    print(f"  Border       : {(grid_spacing_mm - marker_size_mm) / 2:.1f} mm ({border_px} px)")
     print(f"  Output       : {output_path.resolve()}\n")
 
     for mid in marker_ids:
@@ -87,7 +94,7 @@ def generate_markers(
             label = np.full((label_height, total_px), 255, dtype=np.uint8)
             cv2.putText(
                 label,
-                f"aruco{mid + 1:02d}  |  ID {mid}  |  DICT_4X4_50  |  {MARKER_SIZE_MM:.0f}mm",
+                f"{label_prefix}{mid + 1:02d}  |  ID {mid}  |  DICT_4X4_50  |  {marker_size_mm:.0f}mm",
                 (4, label_height - 5),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.35,
@@ -102,16 +109,22 @@ def generate_markers(
         print(f"  Saved: {out_file.name}")
 
     print(f"\nAll markers saved to {output_path.resolve()}")
-    _print_instructions(dpi, marker_px, total_px)
+    _print_instructions(dpi, marker_px, total_px, marker_size_mm, grid_spacing_mm)
 
 
-def _print_instructions(dpi: int, marker_px: int, total_px: int) -> None:
+def _print_instructions(
+    dpi: int,
+    marker_px: int,
+    total_px: int,
+    marker_size_mm: float,
+    grid_spacing_mm: float,
+) -> None:
     print("\n=== PRINTING INSTRUCTIONS ===")
     print(f"1. Print at EXACTLY 100% scale (disable 'fit to page').")
     print(f"2. Set printer DPI to {dpi}.")
     print(f"3. Verify physical size after printing:")
-    print(f"     - Black pattern area : {MARKER_SIZE_MM} mm × {MARKER_SIZE_MM} mm")
-    print(f"     - Full cell (incl. border) : {GRID_SPACING_MM} mm × {GRID_SPACING_MM} mm")
+    print(f"     - Black pattern area : {marker_size_mm} mm x {marker_size_mm} mm")
+    print(f"     - Full cell (incl. border) : {grid_spacing_mm} mm x {grid_spacing_mm} mm")
     print(f"4. Use matte paper to reduce glare in lab lighting.")
     print(f"5. Laminate markers for durability during impact hammer testing.\n")
     print("=== PLACEMENT ON FLANGIA ===")
@@ -136,6 +149,18 @@ def main() -> int:
         type=int,
         default=300,
         help="Printer DPI (default: 300)",
+    )
+    parser.add_argument(
+        "--marker-size-mm",
+        type=float,
+        default=MARKER_SIZE_MM,
+        help=f"Black marker edge length in millimetres (default: {MARKER_SIZE_MM})",
+    )
+    parser.add_argument(
+        "--grid-spacing-mm",
+        type=float,
+        default=GRID_SPACING_MM,
+        help=f"Printable cell size including border in millimetres (default: {GRID_SPACING_MM})",
     )
     parser.add_argument(
         "--count",
@@ -185,6 +210,8 @@ def main() -> int:
         dpi=args.dpi,
         marker_ids=ids,
         add_id_label=not args.no_label,
+        marker_size_mm=args.marker_size_mm,
+        grid_spacing_mm=args.grid_spacing_mm,
     )
     return 0
 

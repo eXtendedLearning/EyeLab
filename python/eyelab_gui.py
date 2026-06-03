@@ -64,6 +64,7 @@ MARKERS_DIR = Path(__file__).parent / "markers"
 LOG_DIR = Path(__file__).parent / ".logs"
 CALIBRATION_FILE = CONFIG_DIR / "camera_params.yaml"
 MARKER_CONFIG_FILE = CONFIG_DIR / "marker_config.json"
+HAMMER_MARKER_CONFIG_FILE = CONFIG_DIR / "hammer_marker_config.json"
 
 HELP_TOPICS = {
     "Quick start": (
@@ -186,9 +187,14 @@ class EyeLabApp:
         self.pipeline: Optional[ArucoPipeline] = None
         self.ar_running = False
         self._ar_after_id: Optional[str] = None
+        self.fullscreen_win: Optional[tk.Toplevel] = None
+        self.fullscreen_label: Optional[tk.Label] = None
+        self._fullscreen_photo: Optional[ImageTk.PhotoImage] = None
 
         self.registration = SpatialRegistration([])
         self.correspondences: list[MarkerCorrespondence] = []
+        self.hammer_marker_ids: set[int] = set(range(40, 45))
+        self.hammer_marker_size_mm = MARKER_SIZE_MM
         self._camera_indices: list[int] = []
         self._preview_elev = 24.0
         self._preview_azim = -60.0
@@ -198,6 +204,7 @@ class EyeLabApp:
         self._build_menu()
         self._build_layout()
         self._load_persistent_state()
+        self.root.bind("<F11>", lambda _event: self._toggle_fullscreen_ar())
 
         self.log("EyeLab GUI started.")
 
@@ -219,6 +226,7 @@ class EyeLabApp:
         tools_menu = tk.Menu(menubar, tearoff=0)
         tools_menu.add_command(label="Generate markers...", command=self._show_marker_gen)
         tools_menu.add_command(label="Load markers from directory...", command=self._show_marker_loader)
+        tools_menu.add_command(label="Generate hammer markers", command=self._generate_hammer_markers)
         tools_menu.add_command(label="Calibrate camera...", command=self._start_calibration)
         menubar.add_cascade(label="Tools", menu=tools_menu)
 
@@ -323,6 +331,20 @@ class EyeLabApp:
         self.corr_status_var = tk.StringVar(value="0 correspondences")
         ttk.Label(mk_frame, textvariable=self.corr_status_var).grid(row=4, column=0, columnspan=2, sticky="w", padx=4)
 
+        # Hammer marker category
+        hammer_frame = ttk.LabelFrame(left, text="Hammer ArUco Markers")
+        hammer_frame.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Label(hammer_frame, text="Markers:").grid(row=0, column=0, sticky="w", padx=4)
+        self.hammer_ids_var = tk.StringVar(value="41-45")
+        ttk.Entry(hammer_frame, textvariable=self.hammer_ids_var, width=14).grid(row=0, column=1, padx=4, pady=2)
+        ttk.Label(hammer_frame, text="Size (mm):").grid(row=1, column=0, sticky="w", padx=4)
+        self.hammer_marker_size_var = tk.DoubleVar(value=MARKER_SIZE_MM)
+        ttk.Entry(hammer_frame, textvariable=self.hammer_marker_size_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=2)
+        ttk.Button(hammer_frame, text="Save hammer set", command=self._save_hammer_marker_config).grid(row=2, column=0, sticky="w", padx=4, pady=2)
+        ttk.Button(hammer_frame, text="Generate hammer markers", command=self._generate_hammer_markers).grid(row=2, column=1, sticky="w", padx=4, pady=2)
+        self.hammer_status_var = tk.StringVar(value="Suggested: aruco41-45")
+        ttk.Label(hammer_frame, textvariable=self.hammer_status_var, wraplength=300).grid(row=3, column=0, columnspan=2, sticky="w", padx=4)
+
         # AR controls
         ar_frame = ttk.LabelFrame(left, text="AR Overlay")
         ar_frame.pack(fill=tk.X, padx=4, pady=2)
@@ -330,6 +352,8 @@ class EyeLabApp:
         self.ar_btn.pack(side=tk.LEFT, padx=4, pady=4)
         self.screenshot_btn = ttk.Button(ar_frame, text="Screenshot", command=self._take_screenshot, state="disabled")
         self.screenshot_btn.pack(side=tk.LEFT, padx=4, pady=4)
+        self.fullscreen_btn = ttk.Button(ar_frame, text="Fullscreen", command=self._toggle_fullscreen_ar, state="disabled")
+        self.fullscreen_btn.pack(side=tk.LEFT, padx=4, pady=4)
         self.ar_fps_var = tk.StringVar(value="")
         ttk.Label(ar_frame, textvariable=self.ar_fps_var).pack(side=tk.LEFT, padx=8)
 
@@ -440,6 +464,8 @@ class EyeLabApp:
                 self.log(f"Marker config loaded: {len(self.correspondences)} correspondences")
             except Exception as e:
                 self.log(f"Failed to load marker config: {e}")
+
+        self._load_hammer_marker_config()
 
     def _load_calibration_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -754,6 +780,134 @@ class EyeLabApp:
     def _show_marker_gen(self) -> None:
         MarkerGenWindow(self.root, self)
 
+    def _format_marker_numbers(self, marker_ids: set[int]) -> str:
+        return ", ".join(f"aruco{marker_id + 1:02d}" for marker_id in sorted(marker_ids))
+
+    def _parse_marker_numbers(self, text: str) -> set[int]:
+        marker_ids: set[int] = set()
+        normalized = text.lower().replace("aruco", "").replace(",", " ").replace(";", " ")
+        for token in normalized.split():
+            if "-" in token:
+                start_text, end_text = token.split("-", 1)
+                start_num = int(start_text)
+                end_num = int(end_text)
+                if end_num < start_num:
+                    start_num, end_num = end_num, start_num
+                numbers = range(start_num, end_num + 1)
+            else:
+                numbers = (int(token),)
+
+            for number in numbers:
+                if number < 1 or number > 50:
+                    raise ValueError("Use printed marker numbers 1 through 50.")
+                marker_ids.add(number - 1)
+
+        if not marker_ids:
+            raise ValueError("Enter at least one hammer marker number.")
+        return marker_ids
+
+    def _read_hammer_marker_inputs(self) -> tuple[set[int], float]:
+        marker_ids = self._parse_marker_numbers(self.hammer_ids_var.get())
+        marker_size_mm = float(self.hammer_marker_size_var.get())
+        if marker_size_mm <= 0:
+            raise ValueError("Hammer marker size must be greater than zero.")
+        return marker_ids, marker_size_mm
+
+    def _compact_marker_numbers(self, marker_ids: set[int]) -> str:
+        numbers = sorted(marker_id + 1 for marker_id in marker_ids)
+        if not numbers:
+            return ""
+        ranges: list[str] = []
+        start = prev = numbers[0]
+        for number in numbers[1:]:
+            if number == prev + 1:
+                prev = number
+                continue
+            ranges.append(f"{start}-{prev}" if start != prev else str(start))
+            start = prev = number
+        ranges.append(f"{start}-{prev}" if start != prev else str(start))
+        return ", ".join(ranges)
+
+    def _apply_hammer_marker_state(self, marker_ids: set[int], marker_size_mm: float) -> None:
+        self.hammer_marker_ids = set(marker_ids)
+        self.hammer_marker_size_mm = float(marker_size_mm)
+        self.hammer_ids_var.set(self._compact_marker_numbers(self.hammer_marker_ids))
+        self.hammer_marker_size_var.set(self.hammer_marker_size_mm)
+        self.hammer_status_var.set(
+            f"{len(self.hammer_marker_ids)} hammer markers: {self._format_marker_numbers(self.hammer_marker_ids)}"
+        )
+
+    def _load_hammer_marker_config(self) -> None:
+        if not HAMMER_MARKER_CONFIG_FILE.exists():
+            self._apply_hammer_marker_state(self.hammer_marker_ids, self.hammer_marker_size_mm)
+            return
+        try:
+            data = json.loads(HAMMER_MARKER_CONFIG_FILE.read_text(encoding="utf-8"))
+            raw_ids = data.get("markerIds")
+            if raw_ids is None:
+                raw_ids = [int(number) - 1 for number in data.get("markerNumbers", [])]
+            marker_ids = {int(marker_id) for marker_id in raw_ids}
+            marker_size_mm = float(data.get("markerSizeMm", MARKER_SIZE_MM))
+            self._apply_hammer_marker_state(marker_ids, marker_size_mm)
+            self.log(f"Hammer marker config loaded: {len(marker_ids)} marker(s)")
+        except Exception as e:
+            self.log(f"Failed to load hammer marker config: {e}", level="WARNING")
+            self._apply_hammer_marker_state(self.hammer_marker_ids, self.hammer_marker_size_mm)
+
+    def _save_hammer_marker_config(self) -> None:
+        try:
+            marker_ids, marker_size_mm = self._read_hammer_marker_inputs()
+        except Exception as e:
+            messagebox.showerror("Hammer Marker Error", str(e))
+            return
+
+        overlap = marker_ids & self._structure_marker_ids()
+        if overlap:
+            self.log(
+                f"Hammer markers overlap structure correspondences: {self._format_marker_numbers(overlap)}",
+                level="WARNING",
+            )
+
+        data = {
+            "markerIds": sorted(marker_ids),
+            "markerNumbers": [marker_id + 1 for marker_id in sorted(marker_ids)],
+            "markerSizeMm": marker_size_mm,
+        }
+        HAMMER_MARKER_CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        self._apply_hammer_marker_state(marker_ids, marker_size_mm)
+        self.log(f"Hammer marker config saved: {len(marker_ids)} marker(s)")
+
+    def _generate_hammer_markers(self) -> None:
+        try:
+            marker_ids, marker_size_mm = self._read_hammer_marker_inputs()
+        except Exception as e:
+            messagebox.showerror("Hammer Marker Error", str(e))
+            return
+
+        self._save_hammer_marker_config()
+        output_dir = MARKERS_DIR / "hammer"
+        grid_spacing_mm = max(marker_size_mm + 4.0, marker_size_mm)
+        try:
+            generate_markers(
+                str(output_dir),
+                dpi=300,
+                marker_ids=sorted(marker_ids),
+                add_id_label=True,
+                marker_size_mm=marker_size_mm,
+                grid_spacing_mm=grid_spacing_mm,
+                label_prefix="hammer",
+            )
+            self.log(f"Hammer markers generated in {output_dir}")
+            messagebox.showinfo("Hammer Markers", f"Generated {len(marker_ids)} marker(s) in:\n{output_dir}")
+        except Exception as e:
+            messagebox.showerror("Hammer Marker Error", str(e))
+
+    def _structure_marker_ids(self) -> set[int]:
+        return {corr.marker_id for corr in self.correspondences}
+
+    def _marker_size_by_id_mm(self) -> dict[int, float]:
+        return {marker_id: self.hammer_marker_size_mm for marker_id in self.hammer_marker_ids}
+
     # ══════════════════════════════════════════════════════════════════════
     #  Correspondence editor (marker ↔ mesh node)
     # ══════════════════════════════════════════════════════════════════════
@@ -781,6 +935,20 @@ class EyeLabApp:
         if not self.calibration_loaded:
             messagebox.showwarning("No Calibration", "Load or run a camera calibration first.")
             return
+        if self.geometry_data is None:
+            proceed = messagebox.askyesno(
+                "No Geometry Loaded",
+                "No geometry is loaded. Start webcam marker preview without a wireframe overlay?",
+            )
+            if not proceed:
+                return
+        if self.geometry_data is not None and len(self.correspondences) < 3:
+            proceed = messagebox.askyesno(
+                "Registration Not Ready",
+                "At least 3 non-collinear structure marker correspondences are needed for the geometry overlay. Start webcam marker preview anyway?",
+            )
+            if not proceed:
+                return
 
         cam_idx = self._get_camera_index()
         try:
@@ -788,6 +956,7 @@ class EyeLabApp:
                 camera_index=cam_idx,
                 calibration_path=str(CALIBRATION_FILE),
                 marker_size_mm=self.marker_size_var.get(),
+                marker_size_by_id_mm=self._marker_size_by_id_mm(),
             )
             self.pipeline.start()
         except Exception as e:
@@ -797,20 +966,23 @@ class EyeLabApp:
         self.ar_running = True
         self.ar_btn.configure(text="Stop AR")
         self.screenshot_btn.configure(state="normal")
+        self.fullscreen_btn.configure(state="normal")
         self.notebook.select(self.ar_tab)
         self.log("AR overlay started.")
         self._ar_loop()
 
     def _stop_ar(self) -> None:
         self.ar_running = False
+        self._close_fullscreen_ar()
         if self._ar_after_id is not None:
             self.root.after_cancel(self._ar_after_id)
             self._ar_after_id = None
         if self.pipeline:
             self.pipeline.stop()
-            self.pipeline = None
+        self.pipeline = None
         self.ar_btn.configure(text="Start AR")
         self.screenshot_btn.configure(state="disabled")
+        self.fullscreen_btn.configure(state="disabled")
         self.ar_fps_var.set("")
         self.ar_canvas_label.configure(image="", text="AR stopped.")
         self.log("AR overlay stopped.")
@@ -822,47 +994,146 @@ class EyeLabApp:
         result = self.pipeline.process_frame()
         if result is not None:
             registration_result = None
-            # Draw overlay
             vis = self.pipeline.draw_overlay(result, draw_markers=True, draw_axes=True)
+            self._draw_marker_roles(vis, result)
 
-            # Display registration info on frame
+            structure_ids = self._structure_marker_ids()
+            structure_seen = sum(1 for marker in result.markers if marker.marker_id in structure_ids)
+            hammer_seen = sum(1 for marker in result.markers if marker.marker_id in self.hammer_marker_ids)
+            self.registration.clear_detected_positions()
+            for m in result.markers:
+                if m.marker_id in structure_ids and m.rvec is not None and m.tvec is not None:
+                    self.registration.update_detected_position(
+                        m.marker_id, m.tvec.flatten()
+                    )
+            registration_result = self.registration.compute()
+
             if result.pose:
                 t = result.pose.tvec.flatten()
-                info = f"T: [{t[0]*1000:.1f}, {t[1]*1000:.1f}, {t[2]*1000:.1f}] mm  |  Markers: {result.pose.marker_count}"
+                info = (
+                    f"T: [{t[0]*1000:.1f}, {t[1]*1000:.1f}, {t[2]*1000:.1f}] mm"
+                    f"  |  Structure: {structure_seen}  |  Hammer: {hammer_seen}"
+                )
+                cv2.putText(vis, info, (10, vis.shape[0] - 15),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+            else:
+                info = f"Structure: {structure_seen}  |  Hammer: {hammer_seen}"
                 cv2.putText(vis, info, (10, vis.shape[0] - 15),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
-                # Update registration detected positions
-                self.registration.clear_detected_positions()
-                for m in result.markers:
-                    if m.rvec is not None and m.tvec is not None:
-                        self.registration.update_detected_position(
-                            m.marker_id, m.tvec.flatten()
-                        )
-                registration_result = self.registration.compute()
-
             # Draw wireframe if geometry loaded and registration done
-            if self.geometry_data and result.pose and registration_result is not None:
+            if self.geometry_data and registration_result is not None:
                 self._draw_registered_wireframe(vis, result)
 
-            # Convert to tkinter image
-            rgb = cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
-            # Resize to fit
-            h, w = rgb.shape[:2]
-            scale = min(PREVIEW_W / w, PREVIEW_H / h, 1.0)
-            if scale < 1.0:
-                rgb = cv2.resize(rgb, (int(w * scale), int(h * scale)))
-            pil_img = Image.fromarray(rgb)
-            self._ar_photo = ImageTk.PhotoImage(pil_img)
-            self.ar_canvas_label.configure(image=self._ar_photo, text="")
+            self._update_ar_display(vis)
 
             # FPS
-            self.ar_fps_var.set(f"FPS: {result.fps:.1f}")
+            self.ar_fps_var.set(f"FPS: {result.fps:.1f} | S {structure_seen} | H {hammer_seen}")
 
             # Store last frame for screenshot
             self._last_ar_frame = vis
 
         self._ar_after_id = self.root.after(16, self._ar_loop)  # ~60 Hz GUI refresh
+
+    def _marker_role(self, marker_id: int) -> str:
+        if marker_id in self.hammer_marker_ids:
+            return "hammer"
+        if marker_id in self._structure_marker_ids():
+            return "structure"
+        return "unassigned"
+
+    def _draw_marker_roles(self, vis: np.ndarray, result: FrameResult) -> None:
+        styles = {
+            "structure": ((70, 220, 70), "STRUCT"),
+            "hammer": ((0, 165, 255), "HAMMER"),
+            "unassigned": ((190, 190, 190), "ARUCO"),
+        }
+        for marker in result.markers:
+            role = self._marker_role(marker.marker_id)
+            color, label_prefix = styles[role]
+            corners = marker.corners.astype(int)
+            cv2.polylines(vis, [corners], True, color, 2, cv2.LINE_AA)
+            x = int(np.min(corners[:, 0]))
+            y = int(np.min(corners[:, 1])) - 8
+            y = max(18, y)
+            label = f"{label_prefix} aruco{marker.marker_id + 1:02d}"
+            if role == "hammer" and marker.tvec is not None:
+                label += f" {float(np.linalg.norm(marker.tvec)):.2f}m"
+            cv2.putText(vis, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.48, color, 2, cv2.LINE_AA)
+
+    def _resize_rgb_for_box(self, rgb: np.ndarray, max_w: int, max_h: int) -> np.ndarray:
+        h, w = rgb.shape[:2]
+        max_w = max(1, int(max_w))
+        max_h = max(1, int(max_h))
+        scale = min(max_w / w, max_h / h)
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        return cv2.resize(rgb, (new_w, new_h), interpolation=interpolation)
+
+    def _update_ar_display(self, vis: np.ndarray) -> None:
+        rgb = cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
+        max_w = max(PREVIEW_W, self.ar_canvas_label.winfo_width())
+        max_h = max(PREVIEW_H, self.ar_canvas_label.winfo_height())
+        display_rgb = self._resize_rgb_for_box(rgb, max_w, max_h)
+        self._ar_photo = ImageTk.PhotoImage(Image.fromarray(display_rgb))
+        self.ar_canvas_label.configure(image=self._ar_photo, text="")
+        self._update_fullscreen_display(rgb)
+
+    def _fullscreen_is_open(self) -> bool:
+        try:
+            return self.fullscreen_win is not None and bool(self.fullscreen_win.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def _toggle_fullscreen_ar(self) -> None:
+        if self._fullscreen_is_open():
+            self._close_fullscreen_ar()
+        else:
+            self._open_fullscreen_ar()
+
+    def _open_fullscreen_ar(self) -> None:
+        if not self.ar_running:
+            self._start_ar()
+            if not self.ar_running:
+                return
+
+        win = tk.Toplevel(self.root)
+        self.fullscreen_win = win
+        win.title("EyeLab AR Fullscreen")
+        win.configure(bg="black")
+        win.attributes("-fullscreen", True)
+        win.bind("<Escape>", lambda _event: self._close_fullscreen_ar())
+        win.bind("<F11>", lambda _event: self._close_fullscreen_ar())
+        win.protocol("WM_DELETE_WINDOW", self._close_fullscreen_ar)
+
+        self.fullscreen_label = tk.Label(win, bg="black", bd=0)
+        self.fullscreen_label.pack(fill=tk.BOTH, expand=True)
+        self.fullscreen_btn.configure(text="Exit Fullscreen")
+        win.focus_force()
+        self.log("Fullscreen AR overlay opened.")
+
+    def _close_fullscreen_ar(self) -> None:
+        if self._fullscreen_is_open():
+            try:
+                self.fullscreen_win.destroy()
+            except tk.TclError:
+                pass
+        self.fullscreen_win = None
+        self.fullscreen_label = None
+        self._fullscreen_photo = None
+        if hasattr(self, "fullscreen_btn"):
+            self.fullscreen_btn.configure(text="Fullscreen")
+
+    def _update_fullscreen_display(self, rgb: np.ndarray) -> None:
+        if not self._fullscreen_is_open() or self.fullscreen_label is None:
+            return
+        max_w = self.fullscreen_label.winfo_width() or self.fullscreen_win.winfo_screenwidth()
+        max_h = self.fullscreen_label.winfo_height() or self.fullscreen_win.winfo_screenheight()
+        display_rgb = self._resize_rgb_for_box(rgb, max_w, max_h)
+        self._fullscreen_photo = ImageTk.PhotoImage(Image.fromarray(display_rgb))
+        self.fullscreen_label.configure(image=self._fullscreen_photo)
 
     def _draw_registered_wireframe(self, vis: np.ndarray, result: FrameResult) -> None:
         """Project the registered wireframe onto the AR frame."""
@@ -921,6 +1192,8 @@ class EyeLabApp:
     def _on_close(self) -> None:
         if self.ar_running:
             self._stop_ar()
+        else:
+            self._close_fullscreen_ar()
         plt.close("all")
         SessionLogger.shutdown()
         self.root.destroy()
@@ -1090,7 +1363,7 @@ class MarkerGenWindow:
         self.dpi_var = tk.IntVar(value=300)
         ttk.Entry(self.win, textvariable=self.dpi_var, width=8).grid(row=1, column=1, padx=8)
 
-        ttk.Label(self.win, text=f"Marker size: {MARKER_SIZE_MM} mm | Grid: {GRID_SPACING_MM} mm").grid(
+        ttk.Label(self.win, text="Marker size comes from the main Marker panel.").grid(
             row=2, column=0, columnspan=2, padx=8, pady=4, sticky="w")
         ttk.Label(self.win, text="Dictionary: DICT_4X4_50").grid(
             row=3, column=0, columnspan=2, padx=8, sticky="w")
@@ -1106,7 +1379,16 @@ class MarkerGenWindow:
         dpi = self.dpi_var.get()
         try:
             ids = list(range(count))
-            generate_markers(str(MARKERS_DIR), dpi=dpi, marker_ids=ids, add_id_label=True)
+            marker_size_mm = float(self.app.marker_size_var.get())
+            grid_spacing_mm = max(marker_size_mm + 4.0, marker_size_mm)
+            generate_markers(
+                str(MARKERS_DIR),
+                dpi=dpi,
+                marker_ids=ids,
+                add_id_label=True,
+                marker_size_mm=marker_size_mm,
+                grid_spacing_mm=grid_spacing_mm,
+            )
             self.app.log(f"Generated {count} markers (aruco01–aruco{count:02d}) in {MARKERS_DIR}")
             messagebox.showinfo("Done", f"Generated {count} markers in:\n{MARKERS_DIR}")
             self.win.destroy()
