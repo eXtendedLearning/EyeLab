@@ -118,23 +118,25 @@ class UNVParser:
         units_ds  = self._get_dataset(datasets, self.DATASET_UNITS)
 
         try:
-            if nodes_ds:
+            if nodes_ds is not None:
                 nodes = self._parse_nodes(nodes_ds)
-            elif legacy_nodes_ds:
+            elif legacy_nodes_ds is not None:
                 nodes = self._parse_nodes_legacy(legacy_nodes_ds)
             else:
                 nodes = []
             trace_lines: List[List[int]] = []
             for lds in lines_ds_all:
                 trace_lines.extend(self._parse_trace_lines(lds))
-            coord_systems = self._parse_coord_systems(cs_ds)  if cs_ds     else []
-            units        = self._parse_units(units_ds)        if units_ds  else self._default_units()
+            if not trace_lines and nodes:
+                trace_lines = self._infer_axis_aligned_grid_edges(nodes)
+            coord_systems = self._parse_coord_systems(cs_ds)  if cs_ds is not None     else []
+            units        = self._parse_units(units_ds)        if units_ds is not None  else self._default_units()
         except UNVParseError:
             raise
         except Exception as e:
             raise UNVParseError(f"Failed to parse datasets: {e}") from e
 
-        if self.validate_cs and coord_systems:
+        if self.validate_cs and len(coord_systems) > 0:
             self._validate_cs_references(nodes, coord_systems)
 
         metadata = {
@@ -170,7 +172,7 @@ class UNVParser:
         y_coords  = dataset.get("y", [])
         z_coords  = dataset.get("z", [])
 
-        if not node_ids:
+        if not self._has_items(node_ids):
             raise UNVParseError("No nodes found in Dataset 2411")
 
         nodes = []
@@ -294,7 +296,7 @@ class UNVParser:
         y_axes   = dataset.get("y_axis",  [])
         z_axes   = dataset.get("z_axis",  [])
 
-        if not cs_ids:
+        if not self._has_items(cs_ids):
             logger.warning("No coordinate systems found in Dataset 2420")
             return []
 
@@ -313,6 +315,58 @@ class UNVParser:
 
         logger.debug(f"Parsed {len(coord_systems)} coordinate systems from Dataset 2420")
         return coord_systems
+
+    def _infer_axis_aligned_grid_edges(self, nodes: List[Dict[str, Any]]) -> List[List[int]]:
+        """
+        Infer trace edges for nodes-only, axis-aligned plate grids.
+
+        Some Testlab geometry exports contain Dataset 2411 nodes but no Dataset 82 trace
+        lines.  EyeLab can still make a useful wireframe when the nodes form one complete
+        rectangular grid on an axis-aligned plane.  This intentionally does not infer
+        arbitrary 3D connectivity.
+        """
+        axes = ("x", "y", "z")
+
+        def key(value: float) -> float:
+            return round(float(value), 9)
+
+        values = {
+            axis: sorted({key(node.get(axis, 0.0)) for node in nodes})
+            for axis in axes
+        }
+        varying = [axis for axis in axes if len(values[axis]) > 1]
+
+        if len(varying) != 2:
+            logger.info("No Dataset 82 traces; skipped grid inference for non-planar geometry")
+            return []
+
+        a_axis, b_axis = varying
+        grid: Dict[tuple[float, float], int] = {}
+        for node in nodes:
+            grid_key = (key(node[a_axis]), key(node[b_axis]))
+            if grid_key in grid:
+                logger.warning("No Dataset 82 traces; skipped grid inference due to duplicate grid points")
+                return []
+            grid[grid_key] = int(node["id"])
+
+        expected = len(values[a_axis]) * len(values[b_axis])
+        if len(grid) != expected or expected != len(nodes):
+            logger.warning("No Dataset 82 traces; skipped grid inference because the plate grid is incomplete")
+            return []
+
+        edges: List[List[int]] = []
+        for b in values[b_axis]:
+            row = [grid[(a, b)] for a in values[a_axis]]
+            edges.extend([[a_id, b_id] for a_id, b_id in zip(row, row[1:])])
+        for a in values[a_axis]:
+            col = [grid[(a, b)] for b in values[b_axis]]
+            edges.extend([[a_id, b_id] for a_id, b_id in zip(col, col[1:])])
+
+        logger.info(
+            f"No Dataset 82 traces; inferred {len(edges)} grid edges "
+            f"from {len(nodes)} nodes on the {a_axis.upper()}{b_axis.upper()} plane"
+        )
+        return edges
 
     def _parse_units(self, dataset: Dict) -> Dict[str, Any]:
         """Parse Dataset 164 (Units)."""
@@ -391,6 +445,16 @@ class UNVParser:
             except (TypeError, ValueError):
                 pass
         return list(default)
+
+    @staticmethod
+    def _has_items(value: Any) -> bool:
+        """Return True when a scalar/list/NumPy array-like value contains data."""
+        if value is None:
+            return False
+        try:
+            return len(value) > 0
+        except TypeError:
+            return True
 
     @staticmethod
     def _default_units() -> Dict[str, Any]:

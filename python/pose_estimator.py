@@ -32,6 +32,7 @@ import yaml
 
 from calibrate import load_calibration
 from camera_utils import open_camera
+from registration import MarkerCorrespondence, marker_object_corners
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -341,6 +342,34 @@ def load_board_from_yaml(yaml_path: str) -> cv2.aruco.Board:
     return cv2.aruco.Board(obj_points, dictionary, np.array(ids))
 
 
+def board_from_correspondences(
+    correspondences: list[MarkerCorrespondence],
+    default_marker_size_m: float,
+    marker_size_by_id_m: Optional[dict[int, float]] = None,
+) -> Optional[cv2.aruco.Board]:
+    """Build a cv2 ArUco board from marker centres, face normals, and roll angles."""
+    dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
+    obj_points: list[np.ndarray] = []
+    ids: list[int] = []
+    marker_size_by_id_m = marker_size_by_id_m or {}
+
+    for corr in correspondences:
+        marker_id = int(corr.marker_id)
+        size_m = marker_size_by_id_m.get(marker_id, default_marker_size_m)
+        if corr.marker_size_mm is not None:
+            size_m = float(corr.marker_size_mm) / 1000.0
+        if size_m <= 0:
+            continue
+        obj_points.append(
+            marker_object_corners(corr.unv_position, corr.normal, corr.roll_deg, size_m)
+        )
+        ids.append(marker_id)
+
+    if not ids:
+        return None
+    return cv2.aruco.Board(obj_points, dictionary, np.array(ids, dtype=np.int32))
+
+
 # ── L-structure detector ──────────────────────────────────────────────────────
 
 class LStructureDetector:
@@ -348,7 +377,7 @@ class LStructureDetector:
     Multi-marker detector for the L-shaped flangia.
 
     Uses cv2.aruco.Board.matchImagePoints → cv2.solvePnP → solvePnPRefineLM.
-    Falls back to single-marker pose when < 3 board markers are visible.
+    Falls back to single-marker pose only when no structure board is configured.
     """
 
     def __init__(
@@ -412,8 +441,8 @@ class LStructureDetector:
         dist_coeffs: np.ndarray,
     ) -> Optional[PoseResult]:
         """
-        Estimate 6-DoF pose.  Uses board-based solvePnP when ≥3 board markers
-        are visible; falls back to single-marker IPPE_SQUARE otherwise.
+        Estimate 6-DoF pose.  Uses board-based solvePnP when configured board
+        corners are available; falls back to single-marker IPPE_SQUARE otherwise.
         """
         if ids is None or len(ids) == 0:
             return None
@@ -423,7 +452,10 @@ class LStructureDetector:
 
         # Board mode
         if self.board is not None:
-            obj_pts, img_pts = self.board.matchImagePoints(corners, ids)
+            try:
+                obj_pts, img_pts = self.board.matchImagePoints(corners, ids)
+            except cv2.error:
+                obj_pts, img_pts = None, None
             if obj_pts is not None and len(obj_pts) >= 4:
                 ok, rvec, tvec = cv2.solvePnP(
                     obj_pts, img_pts, camera_matrix, dist_coeffs,
@@ -434,9 +466,11 @@ class LStructureDetector:
                     rvec, tvec = cv2.solvePnPRefineLM(
                         obj_pts, img_pts, camera_matrix, dist_coeffs, rvec, tvec,
                     )
+            if rvec is None:
+                return None
 
         # Fallback: single marker
-        if rvec is None and len(corners) > 0:
+        if rvec is None and self.board is None and len(corners) > 0:
             obj_pts = self.single_marker_object_points(ids_flat[0])
             img_pts = corners[0].reshape(4, 1, 2).astype(np.float32)
             ok, rvec, tvec = cv2.solvePnP(
@@ -473,6 +507,7 @@ class ArucoPipeline:
         camera_index: int = 0,
         calibration_path: Optional[str] = None,
         board_path: Optional[str] = None,
+        board_correspondences: Optional[list[MarkerCorrespondence]] = None,
         marker_size_mm: float = 12.0,
         allowed_ids: Optional[set[int]] = None,
         marker_size_by_id_mm: Optional[dict[int, float]] = None,
@@ -499,6 +534,13 @@ class ArucoPipeline:
         board = None
         if board_path and Path(board_path).exists():
             board = load_board_from_yaml(board_path)
+        if board is None and board_correspondences:
+            board = board_from_correspondences(
+                board_correspondences,
+                self.marker_size_m,
+                marker_size_by_id_m=marker_size_by_id_m,
+            )
+        self.uses_structure_board = board is not None
 
         self.l_detector = LStructureDetector(
             board=board,

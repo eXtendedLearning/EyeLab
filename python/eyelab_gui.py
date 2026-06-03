@@ -44,11 +44,15 @@ from calibrate import load_calibration, save_calibration, make_charuco_board, ge
 from camera_utils import list_cameras, open_camera
 from eyelab_logger import SessionLogger
 from generate_markers import generate_markers, MARKER_SIZE_MM, GRID_SPACING_MM
+import overlay
 from pose_estimator import ArucoPipeline, ThreadedCapture, FrameResult
 from registration import (
+    AXIS_NORMALS,
     SpatialRegistration,
     MarkerCorrespondence,
     load_marker_config,
+    marker_object_corners,
+    normal_label,
     save_marker_config,
 )
 from unv_to_json import UNVParser
@@ -88,15 +92,19 @@ HELP_TOPICS = {
     ),
     "Markers and registration": (
         "EyeLab uses printed ArUco markers as known physical anchors. Every marker used for "
-        "registration needs a matching UNV position. Use Edit correspondences to assign marker "
-        "numbers such as aruco01 to a UNV node or a measured XYZ position.\n\n"
+        "registration needs a matching UNV pose: centre position, outward face normal, in-plane "
+        "roll, and physical size. Use Edit correspondences to assign marker numbers such as "
+        "aruco01 to a UNV node or a measured XYZ position.\n\n"
         "Use at least 3 non-collinear correspondences. Four or more are better because EyeLab "
-        "can report residual error and is less sensitive to one bad point."
+        "can report residual error and is less sensitive to one bad point. One oriented marker "
+        "can still define a pose, but it gives you less redundancy."
     ),
     "Camera calibration": (
         "Camera calibration estimates the camera matrix and lens distortion. EyeLab stores the "
         "result in python/config/camera_params.yaml and uses it for marker pose and wireframe "
         "projection.\n\n"
+        "This step uses the printed ChArUco calibration board held in front of the camera. It is "
+        "not the same thing as placing the ArUco markers on the physical structure.\n\n"
         "Aim for RMS reprojection error below 1.0 px. If the error is higher, capture more varied "
         "views of the board: near, far, tilted, left/right, and close to the image corners."
     ),
@@ -122,14 +130,16 @@ ARUCO_CALIBRATION_STEPS = [
     ),
     (
         "2. Prepare the camera view",
-        "Select the camera in the main Camera panel. Use even lighting, keep the board flat, and "
-        "make sure the black/white pattern is sharp. Avoid reflections and motion blur."
+        "Select the camera in the main Camera panel. Hold the printed ChArUco board in front of "
+        "the camera, visible to the lens, not on the test structure. Use even lighting, keep the "
+        "paper flat, and make sure the black/white pattern is sharp."
     ),
     (
         "3. Capture varied frames",
         "Open the live calibration window. Press SPACE only when the board corners are detected. "
-        "Capture at least 15 frames with different board positions: center, corners, near, far, "
-        "and several tilted angles."
+        "The Capture button does the same thing if keyboard focus is awkward. Capture at least "
+        "15 frames with different board positions: center, corners, near, far, and several tilted "
+        "angles."
     ),
     (
         "4. Finish and read RMS",
@@ -139,8 +149,9 @@ ARUCO_CALIBRATION_STEPS = [
     (
         "5. Use the saved calibration",
         "EyeLab saves python/config/camera_params.yaml. After calibration, load UNV geometry, assign "
-        "marker correspondences, and start AR. If the overlay is unstable, redo calibration with "
-        "sharper and more varied frames."
+        "structure marker poses in Edit correspondences, and start AR. For each ArUco on the "
+        "structure, set centre position, face normal, roll, and physical marker size. If the overlay "
+        "is unstable, redo calibration with sharper and more varied frames."
     ),
 ]
 
@@ -199,6 +210,9 @@ class EyeLabApp:
         self._preview_elev = 24.0
         self._preview_azim = -60.0
         self._preview_roll = 0.0
+        self._marker_drag_id: Optional[int] = None
+        self._marker_dragging = False
+        self._marker_drag_editor = None
 
         # ── Build UI ──────────────────────────────────────────────────────
         self._build_menu()
@@ -396,6 +410,7 @@ class EyeLabApp:
         self._draw_orientation_globe()
         self.canvas_3d = FigureCanvasTkAgg(self.fig, master=parent)
         self.canvas_3d.mpl_connect("button_press_event", self._on_3d_canvas_press)
+        self.canvas_3d.mpl_connect("motion_notify_event", self._on_3d_canvas_motion)
         self.canvas_3d.mpl_connect("button_release_event", self._on_3d_canvas_release)
         self.canvas_3d.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
@@ -490,13 +505,20 @@ class EyeLabApp:
         cam_idx = self._get_camera_index()
         CalibrationWindow(self.root, cam_idx, self._on_calibration_done)
 
-    def _on_calibration_done(self, cam_matrix: np.ndarray, dist_coeffs: np.ndarray, rms: float) -> None:
+    def _on_calibration_done(
+        self,
+        cam_matrix: np.ndarray,
+        dist_coeffs: np.ndarray,
+        rms: float,
+        image_size: tuple[int, int] | None = None,
+    ) -> None:
         self.camera_matrix = cam_matrix
         self.dist_coeffs = dist_coeffs
         self.calibration_loaded = True
+        image_size = image_size or (1280, 720)
         save_calibration(
             str(CALIBRATION_FILE), cam_matrix, dist_coeffs,
-            (1280, 720), rms, 5, 7, 0.025, 0.019,
+            image_size, rms, 5, 7, 0.025, 0.019,
         )
         self.cal_status_var.set(f"Calibrated — RMS: {rms:.3f} px")
         self.log(f"Calibration complete. RMS: {rms:.4f} px. Saved to {CALIBRATION_FILE}")
@@ -583,8 +605,24 @@ class EyeLabApp:
         # Draw marker positions if correspondences exist
         for corr in self.correspondences:
             p = corr.unv_position
-            self.ax3d.scatter([p[0]], [p[1]], [p[2]], c="red", s=60, marker="^",
-                             zorder=10, label=f"aruco{corr.marker_id + 1:02d}")
+            size_m = (corr.marker_size_mm or float(self.marker_size_var.get())) / 1000.0
+            corners = marker_object_corners(p, corr.normal, corr.roll_deg, size_m)
+            closed = np.vstack([corners, corners[0]])
+            self.ax3d.plot(
+                closed[:, 0], closed[:, 1], closed[:, 2],
+                color="crimson", linewidth=1.8, zorder=10,
+            )
+            self.ax3d.scatter([p[0]], [p[1]], [p[2]], c="crimson", s=35, marker="o", zorder=11)
+            n = corr.normal * max(size_m * 1.8, 0.008)
+            self.ax3d.quiver(
+                p[0], p[1], p[2], n[0], n[1], n[2],
+                color="purple", arrow_length_ratio=0.35, linewidth=1.3, normalize=False,
+            )
+            self.ax3d.text(
+                p[0], p[1], p[2],
+                f" aruco{corr.marker_id + 1:02d} {normal_label(corr.normal)}",
+                fontsize=7, color="crimson",
+            )
 
         self._apply_equal_3d_limits(xs, ys, zs)
         self._style_3d_axes()
@@ -618,13 +656,89 @@ class EyeLabApp:
         self._preview_azim = float(getattr(self.ax3d, "azim", self._preview_azim))
         self._preview_roll = float(getattr(self.ax3d, "roll", self._preview_roll))
 
+    def _begin_marker_drag(self, marker_id: int, editor=None) -> None:
+        if self.geometry_data is None:
+            messagebox.showwarning("No Geometry", "Load a UNV or JSON file first.")
+            return
+        self._marker_drag_id = int(marker_id)
+        self._marker_dragging = False
+        self._marker_drag_editor = editor
+        self.notebook.select(self.preview_tab)
+        self.log(f"Drag placement armed for aruco{marker_id + 1:02d}.")
+
+    def _nearest_geometry_node_from_event(self, event):
+        if self.geometry_data is None or event.inaxes is not self.ax3d:
+            return None
+        nodes = self.geometry_data.get("nodes", [])
+        if not nodes:
+            return None
+
+        best_node = None
+        best_distance = float("inf")
+        proj = self.ax3d.get_proj()
+        for node in nodes:
+            x2d, y2d, _ = proj3d.proj_transform(node["x"], node["y"], node["z"], proj)
+            px, py = self.ax3d.transData.transform((x2d, y2d))
+            distance = float(np.hypot(px - event.x, py - event.y))
+            if distance < best_distance:
+                best_distance = distance
+                best_node = node
+        if best_distance > 80.0:
+            return None
+        return best_node
+
+    def _upsert_marker_at_node(self, marker_id: int, node: dict) -> None:
+        position = np.array([node["x"], node["y"], node["z"]], dtype=np.float64)
+        for corr in self.correspondences:
+            if corr.marker_id == marker_id:
+                corr.unv_position = position
+                corr.node_id = int(node["id"])
+                if not corr.description or corr.description.startswith("Node "):
+                    corr.description = f"Node {node['id']}"
+                break
+        else:
+            self.correspondences.append(MarkerCorrespondence(
+                marker_id=marker_id,
+                unv_position=position,
+                node_id=int(node["id"]),
+                description=f"Node {node['id']}",
+                marker_size_mm=float(self.marker_size_var.get()),
+            ))
+        self._save_correspondences()
+        if self._marker_drag_editor is not None:
+            try:
+                self._marker_drag_editor.refresh()
+            except tk.TclError:
+                self._marker_drag_editor = None
+
+    def _drag_marker_to_event(self, event) -> bool:
+        if self._marker_drag_id is None:
+            return False
+        node = self._nearest_geometry_node_from_event(event)
+        if node is None:
+            return False
+        self._upsert_marker_at_node(self._marker_drag_id, node)
+        return True
+
     def _on_3d_canvas_release(self, event) -> None:
+        if self._marker_dragging:
+            marker_id = self._marker_drag_id
+            self._drag_marker_to_event(event)
+            self._marker_dragging = False
+            self._marker_drag_id = None
+            if marker_id is not None:
+                self.log(f"Drag placement finished for aruco{marker_id + 1:02d}.")
+            return
         if event.inaxes is self.ax3d:
             self._remember_3d_view()
             self._draw_orientation_globe()
             self.canvas_3d.draw_idle()
 
     def _on_3d_canvas_press(self, event) -> None:
+        if event.inaxes is self.ax3d and event.button == 1 and self._marker_drag_id is not None:
+            self._marker_dragging = self._drag_marker_to_event(event)
+            return
+
         if event.inaxes is not getattr(self, "orient_ax", None) or event.button != 1:
             return
 
@@ -645,6 +759,10 @@ class EyeLabApp:
 
         if nearest_axis and nearest_distance < 55:
             self._snap_preview_to_axis(nearest_axis)
+
+    def _on_3d_canvas_motion(self, event) -> None:
+        if self._marker_dragging:
+            self._drag_marker_to_event(event)
 
     def _snap_preview_to_axis(self, axis_name: str) -> None:
         views = {
@@ -942,19 +1060,25 @@ class EyeLabApp:
             )
             if not proceed:
                 return
-        if self.geometry_data is not None and len(self.correspondences) < 3:
+        if self.geometry_data is not None and len(self.correspondences) < 1:
             proceed = messagebox.askyesno(
                 "Registration Not Ready",
-                "At least 3 non-collinear structure marker correspondences are needed for the geometry overlay. Start webcam marker preview anyway?",
+                "At least one oriented structure marker is needed for the geometry overlay. Start webcam marker preview anyway?",
             )
             if not proceed:
                 return
+        elif self.geometry_data is not None and len(self.correspondences) < 3:
+            self.log(
+                "Using fewer than 3 structure markers. Orientation-aware board pose can run, but accuracy improves with multiple markers.",
+                level="WARNING",
+            )
 
         cam_idx = self._get_camera_index()
         try:
             self.pipeline = ArucoPipeline(
                 camera_index=cam_idx,
                 calibration_path=str(CALIBRATION_FILE),
+                board_correspondences=self.correspondences,
                 marker_size_mm=self.marker_size_var.get(),
                 marker_size_by_id_mm=self._marker_size_by_id_mm(),
             )
@@ -1021,8 +1145,13 @@ class EyeLabApp:
                 cv2.putText(vis, info, (10, vis.shape[0] - 15),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
-            # Draw wireframe if geometry loaded and registration done
-            if self.geometry_data and registration_result is not None:
+            # Draw wireframe from an oriented board pose, or from legacy centre registration.
+            board_pose_ready = (
+                self.pipeline is not None
+                and self.pipeline.uses_structure_board
+                and result.pose is not None
+            )
+            if self.geometry_data and (board_pose_ready or registration_result is not None):
                 self._draw_registered_wireframe(vis, result)
 
             self._update_ar_display(vis)
@@ -1137,7 +1266,7 @@ class EyeLabApp:
 
     def _draw_registered_wireframe(self, vis: np.ndarray, result: FrameResult) -> None:
         """Project the registered wireframe onto the AR frame."""
-        if not self.registration.is_registered or self.camera_matrix is None:
+        if self.camera_matrix is None:
             return
 
         nodes = self.geometry_data.get("nodes", [])
@@ -1145,37 +1274,35 @@ class EyeLabApp:
         if not nodes or not edges:
             return
 
-        # Transform UNV nodes → world via registration, then project to image
-        node_map = {}
-        for n in nodes:
-            unv_pt = np.array([n["x"], n["y"], n["z"]], dtype=np.float64)
-            world_pt = self.registration.transform_point(unv_pt)
-            if world_pt is not None:
-                node_map[n["id"]] = world_pt
-
-        if not node_map:
+        if self.pipeline is not None and self.pipeline.uses_structure_board and result.pose is not None:
+            self._draw_board_pose_wireframe(vis, result, nodes, edges)
             return
 
-        # Project world points using the camera pose from ArUco detection
-        unique_ids = list({nid for e in edges for nid in e} & node_map.keys())
-        if not unique_ids:
+        if not self.registration.is_registered:
             return
 
-        pts_3d = np.array([node_map[nid] for nid in unique_ids], dtype=np.float32)
-        # Use identity pose since points are already in camera frame via registration
-        rvec_zero = np.zeros((3, 1), dtype=np.float32)
-        tvec_zero = np.zeros((3, 1), dtype=np.float32)
-        pts_2d, _ = cv2.projectPoints(
-            pts_3d.reshape(-1, 1, 3), rvec_zero, tvec_zero,
-            self.camera_matrix, self.dist_coeffs,
+        # Transform UNV nodes to world via registration (points end up in the
+        # camera frame, so projection uses an identity pose) and draw.
+        node_px = overlay.project_nodes(
+            nodes, self.camera_matrix, self.dist_coeffs,
+            node_transform=self.registration.transform_point,
         )
-        pts_2d = pts_2d.reshape(-1, 2).astype(int)
-        id_to_px = {nid: tuple(pts_2d[i]) for i, nid in enumerate(unique_ids)}
+        for p1, p2 in overlay.wireframe_segments(node_px, edges):
+            cv2.line(vis, p1, p2, (0, 220, 255), 1, cv2.LINE_AA)
 
-        for a_id, b_id in edges:
-            if a_id in id_to_px and b_id in id_to_px:
-                cv2.line(vis, id_to_px[a_id], id_to_px[b_id],
-                         (0, 220, 255), 1, cv2.LINE_AA)
+    def _draw_board_pose_wireframe(
+        self,
+        vis: np.ndarray,
+        result: FrameResult,
+        nodes: list[dict],
+        edges: list[list[int]],
+    ) -> None:
+        node_px = overlay.project_nodes(
+            nodes, self.camera_matrix, self.dist_coeffs,
+            rvec=result.pose.rvec, tvec=result.pose.tvec,
+        )
+        for p1, p2 in overlay.wireframe_segments(node_px, edges):
+            cv2.line(vis, p1, p2, (0, 220, 255), 1, cv2.LINE_AA)
 
     def _take_screenshot(self) -> None:
         if not hasattr(self, "_last_ar_frame") or self._last_ar_frame is None:
@@ -1269,7 +1396,7 @@ class ArucoCalibrationWizard:
         self.index = 0
         self.win = tk.Toplevel(parent)
         self.win.title("ArUco Calibration Wizard")
-        self.win.geometry("620x380")
+        self.win.geometry("780x430")
         self.win.transient(parent)
 
         main = ttk.Frame(self.win)
@@ -1278,9 +1405,15 @@ class ArucoCalibrationWizard:
         self.step_var = tk.StringVar()
         ttk.Label(main, textvariable=self.step_var, font=("", 13, "bold")).pack(anchor="w")
 
-        self.body = tk.Text(main, wrap=tk.WORD, height=9)
-        self.body.pack(fill=tk.BOTH, expand=True, pady=(8, 8))
+        content = ttk.Frame(main)
+        content.pack(fill=tk.BOTH, expand=True, pady=(8, 8))
+
+        self.body = tk.Text(content, wrap=tk.WORD, height=9)
+        self.body.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.body.configure(state="disabled")
+        self.preview_label = ttk.Label(content, anchor="center")
+        self.preview_label.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
+        self._preview_photo = None
 
         actions = ttk.Frame(main)
         actions.pack(fill=tk.X)
@@ -1296,6 +1429,7 @@ class ArucoCalibrationWizard:
         ttk.Button(nav, text="Close", command=self.win.destroy).pack(side=tk.RIGHT)
 
         self._render()
+        self._render_board_preview()
 
     def _render(self) -> None:
         title, text = ARUCO_CALIBRATION_STEPS[self.index]
@@ -1308,6 +1442,16 @@ class ArucoCalibrationWizard:
         self.next_btn.configure(
             text="Next" if self.index < len(ARUCO_CALIBRATION_STEPS) - 1 else "Done"
         )
+
+    def _render_board_preview(self) -> None:
+        try:
+            board = make_charuco_board(5, 7, 0.025, 0.019)
+            img = board.generateImage((220, 320), marginSize=8, borderBits=1)
+            rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            self._preview_photo = ImageTk.PhotoImage(Image.fromarray(rgb))
+            self.preview_label.configure(image=self._preview_photo, text="")
+        except Exception:
+            self.preview_label.configure(text="ChArUco\nboard\npreview")
 
     def _back(self) -> None:
         if self.index > 0:
@@ -1569,36 +1713,65 @@ class CorrespondenceEditor:
         ), wraplength=500, justify="left").pack(padx=8, pady=6)
 
         # Treeview for correspondences
-        cols = ("marker", "node_id", "x", "y", "z", "desc")
+        cols = ("marker", "node_id", "x", "y", "z", "face", "roll", "size", "desc")
         self.tree = ttk.Treeview(self.win, columns=cols, show="headings", height=10)
         self.tree.heading("marker", text="Marker")
         self.tree.heading("node_id", text="Node ID")
         self.tree.heading("x", text="X (m)")
         self.tree.heading("y", text="Y (m)")
         self.tree.heading("z", text="Z (m)")
+        self.tree.heading("face", text="Face")
+        self.tree.heading("roll", text="Roll")
+        self.tree.heading("size", text="Size mm")
         self.tree.heading("desc", text="Description")
         for c in cols:
-            self.tree.column(c, width=75)
+            self.tree.column(c, width=70)
         self.tree.column("desc", width=120)
         self.tree.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
 
-        # Populate
-        for corr in self.app.correspondences:
-            p = corr.unv_position
-            self.tree.insert("", "end", values=(
-                f"aruco{corr.marker_id + 1:02d}", corr.node_id or "",
-                f"{p[0]:.4f}", f"{p[1]:.4f}", f"{p[2]:.4f}", corr.description,
-            ))
+        self.refresh()
 
         btn_row = ttk.Frame(self.win)
         btn_row.pack(fill=tk.X, padx=8, pady=6)
         ttk.Button(btn_row, text="Add", command=self._add).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_row, text="Edit values...", command=self._edit).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_row, text="Remove", command=self._remove).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_row, text="Pick from mesh...", command=self._pick_from_mesh).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_row, text="Drag selected", command=self._drag_selected).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_row, text="Save & Close", command=self._save).pack(side=tk.RIGHT, padx=4)
+
+    def refresh(self) -> None:
+        selected_marker = self._selected_marker_id()
+        self.tree.delete(*self.tree.get_children())
+        for corr in self.app.correspondences:
+            self._insert_corr(corr)
+        if selected_marker is not None:
+            for item in self.tree.get_children():
+                vals = self.tree.item(item, "values")
+                if self._parse_marker_name(vals[0]) == selected_marker:
+                    self.tree.selection_set(item)
+                    self.tree.see(item)
+                    break
+
+    def _insert_corr(self, corr: MarkerCorrespondence) -> None:
+        p = corr.unv_position
+        size_mm = corr.marker_size_mm or float(self.app.marker_size_var.get())
+        self.tree.insert("", "end", values=(
+            f"aruco{corr.marker_id + 1:02d}", corr.node_id or "",
+            f"{p[0]:.4f}", f"{p[1]:.4f}", f"{p[2]:.4f}",
+            normal_label(corr.normal), f"{corr.roll_deg:.1f}", f"{size_mm:.2f}",
+            corr.description,
+        ))
 
     def _add(self) -> None:
         AddCorrespondenceDialog(self.win, self.app, self.tree)
+
+    def _edit(self) -> None:
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showwarning("No Selection", "Select a marker row first.")
+            return
+        EditCorrespondenceDialog(self.win, self.app, self, sel[0])
 
     def _remove(self) -> None:
         sel = self.tree.selection()
@@ -1609,6 +1782,7 @@ class CorrespondenceEditor:
             self.tree.delete(item)
             if idx < len(self.app.correspondences):
                 self.app.correspondences.pop(idx)
+        self.apply_tree_to_app()
 
     def _pick_from_mesh(self) -> None:
         """Let user select a node from the loaded geometry as the UNV position."""
@@ -1617,27 +1791,63 @@ class CorrespondenceEditor:
             return
         NodePickerDialog(self.win, self.app, self.tree)
 
-    def _save(self) -> None:
-        # Rebuild correspondences from treeview
-        self.app.correspondences = []
+    def _drag_selected(self) -> None:
+        marker_id = self._selected_marker_id()
+        if marker_id is None:
+            messagebox.showwarning("No Selection", "Select a marker row first.")
+            return
+        self.apply_tree_to_app()
+        self.app._begin_marker_drag(marker_id, editor=self)
+
+    def _selected_marker_id(self) -> Optional[int]:
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        vals = self.tree.item(sel[0], "values")
+        if not vals:
+            return None
+        return self._parse_marker_name(vals[0])
+
+    @staticmethod
+    def _parse_marker_name(marker_name: str) -> Optional[int]:
+        try:
+            return int(str(marker_name).replace("aruco", "")) - 1
+        except ValueError:
+            return None
+
+    def _collect_correspondences_from_tree(self) -> list[MarkerCorrespondence]:
+        correspondences: list[MarkerCorrespondence] = []
         for item in self.tree.get_children():
             vals = self.tree.item(item, "values")
             # Parse marker name back to ID
             marker_name = vals[0]  # "aruco01"
-            try:
-                marker_id = int(marker_name.replace("aruco", "")) - 1
-            except ValueError:
+            marker_id = self._parse_marker_name(marker_name)
+            if marker_id is None:
                 continue
             node_id = int(vals[1]) if vals[1] else None
             x, y, z = float(vals[2]), float(vals[3]), float(vals[4])
-            desc = vals[5]
-            self.app.correspondences.append(MarkerCorrespondence(
+            face_label = vals[5] if vals[5] in AXIS_NORMALS else "+Z"
+            roll_deg = float(vals[6]) if vals[6] else 0.0
+            size_mm = float(vals[7]) if vals[7] else None
+            desc = vals[8]
+            correspondences.append(MarkerCorrespondence(
                 marker_id=marker_id,
                 unv_position=np.array([x, y, z], dtype=np.float64),
                 node_id=node_id,
                 description=desc,
+                normal=AXIS_NORMALS[face_label],
+                roll_deg=roll_deg,
+                marker_size_mm=size_mm,
             ))
+        return correspondences
+
+    def apply_tree_to_app(self) -> None:
+        self.app.correspondences = self._collect_correspondences_from_tree()
         self.app._save_correspondences()
+
+    def _save(self) -> None:
+        # Rebuild correspondences from treeview
+        self.apply_tree_to_app()
         self.app.log(f"Saved {len(self.app.correspondences)} correspondences.")
         self.win.destroy()
 
@@ -1650,7 +1860,7 @@ class AddCorrespondenceDialog:
         self.tree = tree
         self.win = tk.Toplevel(parent)
         self.win.title("Add Correspondence")
-        self.win.geometry("300x220")
+        self.win.geometry("330x340")
         self.win.transient(parent)
 
         ttk.Label(self.win, text="ArUco marker number (1–50):").grid(row=0, column=0, padx=8, pady=4, sticky="w")
@@ -1670,7 +1880,26 @@ class AddCorrespondenceDialog:
         ttk.Entry(self.win, textvariable=self.y_var, width=10).grid(row=3, column=1, padx=8)
         ttk.Entry(self.win, textvariable=self.z_var, width=10).grid(row=4, column=1, padx=8)
 
-        ttk.Button(self.win, text="Add", command=self._add).grid(row=5, column=0, columnspan=2, pady=10)
+        ttk.Label(self.win, text="Face normal:").grid(row=5, column=0, padx=8, pady=2, sticky="w")
+        self.face_var = tk.StringVar(value="+Z")
+        ttk.Combobox(
+            self.win, textvariable=self.face_var, values=list(AXIS_NORMALS.keys()),
+            state="readonly", width=8,
+        ).grid(row=5, column=1, padx=8, sticky="w")
+
+        ttk.Label(self.win, text="Roll (deg):").grid(row=6, column=0, padx=8, pady=2, sticky="w")
+        self.roll_var = tk.DoubleVar(value=0.0)
+        ttk.Entry(self.win, textvariable=self.roll_var, width=10).grid(row=6, column=1, padx=8)
+
+        ttk.Label(self.win, text="Size (mm):").grid(row=7, column=0, padx=8, pady=2, sticky="w")
+        self.size_var = tk.DoubleVar(value=float(app.marker_size_var.get()))
+        ttk.Entry(self.win, textvariable=self.size_var, width=10).grid(row=7, column=1, padx=8)
+
+        ttk.Label(self.win, text="Description:").grid(row=8, column=0, padx=8, pady=2, sticky="w")
+        self.desc_var = tk.StringVar(value="")
+        ttk.Entry(self.win, textvariable=self.desc_var, width=18).grid(row=8, column=1, padx=8)
+
+        ttk.Button(self.win, text="Add", command=self._add).grid(row=9, column=0, columnspan=2, pady=10)
 
     def _add(self) -> None:
         mid = self.mid_var.get() - 1   # internal 0-indexed
@@ -1678,8 +1907,88 @@ class AddCorrespondenceDialog:
         node_id = int(nid_str) if nid_str else None
         x, y, z = self.x_var.get(), self.y_var.get(), self.z_var.get()
         self.tree.insert("", "end", values=(
-            f"aruco{mid + 1:02d}", node_id or "", f"{x:.4f}", f"{y:.4f}", f"{z:.4f}", "",
+            f"aruco{mid + 1:02d}", node_id or "",
+            f"{x:.4f}", f"{y:.4f}", f"{z:.4f}",
+            self.face_var.get(), f"{float(self.roll_var.get()):.1f}",
+            f"{float(self.size_var.get()):.2f}", self.desc_var.get().strip(),
         ))
+        self.win.destroy()
+
+
+class EditCorrespondenceDialog:
+    """Edit one marker pose row with numeric fields."""
+
+    def __init__(self, parent: tk.Toplevel, app: EyeLabApp, editor: CorrespondenceEditor, item_id):
+        self.app = app
+        self.editor = editor
+        self.item_id = item_id
+        vals = editor.tree.item(item_id, "values")
+
+        self.win = tk.Toplevel(parent)
+        self.win.title("Edit Marker Pose")
+        self.win.geometry("340x360")
+        self.win.transient(parent)
+
+        marker_id = editor._parse_marker_name(vals[0])
+        self.mid_var = tk.IntVar(value=(marker_id + 1) if marker_id is not None else 1)
+        self.node_var = tk.StringVar(value=str(vals[1]) if vals[1] else "")
+        self.x_var = tk.DoubleVar(value=float(vals[2]))
+        self.y_var = tk.DoubleVar(value=float(vals[3]))
+        self.z_var = tk.DoubleVar(value=float(vals[4]))
+        self.face_var = tk.StringVar(value=vals[5] if vals[5] in AXIS_NORMALS else "+Z")
+        self.roll_var = tk.DoubleVar(value=float(vals[6]) if vals[6] else 0.0)
+        self.size_var = tk.DoubleVar(value=float(vals[7]) if vals[7] else float(app.marker_size_var.get()))
+        self.desc_var = tk.StringVar(value=vals[8] if len(vals) > 8 else "")
+
+        fields = ttk.Frame(self.win)
+        fields.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        ttk.Label(fields, text="ArUco #:").grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Spinbox(fields, from_=1, to=50, textvariable=self.mid_var, width=8).grid(row=0, column=1, sticky="w")
+
+        ttk.Label(fields, text="Node ID:").grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Entry(fields, textvariable=self.node_var, width=10).grid(row=1, column=1, sticky="w")
+
+        for i, (label, var) in enumerate((("X (m):", self.x_var), ("Y (m):", self.y_var), ("Z (m):", self.z_var)), start=2):
+            ttk.Label(fields, text=label).grid(row=i, column=0, sticky="w", pady=3)
+            ttk.Entry(fields, textvariable=var, width=12).grid(row=i, column=1, sticky="w")
+
+        ttk.Label(fields, text="Face normal:").grid(row=5, column=0, sticky="w", pady=3)
+        ttk.Combobox(
+            fields, textvariable=self.face_var, values=list(AXIS_NORMALS.keys()),
+            state="readonly", width=8,
+        ).grid(row=5, column=1, sticky="w")
+
+        ttk.Label(fields, text="Roll (deg):").grid(row=6, column=0, sticky="w", pady=3)
+        ttk.Entry(fields, textvariable=self.roll_var, width=12).grid(row=6, column=1, sticky="w")
+
+        ttk.Label(fields, text="Size (mm):").grid(row=7, column=0, sticky="w", pady=3)
+        ttk.Entry(fields, textvariable=self.size_var, width=12).grid(row=7, column=1, sticky="w")
+
+        ttk.Label(fields, text="Description:").grid(row=8, column=0, sticky="w", pady=3)
+        ttk.Entry(fields, textvariable=self.desc_var, width=22).grid(row=8, column=1, sticky="w")
+
+        buttons = ttk.Frame(self.win)
+        buttons.pack(fill=tk.X, padx=10, pady=(0, 10))
+        ttk.Button(buttons, text="Apply", command=self._apply).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(buttons, text="Cancel", command=self.win.destroy).pack(side=tk.RIGHT)
+
+    def _apply(self) -> None:
+        marker_id = int(self.mid_var.get()) - 1
+        node_text = self.node_var.get().strip()
+        node_value = node_text if node_text else ""
+        self.editor.tree.item(self.item_id, values=(
+            f"aruco{marker_id + 1:02d}",
+            node_value,
+            f"{float(self.x_var.get()):.4f}",
+            f"{float(self.y_var.get()):.4f}",
+            f"{float(self.z_var.get()):.4f}",
+            self.face_var.get(),
+            f"{float(self.roll_var.get()):.1f}",
+            f"{float(self.size_var.get()):.2f}",
+            self.desc_var.get().strip(),
+        ))
+        self.editor.apply_tree_to_app()
         self.win.destroy()
 
 
@@ -1691,7 +2000,7 @@ class NodePickerDialog:
         self.tree = tree
         self.win = tk.Toplevel(parent)
         self.win.title("Pick Node from Mesh")
-        self.win.geometry("400x380")
+        self.win.geometry("430x460")
         self.win.transient(parent)
 
         ttk.Label(self.win, text="Select a node, then assign a marker:").pack(padx=8, pady=4)
@@ -1714,6 +2023,21 @@ class NodePickerDialog:
         ttk.Spinbox(row, from_=1, to=50, textvariable=self.mid_var, width=5).pack(side=tk.LEFT, padx=4)
         ttk.Button(row, text="Assign", command=self._assign).pack(side=tk.LEFT, padx=8)
 
+        pose_row = ttk.Frame(self.win)
+        pose_row.pack(fill=tk.X, padx=8, pady=(0, 6))
+        ttk.Label(pose_row, text="Face:").pack(side=tk.LEFT)
+        self.face_var = tk.StringVar(value="+Z")
+        ttk.Combobox(
+            pose_row, textvariable=self.face_var, values=list(AXIS_NORMALS.keys()),
+            state="readonly", width=5,
+        ).pack(side=tk.LEFT, padx=(4, 10))
+        ttk.Label(pose_row, text="Roll:").pack(side=tk.LEFT)
+        self.roll_var = tk.DoubleVar(value=0.0)
+        ttk.Entry(pose_row, textvariable=self.roll_var, width=7).pack(side=tk.LEFT, padx=(4, 10))
+        ttk.Label(pose_row, text="Size mm:").pack(side=tk.LEFT)
+        self.size_var = tk.DoubleVar(value=float(app.marker_size_var.get()))
+        ttk.Entry(pose_row, textvariable=self.size_var, width=7).pack(side=tk.LEFT, padx=4)
+
     def _assign(self) -> None:
         sel = self.node_tree.selection()
         if not sel:
@@ -1724,7 +2048,10 @@ class NodePickerDialog:
         x, y, z = float(vals[1]), float(vals[2]), float(vals[3])
         mid = self.mid_var.get() - 1
         self.tree.insert("", "end", values=(
-            f"aruco{mid + 1:02d}", node_id, f"{x:.4f}", f"{y:.4f}", f"{z:.4f}",
+            f"aruco{mid + 1:02d}", node_id,
+            f"{x:.4f}", f"{y:.4f}", f"{z:.4f}",
+            self.face_var.get(), f"{float(self.roll_var.get()):.1f}",
+            f"{float(self.size_var.get()):.2f}",
             f"Node {node_id}",
         ))
         self.app.log(f"Assigned aruco{mid + 1:02d} → Node {node_id} ({x:.4f}, {y:.4f}, {z:.4f})")
@@ -1754,19 +2081,26 @@ class CalibrationWindow:
         self.all_ids = []
         self.image_size = None
         self.min_frames = 15
+        self._current_corners = None
+        self._current_ids = None
+        self._frame_failures = 0
 
-        self.label = ttk.Label(self.win)
+        self.label = ttk.Label(self.win, text="Waiting for camera frame...", anchor="center")
         self.label.pack(fill=tk.BOTH, expand=True)
 
         status = ttk.Frame(self.win)
         status.pack(fill=tk.X, padx=8, pady=4)
-        self.status_var = tk.StringVar(value=f"Captured: 0/{self.min_frames}  —  SPACE to capture, ESC to finish")
+        self.status_var = tk.StringVar(value=f"Captured: 0/{self.min_frames}  -  SPACE/Capture to save frame, ESC/Finish to compute")
         ttk.Label(status, textvariable=self.status_var).pack(side=tk.LEFT)
+        ttk.Button(status, text="Capture", command=self._capture).pack(side=tk.RIGHT, padx=(4, 0))
+        ttk.Button(status, text="Finish", command=self._finish).pack(side=tk.RIGHT, padx=(4, 0))
+        ttk.Button(status, text="Abort", command=self._abort).pack(side=tk.RIGHT, padx=(4, 0))
 
-        self.win.bind("<space>", self._capture)
-        self.win.bind("<Escape>", self._finish)
+        self.win.bind_all("<space>", self._capture, add="+")
+        self.win.bind_all("<Escape>", self._finish, add="+")
         self._photo = None
         self._running = True
+        self.win.after(100, self.win.focus_force)
         self._loop()
 
     def _loop(self) -> None:
@@ -1774,28 +2108,63 @@ class CalibrationWindow:
             return
         ok, frame = self.cap.read()
         if ok:
+            self._frame_failures = 0
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if self.image_size is None:
                 self.image_size = (gray.shape[1], gray.shape[0])
             corners, ids, _, _ = self.detector.detectBoard(gray)
+            self._current_corners = corners
+            self._current_ids = ids
             if corners is not None and ids is not None and len(ids) >= 4:
                 cv2.aruco.drawDetectedCornersCharuco(frame, corners, ids)
+                detect_text = f"Detected {len(ids)} ChArUco corners - ready to capture"
+                detect_color = (40, 210, 80)
+            else:
+                detect_text = "Show the printed ChArUco board to the camera"
+                detect_color = (0, 170, 255)
+            cv2.putText(
+                frame,
+                detect_text,
+                (12, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                detect_color,
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame,
+                f"Captured {len(self.all_corners)}/{self.min_frames}",
+                (12, 62),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             rgb = cv2.resize(rgb, (700, 520))
             self._photo = ImageTk.PhotoImage(Image.fromarray(rgb))
             self.label.configure(image=self._photo)
             self._gray = gray
+        else:
+            self._frame_failures += 1
+            if self._frame_failures == 1 or self._frame_failures % 30 == 0:
+                self.status_var.set("No camera frame received. Check camera selection and close other camera apps.")
         self.win.after(30, self._loop)
 
     def _capture(self, event=None) -> None:
         if not hasattr(self, "_gray"):
+            self.status_var.set("No camera frame yet. Wait for the live image.")
             return
-        corners, ids, _, _ = self.detector.detectBoard(self._gray)
+        corners, ids = self._current_corners, self._current_ids
         if corners is not None and ids is not None and len(ids) >= 4:
             self.all_corners.append(corners)
             self.all_ids.append(ids)
             n = len(self.all_corners)
-            self.status_var.set(f"Captured: {n}/{self.min_frames}  —  SPACE to capture, ESC to finish")
+            self.status_var.set(f"Captured: {n}/{self.min_frames}  -  move/tilt board, then capture another")
+        else:
+            self.status_var.set("Board corners not detected. Move closer, improve light, or reduce blur.")
 
     def _finish(self, event=None) -> None:
         n = len(self.all_corners)
@@ -1804,17 +2173,26 @@ class CalibrationWindow:
             return
         self._running = False
         self.cap.release()
+        self._unbind_keys()
 
         rms, cam_mat, dist = cv2.aruco.calibrateCameraCharuco(
             self.all_corners, self.all_ids, self.board, self.image_size, None, None,
         )
         self.win.destroy()
-        self.callback(cam_mat, dist, rms)
+        self.callback(cam_mat, dist, rms, self.image_size)
 
     def _abort(self) -> None:
         self._running = False
         self.cap.release()
+        self._unbind_keys()
         self.win.destroy()
+
+    def _unbind_keys(self) -> None:
+        try:
+            self.win.unbind_all("<space>")
+            self.win.unbind_all("<Escape>")
+        except tk.TclError:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════════════

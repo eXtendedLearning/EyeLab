@@ -49,6 +49,7 @@ EyeLab ChArUco calibration wizard
 
 3. Capture live frames
    python calibrate.py --live --camera 0 --output config/camera_params.yaml
+   Hold the ChArUco board in front of the camera, not on the structure.
    Press SPACE only when corners are detected. Capture at least 15 frames:
    center, corners, near, far, and tilted views.
 
@@ -58,7 +59,8 @@ EyeLab ChArUco calibration wizard
 
 5. Use the result in EyeLab
    Load the generated camera_params.yaml in the GUI, then run marker
-   correspondences and AR overlay.
+   correspondences and AR overlay. Structure ArUco markers are configured
+   separately: centre position, face normal, roll, and physical size.
 """.strip()
 
 if Path(sys.argv[0]).name.lower() == "calibrate.py" and "--wizard" in sys.argv[1:]:

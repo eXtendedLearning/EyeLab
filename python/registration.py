@@ -27,15 +27,112 @@ from typing import Optional
 import numpy as np
 
 
+DEFAULT_MARKER_NORMAL = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+AXIS_NORMALS: dict[str, np.ndarray] = {
+    "+X": np.array([1.0, 0.0, 0.0], dtype=np.float64),
+    "-X": np.array([-1.0, 0.0, 0.0], dtype=np.float64),
+    "+Y": np.array([0.0, 1.0, 0.0], dtype=np.float64),
+    "-Y": np.array([0.0, -1.0, 0.0], dtype=np.float64),
+    "+Z": np.array([0.0, 0.0, 1.0], dtype=np.float64),
+    "-Z": np.array([0.0, 0.0, -1.0], dtype=np.float64),
+}
+
+
+def normalize_vector(value: np.ndarray | list[float] | tuple[float, float, float]) -> np.ndarray:
+    """Return a unit 3-vector, falling back to +Z for missing or degenerate input."""
+    arr = np.asarray(value, dtype=np.float64).reshape(3)
+    norm = float(np.linalg.norm(arr))
+    if norm < 1e-12:
+        return DEFAULT_MARKER_NORMAL.copy()
+    return arr / norm
+
+
+def normal_label(normal: np.ndarray | list[float] | tuple[float, float, float]) -> str:
+    """Return the nearest cardinal axis label for a marker normal."""
+    unit = normalize_vector(normal)
+    return max(AXIS_NORMALS, key=lambda label: float(np.dot(unit, AXIS_NORMALS[label])))
+
+
+def rotate_about_axis(vector: np.ndarray, axis: np.ndarray, degrees: float) -> np.ndarray:
+    """Rotate `vector` around unit `axis` using Rodrigues' formula."""
+    axis = normalize_vector(axis)
+    theta = np.deg2rad(float(degrees))
+    c = float(np.cos(theta))
+    s = float(np.sin(theta))
+    return (
+        vector * c
+        + np.cross(axis, vector) * s
+        + axis * float(np.dot(axis, vector)) * (1.0 - c)
+    )
+
+
+def marker_axes_from_normal(
+    normal: np.ndarray | list[float] | tuple[float, float, float],
+    roll_deg: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Return marker (right, top, normal) axes in the UNV frame.
+
+    The normal points out of the printed marker face, toward the expected camera
+    side. Roll rotates the printed marker around that normal using the right-hand
+    rule.
+    """
+    n = normalize_vector(normal)
+    world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    if abs(float(np.dot(world_up, n))) > 0.92:
+        world_up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+
+    y_axis = world_up - n * float(np.dot(world_up, n))
+    y_axis = normalize_vector(y_axis)
+    x_axis = normalize_vector(np.cross(y_axis, n))
+
+    if abs(float(roll_deg)) > 1e-12:
+        x_axis = normalize_vector(rotate_about_axis(x_axis, n, roll_deg))
+        y_axis = normalize_vector(rotate_about_axis(y_axis, n, roll_deg))
+
+    return x_axis, y_axis, n
+
+
+def marker_object_corners(
+    center: np.ndarray | list[float] | tuple[float, float, float],
+    normal: np.ndarray | list[float] | tuple[float, float, float],
+    roll_deg: float,
+    marker_size_m: float,
+) -> np.ndarray:
+    """Return ArUco marker corners in OpenCV order: TL, TR, BR, BL."""
+    c = np.asarray(center, dtype=np.float64).reshape(3)
+    x_axis, y_axis, _ = marker_axes_from_normal(normal, roll_deg)
+    half = float(marker_size_m) / 2.0
+    return np.array(
+        [
+            c - half * x_axis + half * y_axis,
+            c + half * x_axis + half * y_axis,
+            c + half * x_axis - half * y_axis,
+            c - half * x_axis - half * y_axis,
+        ],
+        dtype=np.float32,
+    )
+
+
 # ── Data classes ──────────────────────────────────────────────────────────────
 
 @dataclass
 class MarkerCorrespondence:
-    """Binding between an ArUco marker and a known 3D position in the UNV frame."""
+    """Binding between an ArUco marker and its known pose in the UNV frame."""
     marker_id: int
-    unv_position: np.ndarray       # (3,) in metres — position in UNV / model frame
+    unv_position: np.ndarray       # (3,) in metres, marker centre in UNV / model frame
     node_id: Optional[int] = None  # UNV node ID this marker is placed on (if any)
     description: str = ""
+    normal: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, 1.0], dtype=np.float64))
+    roll_deg: float = 0.0
+    marker_size_mm: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        self.unv_position = np.asarray(self.unv_position, dtype=np.float64)
+        self.normal = normalize_vector(self.normal)
+        self.roll_deg = float(self.roll_deg)
+        if self.marker_size_mm is not None:
+            self.marker_size_mm = float(self.marker_size_mm)
 
 
 @dataclass
@@ -66,7 +163,15 @@ def load_marker_config(json_path: str) -> list[MarkerCorrespondence]:
     Expected format:
     {
       "markers": [
-        {"markerId": 0, "unvPosition": [x, y, z], "nodeId": null, "description": "..."},
+        {
+          "markerId": 0,
+          "unvPosition": [x, y, z],
+          "normal": [nx, ny, nz],
+          "rollDeg": 0.0,
+          "markerSizeMm": 12.0,
+          "nodeId": null,
+          "description": "..."
+        },
         ...
       ]
     }
@@ -81,6 +186,9 @@ def load_marker_config(json_path: str) -> list[MarkerCorrespondence]:
             unv_position=np.array(entry["unvPosition"], dtype=np.float64),
             node_id=entry.get("nodeId"),
             description=entry.get("description", ""),
+            normal=np.array(entry.get("normal", DEFAULT_MARKER_NORMAL), dtype=np.float64),
+            roll_deg=float(entry.get("rollDeg", 0.0)),
+            marker_size_mm=entry.get("markerSizeMm"),
         ))
     return correspondences
 
@@ -92,6 +200,9 @@ def save_marker_config(json_path: str, correspondences: list[MarkerCorrespondenc
             {
                 "markerId": c.marker_id,
                 "unvPosition": c.unv_position.tolist(),
+                "normal": normalize_vector(c.normal).tolist(),
+                "rollDeg": float(c.roll_deg),
+                "markerSizeMm": c.marker_size_mm,
                 "nodeId": c.node_id,
                 "description": c.description,
             }
