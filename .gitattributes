@@ -1,0 +1,22 @@
+# Normalize line endings: store LF in the repo, let git handle checkout.
+# Prevents CRLF/LF churn between Windows checkouts and Linux agents.
+* text=auto
+
+# Explicit text files
+*.py text
+*.md text
+*.json text
+*.yaml text
+*.yml text
+*.txt text
+*.unv text
+*.cs text
+*.ps1 text
+*.bat text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.mp4 binary
+*.aar binary
+*.unitypackage binary

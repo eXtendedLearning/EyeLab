@@ -22,7 +22,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -141,7 +141,7 @@ class UNVParser:
 
         metadata = {
             "sourceFile": self.unv_file.name,
-            "parseDate": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "parseDate": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "nodeCount": len(nodes),
             "lineCount": len(trace_lines),
             "coordinateSystemCount": len(coord_systems),
@@ -537,4 +537,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys

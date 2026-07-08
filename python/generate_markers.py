@@ -70,7 +70,7 @@ def generate_markers(
     total_px = marker_px + 2 * border_px
 
     print(f"Generating {len(marker_ids)} marker(s):")
-    print(f"  Dictionary   : DICT_4X4_50 (4×4 bit, 50 unique IDs)")
+    print("  Dictionary   : DICT_4X4_50 (4×4 bit, 50 unique IDs)")
     print(f"  Marker size  : {marker_size_mm} mm ({marker_px} px at {dpi} DPI)")
     print(f"  Grid spacing : {grid_spacing_mm} mm ({total_px} px per cell)")
     print(f"  Border       : {(grid_spacing_mm - marker_size_mm) / 2:.1f} mm ({border_px} px)")
@@ -120,17 +120,17 @@ def _print_instructions(
     grid_spacing_mm: float,
 ) -> None:
     print("\n=== PRINTING INSTRUCTIONS ===")
-    print(f"1. Print at EXACTLY 100% scale (disable 'fit to page').")
+    print("1. Print at EXACTLY 100% scale (disable 'fit to page').")
     print(f"2. Set printer DPI to {dpi}.")
-    print(f"3. Verify physical size after printing:")
+    print("3. Verify physical size after printing:")
     print(f"     - Black pattern area : {marker_size_mm} mm x {marker_size_mm} mm")
     print(f"     - Full cell (incl. border) : {grid_spacing_mm} mm x {grid_spacing_mm} mm")
-    print(f"4. Use matte paper to reduce glare in lab lighting.")
-    print(f"5. Laminate markers for durability during impact hammer testing.\n")
+    print("4. Use matte paper to reduce glare in lab lighting.")
+    print("5. Laminate markers for durability during impact hammer testing.\n")
     print("=== PLACEMENT ON FLANGIA ===")
-    print(f"Place markers on the L-shaped flangia at 16 mm grid intervals.")
-    print(f"The outer white border aligns markers to the grid automatically.")
-    print(f"Optimal detection distance: 0.3 m – 1.5 m.\n")
+    print("Place markers on the L-shaped flangia at 16 mm grid intervals.")
+    print("The outer white border aligns markers to the grid automatically.")
+    print("Optimal detection distance: 0.3 m – 1.5 m.\n")
 
 
 def main() -> int:

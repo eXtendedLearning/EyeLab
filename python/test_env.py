@@ -66,7 +66,7 @@ def check_opencv() -> bool:
         aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
         det_params = cv2.aruco.DetectorParameters()
         detector = cv2.aruco.ArucoDetector(aruco_dict, det_params)
-        _ok(f"cv2.aruco  (ArucoDetector instantiated, DICT_4X4_50)")
+        _ok("cv2.aruco  (ArucoDetector instantiated, DICT_4X4_50)")
     except AttributeError as e:
         _fail(
             f"cv2.aruco not available: {e}\n"
@@ -85,7 +85,7 @@ def check_opencv() -> bool:
             markerLength=0.019,
             dictionary=aruco_dict,
         )
-        _ok(f"cv2.aruco.CharucoBoard  (5x7, squareLength=25 mm)")
+        _ok("cv2.aruco.CharucoBoard  (5x7, squareLength=25 mm)")
     except Exception as e:
         _fail(f"CharucoBoard constructor failed: {e}")
         return False
@@ -148,7 +148,7 @@ def check_open3d() -> bool:
         _ok(f"open3d {o3d.__version__}  (optional; available)")
         return True
     except Exception:
-        print(f"  -  open3d not installed (optional; needed for T2.3 marker registration)")
+        print("  -  open3d not installed (optional; needed for T2.3 marker registration)")
         return True   # not counted as failure
 
 
@@ -211,7 +211,7 @@ def main() -> int:
     if passed < total:
         failed = [k for k, v in results.items() if not v]
         print(f"\n  Failed checks: {', '.join(failed)}", file=sys.stderr)
-        print(f"  Run: pip install -r requirements.txt", file=sys.stderr)
+        print("  Run: pip install -r requirements.txt", file=sys.stderr)
         return 1
 
     return 0
