@@ -31,6 +31,8 @@ Acceptance criteria:
 """
 
 import argparse
+
+from eyelab_version import VERSION_STRING
 import os
 import sys
 from pathlib import Path
@@ -70,7 +72,6 @@ if Path(sys.argv[0]).name.lower() == "calibrate.py" and "--wizard" in sys.argv[1
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import cv2
 import numpy as np
-import yaml
 
 from camera_utils import open_camera
 
@@ -131,7 +132,7 @@ def generate_board_image(
     print(f"Board image saved to: {output_path}")
     print(f"  Resolution : {page_w}×{page_h} px  ({dpi} DPI)")
     print(f"  Page size  : A4 ({page_width_mm}×{page_height_mm} mm)")
-    print(f"  Print at 100% — do NOT scale to fit.")
+    print("  Print at 100% — do NOT scale to fit.")
 
 
 # ── Frame collection helpers ──────────────────────────────────────────────────
@@ -188,9 +189,9 @@ def collect_from_webcam(
     image_size = None
 
     print(f"\nLive calibration — camera {camera_index}")
-    print(f"  SPACE  — capture current frame")
+    print("  SPACE  — capture current frame")
     print(f"  ESC    — finish (need at least {target_frames} frames)")
-    print(f"  Q      — abort\n")
+    print("  Q      — abort\n")
 
     while True:
         ok, frame = cap.read()
@@ -311,7 +312,7 @@ def load_calibration(yaml_path: str) -> tuple[np.ndarray, np.ndarray]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="ChArUco camera calibration for EyeLab.",
+        description=f"{VERSION_STRING} — ChArUco camera calibration.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -382,14 +383,14 @@ def main() -> int:
         all_corners, all_ids, board, image_size
     )
 
-    print(f"\n=== Calibration Results ===")
+    print("\n=== Calibration Results ===")
     print(f"  RMS reprojection error : {rms:.4f} px")
     print(f"  Camera matrix :\n{camera_matrix}")
     print(f"  Distortion coeffs : {dist_coeffs.ravel()}")
 
     if rms > 1.0:
         print(f"\n  WARNING: RMS error {rms:.3f} px is above the 1.0 px threshold.")
-        print(f"  Consider recollecting calibration images.")
+        print("  Consider recollecting calibration images.")
 
     save_calibration(
         args.output,

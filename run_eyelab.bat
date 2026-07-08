@@ -2,7 +2,7 @@
 setlocal
 
 echo ============================================
-echo   EyeLab - Phase 1 Webcam MVP Launcher
+echo   EyeLab v0.1.0 - Phase 1 Webcam MVP Launcher
 echo ============================================
 echo.
 

@@ -29,11 +29,12 @@ Controls (window must be focused):
 """
 
 import argparse
+
+from eyelab_version import VERSION_STRING
 import json
 import os
 import sys
 import time
-from pathlib import Path
 
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import cv2
@@ -447,7 +448,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="EyeLab Phase 1 webcam MVP pipeline.",
+        description=f"{VERSION_STRING} — Phase 1 webcam MVP pipeline.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
