@@ -1,5 +1,6 @@
 import unittest
 
+import cv2
 import numpy as np
 
 import overlay
@@ -43,6 +44,19 @@ class ProjectNodesTests(unittest.TestCase):
 
     def test_empty_nodes_returns_empty(self):
         self.assertEqual(overlay.project_nodes([], self.K, self.dist), {})
+
+    def test_extreme_projected_points_are_skipped_for_opencv_line_safety(self):
+        K = _camera(fx=3_000_000_000.0, fy=3_000_000_000.0, cx=0.0, cy=0.0)
+        nodes = [{"id": 1, "x": 1.0, "y": 0.0, "z": 1.0}]
+
+        self.assertEqual(overlay.project_nodes(nodes, K, self.dist), {})
+
+    def test_projected_points_can_be_passed_to_opencv_line(self):
+        nodes = [{"id": 1, "x": 0.0, "y": 0.0, "z": 1.0}]
+        point = overlay.project_nodes(nodes, self.K, self.dist)[1]
+        canvas = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        cv2.line(canvas, point, point, (255, 255, 255), 1, cv2.LINE_AA)
 
 
 class WireframeSegmentsTests(unittest.TestCase):

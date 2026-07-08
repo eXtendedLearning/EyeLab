@@ -45,12 +45,20 @@ from camera_utils import list_cameras, open_camera
 from eyelab_logger import SessionLogger
 from generate_markers import generate_markers, MARKER_SIZE_MM, GRID_SPACING_MM
 import overlay
-from pose_estimator import ArucoPipeline, ThreadedCapture, FrameResult
+from pose_estimator import (
+    ArucoDetectorTuning,
+    ArucoPipeline,
+    DETECTOR_TUNING_PRESETS,
+    ThreadedCapture,
+    FrameResult,
+    MIN_STRUCTURE_MARKERS_FOR_BOARD_POSE,
+)
 from registration import (
     AXIS_NORMALS,
     SpatialRegistration,
     MarkerCorrespondence,
     load_marker_config,
+    marker_axes_from_normal,
     marker_object_corners,
     normal_label,
     save_marker_config,
@@ -66,9 +74,33 @@ PREVIEW_W, PREVIEW_H = 640, 480
 CONFIG_DIR = Path(__file__).parent / "config"
 MARKERS_DIR = Path(__file__).parent / "markers"
 LOG_DIR = Path(__file__).parent / ".logs"
+TEST_ASSETS_DIR = Path(__file__).resolve().parent.parent / "test_assets"
 CALIBRATION_FILE = CONFIG_DIR / "camera_params.yaml"
 MARKER_CONFIG_FILE = CONFIG_DIR / "marker_config.json"
 HAMMER_MARKER_CONFIG_FILE = CONFIG_DIR / "hammer_marker_config.json"
+POSITION_UI_UNIT = "cm"
+POSITION_UI_SCALE = 100.0
+
+
+def position_m_to_ui(value_m: float) -> float:
+    """Convert stored metre coordinates to the correspondence editor unit."""
+    return float(value_m) * POSITION_UI_SCALE
+
+
+def position_ui_to_m(value_ui: float) -> float:
+    """Convert correspondence editor coordinates back to stored metres."""
+    return float(value_ui) / POSITION_UI_SCALE
+
+
+def format_position_ui(value_m: float) -> str:
+    return f"{position_m_to_ui(value_m):.2f}"
+
+
+def marker_up_label(normal: np.ndarray | list[float] | tuple[float, float, float] | str, roll_deg: float) -> str:
+    if isinstance(normal, str):
+        normal = AXIS_NORMALS.get(normal, AXIS_NORMALS["+Z"])
+    _, up_axis, _ = marker_axes_from_normal(normal, roll_deg)
+    return normal_label(up_axis)
 
 HELP_TOPICS = {
     "Quick start": (
@@ -371,6 +403,8 @@ class EyeLabApp:
         self.ar_fps_var = tk.StringVar(value="")
         ttk.Label(ar_frame, textvariable=self.ar_fps_var).pack(side=tk.LEFT, padx=8)
 
+        self._build_detection_tuning_controls(left)
+
         # ── Right panel: display area ─────────────────────────────────────
         right = ttk.Frame(pw)
         pw.add(right, weight=1)
@@ -395,6 +429,93 @@ class EyeLabApp:
         log_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
         self.log_text = tk.Text(log_frame, height=6, state="disabled", wrap="word", font=("Consolas", 9))
         self.log_text.pack(fill=tk.X, padx=2, pady=2)
+
+    def _build_detection_tuning_controls(self, parent: ttk.Frame) -> None:
+        tuning = DETECTOR_TUNING_PRESETS["balanced"]
+        tune_frame = ttk.LabelFrame(parent, text="Detection Tuning")
+        tune_frame.pack(fill=tk.X, padx=4, pady=2)
+
+        self.det_clip_var = tk.DoubleVar(value=tuning.clip_limit)
+        self.det_thresh_max_var = tk.IntVar(value=tuning.adaptive_thresh_win_size_max)
+        self.det_thresh_step_var = tk.IntVar(value=tuning.adaptive_thresh_win_size_step)
+        self.det_thresh_const_var = tk.DoubleVar(value=tuning.adaptive_thresh_constant)
+        self.det_min_perim_var = tk.DoubleVar(value=tuning.min_marker_perimeter_rate)
+        self.det_poly_var = tk.DoubleVar(value=tuning.polygonal_approx_accuracy_rate)
+        self.det_error_var = tk.DoubleVar(value=tuning.error_correction_rate)
+        self.det_expected_only_var = tk.BooleanVar(value=True)
+        self.det_tuning_status_var = tk.StringVar(value="Balanced")
+
+        fields = (
+            ("Contrast", self.det_clip_var, 1.0, 5.0, 0.1),
+            ("Thresh max", self.det_thresh_max_var, 3, 73, 2),
+            ("Thresh step", self.det_thresh_step_var, 1, 20, 1),
+            ("Thresh C", self.det_thresh_const_var, 3.0, 15.0, 0.5),
+            ("Min size", self.det_min_perim_var, 0.005, 0.05, 0.001),
+            ("Shape tol", self.det_poly_var, 0.02, 0.10, 0.005),
+            ("Err corr", self.det_error_var, 0.40, 0.90, 0.05),
+        )
+        for row, (label, var, from_, to, inc) in enumerate(fields):
+            ttk.Label(tune_frame, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=1)
+            ttk.Spinbox(
+                tune_frame,
+                textvariable=var,
+                from_=from_,
+                to=to,
+                increment=inc,
+                width=8,
+            ).grid(row=row, column=1, sticky="w", padx=4, pady=1)
+
+        preset_row = ttk.Frame(tune_frame)
+        preset_row.grid(row=len(fields), column=0, columnspan=2, sticky="w", padx=2, pady=(4, 1))
+        ttk.Button(preset_row, text="Strict", command=lambda: self._set_detection_tuning_preset("strict")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_row, text="Balanced", command=lambda: self._set_detection_tuning_preset("balanced")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_row, text="Forgiving", command=lambda: self._set_detection_tuning_preset("forgiving")).pack(side=tk.LEFT, padx=2)
+
+        apply_row = ttk.Frame(tune_frame)
+        apply_row.grid(row=len(fields) + 1, column=0, columnspan=2, sticky="we", padx=2, pady=(2, 4))
+        ttk.Checkbutton(apply_row, text="Expected IDs", variable=self.det_expected_only_var).pack(side=tk.LEFT, padx=2)
+        ttk.Button(apply_row, text="Apply", command=self._apply_detection_tuning).pack(side=tk.LEFT, padx=2)
+        ttk.Label(apply_row, textvariable=self.det_tuning_status_var).pack(side=tk.LEFT, padx=6)
+
+    def _set_detection_tuning_preset(self, preset_name: str) -> None:
+        tuning = DETECTOR_TUNING_PRESETS[preset_name]
+        self.det_clip_var.set(tuning.clip_limit)
+        self.det_thresh_max_var.set(tuning.adaptive_thresh_win_size_max)
+        self.det_thresh_step_var.set(tuning.adaptive_thresh_win_size_step)
+        self.det_thresh_const_var.set(tuning.adaptive_thresh_constant)
+        self.det_min_perim_var.set(tuning.min_marker_perimeter_rate)
+        self.det_poly_var.set(tuning.polygonal_approx_accuracy_rate)
+        self.det_error_var.set(tuning.error_correction_rate)
+        self.det_tuning_status_var.set(preset_name.title())
+        if self.pipeline is not None:
+            self._apply_detection_tuning()
+
+    def _detection_tuning_from_ui(self) -> ArucoDetectorTuning:
+        try:
+            return ArucoDetectorTuning(
+                clip_limit=float(self.det_clip_var.get()),
+                adaptive_thresh_win_size_max=int(self.det_thresh_max_var.get()),
+                adaptive_thresh_win_size_step=int(self.det_thresh_step_var.get()),
+                adaptive_thresh_constant=float(self.det_thresh_const_var.get()),
+                min_marker_perimeter_rate=float(self.det_min_perim_var.get()),
+                polygonal_approx_accuracy_rate=float(self.det_poly_var.get()),
+                error_correction_rate=float(self.det_error_var.get()),
+            )
+        except (ValueError, tk.TclError) as e:
+            raise ValueError(f"Invalid detection tuning value: {e}") from e
+
+    def _apply_detection_tuning(self) -> None:
+        try:
+            tuning = self._detection_tuning_from_ui()
+        except ValueError as e:
+            messagebox.showerror("Detection Tuning", str(e))
+            return
+        if self.pipeline is not None:
+            self.pipeline.apply_detector_tuning(tuning)
+            self.pipeline.apply_allowed_ids(self._expected_detection_ids())
+        self.det_tuning_status_var.set(
+            f"C {tuning.clip_limit:.1f} / T {tuning.adaptive_thresh_win_size_max}"
+        )
 
     def _build_3d_preview(self, parent: ttk.Frame) -> None:
         self.fig = plt.Figure(figsize=(6, 4.5), dpi=100)
@@ -485,6 +606,7 @@ class EyeLabApp:
     def _load_calibration_file(self) -> None:
         path = filedialog.askopenfilename(
             title="Select calibration YAML",
+            initialdir=str(CONFIG_DIR),
             filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
         )
         if not path:
@@ -530,6 +652,7 @@ class EyeLabApp:
     def _load_unv(self) -> None:
         path = filedialog.askopenfilename(
             title="Select UNV file",
+            initialdir=str(TEST_ASSETS_DIR),
             filetypes=[("UNV files", "*.unv *.uff"), ("All files", "*.*")],
         )
         if not path:
@@ -613,14 +736,21 @@ class EyeLabApp:
                 color="crimson", linewidth=1.8, zorder=10,
             )
             self.ax3d.scatter([p[0]], [p[1]], [p[2]], c="crimson", s=35, marker="o", zorder=11)
-            n = corr.normal * max(size_m * 1.8, 0.008)
+            _, up_axis, normal_axis = marker_axes_from_normal(corr.normal, corr.roll_deg)
+            arrow_len = max(size_m * 1.8, 0.008)
+            n = normal_axis * arrow_len
+            up = up_axis * arrow_len
             self.ax3d.quiver(
                 p[0], p[1], p[2], n[0], n[1], n[2],
                 color="purple", arrow_length_ratio=0.35, linewidth=1.3, normalize=False,
             )
+            self.ax3d.quiver(
+                p[0], p[1], p[2], up[0], up[1], up[2],
+                color="green", arrow_length_ratio=0.35, linewidth=1.3, normalize=False,
+            )
             self.ax3d.text(
                 p[0], p[1], p[2],
-                f" aruco{corr.marker_id + 1:02d} {normal_label(corr.normal)}",
+                f" aruco{corr.marker_id + 1:02d} face {normal_label(corr.normal)} up {normal_label(up_axis)}",
                 fontsize=7, color="crimson",
             )
 
@@ -1026,6 +1156,14 @@ class EyeLabApp:
     def _marker_size_by_id_mm(self) -> dict[int, float]:
         return {marker_id: self.hammer_marker_size_mm for marker_id in self.hammer_marker_ids}
 
+    def _expected_detection_ids(self) -> set[int] | None:
+        if hasattr(self, "det_expected_only_var") and not self.det_expected_only_var.get():
+            return None
+        structure_ids = self._structure_marker_ids()
+        if not structure_ids:
+            return None
+        return structure_ids | set(self.hammer_marker_ids)
+
     # ══════════════════════════════════════════════════════════════════════
     #  Correspondence editor (marker ↔ mesh node)
     # ══════════════════════════════════════════════════════════════════════
@@ -1075,12 +1213,19 @@ class EyeLabApp:
 
         cam_idx = self._get_camera_index()
         try:
+            detector_tuning = self._detection_tuning_from_ui()
+        except ValueError as e:
+            messagebox.showerror("Detection Tuning", str(e))
+            return
+        try:
             self.pipeline = ArucoPipeline(
                 camera_index=cam_idx,
                 calibration_path=str(CALIBRATION_FILE),
                 board_correspondences=self.correspondences,
                 marker_size_mm=self.marker_size_var.get(),
                 marker_size_by_id_mm=self._marker_size_by_id_mm(),
+                allowed_ids=self._expected_detection_ids(),
+                detector_tuning=detector_tuning,
             )
             self.pipeline.start()
         except Exception as e:
@@ -1124,6 +1269,7 @@ class EyeLabApp:
             structure_ids = self._structure_marker_ids()
             structure_seen = sum(1 for marker in result.markers if marker.marker_id in structure_ids)
             hammer_seen = sum(1 for marker in result.markers if marker.marker_id in self.hammer_marker_ids)
+            pose_seen = result.pose.marker_count if result.pose is not None else 0
             self.registration.clear_detected_positions()
             for m in result.markers:
                 if m.marker_id in structure_ids and m.rvec is not None and m.tvec is not None:
@@ -1136,12 +1282,18 @@ class EyeLabApp:
                 t = result.pose.tvec.flatten()
                 info = (
                     f"T: [{t[0]*1000:.1f}, {t[1]*1000:.1f}, {t[2]*1000:.1f}] mm"
-                    f"  |  Structure: {structure_seen}  |  Hammer: {hammer_seen}"
+                    f"  |  Pose markers: {pose_seen}  |  Structure: {structure_seen}  |  Hammer: {hammer_seen}"
                 )
                 cv2.putText(vis, info, (10, vis.shape[0] - 15),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
             else:
-                info = f"Structure: {structure_seen}  |  Hammer: {hammer_seen}"
+                if structure_seen:
+                    info = (
+                        f"Need {MIN_STRUCTURE_MARKERS_FOR_BOARD_POSE}+ structure markers for stable pose"
+                        f"  |  Structure: {structure_seen}  |  Hammer: {hammer_seen}"
+                    )
+                else:
+                    info = f"Structure: {structure_seen}  |  Hammer: {hammer_seen}"
                 cv2.putText(vis, info, (10, vis.shape[0] - 15),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
@@ -1157,7 +1309,9 @@ class EyeLabApp:
             self._update_ar_display(vis)
 
             # FPS
-            self.ar_fps_var.set(f"FPS: {result.fps:.1f} | S {structure_seen} | H {hammer_seen}")
+            self.ar_fps_var.set(
+                f"FPS: {result.fps:.1f} | S {structure_seen} | Pose {pose_seen} | H {hammer_seen}"
+            )
 
             # Store last frame for screenshot
             self._last_ar_frame = vis
@@ -1565,7 +1719,7 @@ class MarkerLoaderWindow:
         # Source directory
         ttk.Label(self.win, text="Source folder containing marker images (PNG):").grid(
             row=0, column=0, columnspan=3, padx=8, pady=(10, 2), sticky="w")
-        self.src_var = tk.StringVar(value="")
+        self.src_var = tk.StringVar(value=str(MARKERS_DIR))
         ttk.Entry(self.win, textvariable=self.src_var, width=48).grid(
             row=1, column=0, columnspan=2, padx=8, sticky="we")
         ttk.Button(self.win, text="Browse...", command=self._browse).grid(
@@ -1614,7 +1768,10 @@ class MarkerLoaderWindow:
             row=7, column=0, columnspan=3, pady=10)
 
     def _browse(self) -> None:
-        d = filedialog.askdirectory(title="Select marker source directory")
+        d = filedialog.askdirectory(
+            title="Select marker source directory",
+            initialdir=str(MARKERS_DIR),
+        )
         if d:
             self.src_var.set(d)
 
@@ -1703,7 +1860,7 @@ class CorrespondenceEditor:
         self.app = app
         self.win = tk.Toplevel(parent)
         self.win.title("Marker ↔ Mesh Node Correspondences")
-        self.win.geometry("520x420")
+        self.win.geometry("920x480")
         self.win.transient(parent)
 
         ttk.Label(self.win, text=(
@@ -1713,19 +1870,20 @@ class CorrespondenceEditor:
         ), wraplength=500, justify="left").pack(padx=8, pady=6)
 
         # Treeview for correspondences
-        cols = ("marker", "node_id", "x", "y", "z", "face", "roll", "size", "desc")
+        cols = ("marker", "node_id", "x", "y", "z", "face", "up", "roll", "size", "desc")
         self.tree = ttk.Treeview(self.win, columns=cols, show="headings", height=10)
         self.tree.heading("marker", text="Marker")
         self.tree.heading("node_id", text="Node ID")
-        self.tree.heading("x", text="X (m)")
-        self.tree.heading("y", text="Y (m)")
-        self.tree.heading("z", text="Z (m)")
+        self.tree.heading("x", text=f"X ({POSITION_UI_UNIT})")
+        self.tree.heading("y", text=f"Y ({POSITION_UI_UNIT})")
+        self.tree.heading("z", text=f"Z ({POSITION_UI_UNIT})")
         self.tree.heading("face", text="Face")
-        self.tree.heading("roll", text="Roll")
+        self.tree.heading("up", text="Up")
+        self.tree.heading("roll", text="Roll deg")
         self.tree.heading("size", text="Size mm")
         self.tree.heading("desc", text="Description")
         for c in cols:
-            self.tree.column(c, width=70)
+            self.tree.column(c, width=65)
         self.tree.column("desc", width=120)
         self.tree.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
 
@@ -1738,6 +1896,8 @@ class CorrespondenceEditor:
         ttk.Button(btn_row, text="Remove", command=self._remove).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_row, text="Pick from mesh...", command=self._pick_from_mesh).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_row, text="Drag selected", command=self._drag_selected).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_row, text="Load file...", command=self._load_from_file).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_row, text="Save copy...", command=self._save_to_file).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_row, text="Save & Close", command=self._save).pack(side=tk.RIGHT, padx=4)
 
     def refresh(self) -> None:
@@ -1758,8 +1918,9 @@ class CorrespondenceEditor:
         size_mm = corr.marker_size_mm or float(self.app.marker_size_var.get())
         self.tree.insert("", "end", values=(
             f"aruco{corr.marker_id + 1:02d}", corr.node_id or "",
-            f"{p[0]:.4f}", f"{p[1]:.4f}", f"{p[2]:.4f}",
-            normal_label(corr.normal), f"{corr.roll_deg:.1f}", f"{size_mm:.2f}",
+            format_position_ui(p[0]), format_position_ui(p[1]), format_position_ui(p[2]),
+            normal_label(corr.normal), marker_up_label(corr.normal, corr.roll_deg),
+            f"{corr.roll_deg:.1f}", f"{size_mm:.2f}",
             corr.description,
         ))
 
@@ -1825,11 +1986,15 @@ class CorrespondenceEditor:
             if marker_id is None:
                 continue
             node_id = int(vals[1]) if vals[1] else None
-            x, y, z = float(vals[2]), float(vals[3]), float(vals[4])
+            x, y, z = (
+                position_ui_to_m(float(vals[2])),
+                position_ui_to_m(float(vals[3])),
+                position_ui_to_m(float(vals[4])),
+            )
             face_label = vals[5] if vals[5] in AXIS_NORMALS else "+Z"
-            roll_deg = float(vals[6]) if vals[6] else 0.0
-            size_mm = float(vals[7]) if vals[7] else None
-            desc = vals[8]
+            roll_deg = float(vals[7]) if vals[7] else 0.0
+            size_mm = float(vals[8]) if vals[8] else None
+            desc = vals[9]
             correspondences.append(MarkerCorrespondence(
                 marker_id=marker_id,
                 unv_position=np.array([x, y, z], dtype=np.float64),
@@ -1844,6 +2009,39 @@ class CorrespondenceEditor:
     def apply_tree_to_app(self) -> None:
         self.app.correspondences = self._collect_correspondences_from_tree()
         self.app._save_correspondences()
+
+    def _load_from_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Load marker correspondences",
+            initialdir=str(CONFIG_DIR),
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            self.app.correspondences = load_marker_config(path)
+            self.app._save_correspondences()
+            self.refresh()
+            self.app.log(f"Loaded {len(self.app.correspondences)} correspondences from {path}")
+        except Exception as e:
+            messagebox.showerror("Load Correspondences", str(e))
+
+    def _save_to_file(self) -> None:
+        self.apply_tree_to_app()
+        path = filedialog.asksaveasfilename(
+            title="Save marker correspondences",
+            initialdir=str(CONFIG_DIR),
+            initialfile="marker_config.json",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            save_marker_config(path, self.app.correspondences)
+            self.app.log(f"Saved {len(self.app.correspondences)} correspondences to {path}")
+        except Exception as e:
+            messagebox.showerror("Save Correspondences", str(e))
 
     def _save(self) -> None:
         # Rebuild correspondences from treeview
@@ -1871,7 +2069,7 @@ class AddCorrespondenceDialog:
         self.nid_var = tk.StringVar(value="")
         ttk.Entry(self.win, textvariable=self.nid_var, width=8).grid(row=1, column=1, padx=8)
 
-        for i, axis in enumerate(("X (m):", "Y (m):", "Z (m):")):
+        for i, axis in enumerate((f"X ({POSITION_UI_UNIT}):", f"Y ({POSITION_UI_UNIT}):", f"Z ({POSITION_UI_UNIT}):")):
             ttk.Label(self.win, text=axis).grid(row=2 + i, column=0, padx=8, pady=2, sticky="w")
         self.x_var = tk.DoubleVar(value=0.0)
         self.y_var = tk.DoubleVar(value=0.0)
@@ -1909,7 +2107,8 @@ class AddCorrespondenceDialog:
         self.tree.insert("", "end", values=(
             f"aruco{mid + 1:02d}", node_id or "",
             f"{x:.4f}", f"{y:.4f}", f"{z:.4f}",
-            self.face_var.get(), f"{float(self.roll_var.get()):.1f}",
+            self.face_var.get(), marker_up_label(self.face_var.get(), float(self.roll_var.get())),
+            f"{float(self.roll_var.get()):.1f}",
             f"{float(self.size_var.get()):.2f}", self.desc_var.get().strip(),
         ))
         self.win.destroy()
@@ -1936,9 +2135,9 @@ class EditCorrespondenceDialog:
         self.y_var = tk.DoubleVar(value=float(vals[3]))
         self.z_var = tk.DoubleVar(value=float(vals[4]))
         self.face_var = tk.StringVar(value=vals[5] if vals[5] in AXIS_NORMALS else "+Z")
-        self.roll_var = tk.DoubleVar(value=float(vals[6]) if vals[6] else 0.0)
-        self.size_var = tk.DoubleVar(value=float(vals[7]) if vals[7] else float(app.marker_size_var.get()))
-        self.desc_var = tk.StringVar(value=vals[8] if len(vals) > 8 else "")
+        self.roll_var = tk.DoubleVar(value=float(vals[7]) if vals[7] else 0.0)
+        self.size_var = tk.DoubleVar(value=float(vals[8]) if vals[8] else float(app.marker_size_var.get()))
+        self.desc_var = tk.StringVar(value=vals[9] if len(vals) > 9 else "")
 
         fields = ttk.Frame(self.win)
         fields.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -1949,7 +2148,11 @@ class EditCorrespondenceDialog:
         ttk.Label(fields, text="Node ID:").grid(row=1, column=0, sticky="w", pady=3)
         ttk.Entry(fields, textvariable=self.node_var, width=10).grid(row=1, column=1, sticky="w")
 
-        for i, (label, var) in enumerate((("X (m):", self.x_var), ("Y (m):", self.y_var), ("Z (m):", self.z_var)), start=2):
+        for i, (label, var) in enumerate((
+            (f"X ({POSITION_UI_UNIT}):", self.x_var),
+            (f"Y ({POSITION_UI_UNIT}):", self.y_var),
+            (f"Z ({POSITION_UI_UNIT}):", self.z_var),
+        ), start=2):
             ttk.Label(fields, text=label).grid(row=i, column=0, sticky="w", pady=3)
             ttk.Entry(fields, textvariable=var, width=12).grid(row=i, column=1, sticky="w")
 
@@ -1984,6 +2187,7 @@ class EditCorrespondenceDialog:
             f"{float(self.y_var.get()):.4f}",
             f"{float(self.z_var.get()):.4f}",
             self.face_var.get(),
+            marker_up_label(self.face_var.get(), float(self.roll_var.get())),
             f"{float(self.roll_var.get()):.1f}",
             f"{float(self.size_var.get()):.2f}",
             self.desc_var.get().strip(),
@@ -2008,13 +2212,21 @@ class NodePickerDialog:
         # Node list
         cols = ("id", "x", "y", "z")
         self.node_tree = ttk.Treeview(self.win, columns=cols, show="headings", height=12)
+        self.node_tree.heading("id", text="ID")
+        self.node_tree.heading("x", text=f"X ({POSITION_UI_UNIT})")
+        self.node_tree.heading("y", text=f"Y ({POSITION_UI_UNIT})")
+        self.node_tree.heading("z", text=f"Z ({POSITION_UI_UNIT})")
         for c in cols:
-            self.node_tree.heading(c, text=c.upper())
             self.node_tree.column(c, width=80)
         self.node_tree.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
 
         for n in app.geometry_data.get("nodes", []):
-            self.node_tree.insert("", "end", values=(n["id"], f"{n['x']:.4f}", f"{n['y']:.4f}", f"{n['z']:.4f}"))
+            self.node_tree.insert("", "end", values=(
+                n["id"],
+                format_position_ui(n["x"]),
+                format_position_ui(n["y"]),
+                format_position_ui(n["z"]),
+            ))
 
         row = ttk.Frame(self.win)
         row.pack(fill=tk.X, padx=8, pady=6)
@@ -2050,11 +2262,15 @@ class NodePickerDialog:
         self.tree.insert("", "end", values=(
             f"aruco{mid + 1:02d}", node_id,
             f"{x:.4f}", f"{y:.4f}", f"{z:.4f}",
-            self.face_var.get(), f"{float(self.roll_var.get()):.1f}",
+            self.face_var.get(), marker_up_label(self.face_var.get(), float(self.roll_var.get())),
+            f"{float(self.roll_var.get()):.1f}",
             f"{float(self.size_var.get()):.2f}",
             f"Node {node_id}",
         ))
-        self.app.log(f"Assigned aruco{mid + 1:02d} → Node {node_id} ({x:.4f}, {y:.4f}, {z:.4f})")
+        self.app.log(
+            f"Assigned aruco{mid + 1:02d} to Node {node_id} "
+            f"({x:.2f}, {y:.2f}, {z:.2f} {POSITION_UI_UNIT})"
+        )
         self.win.destroy()
 
 
@@ -2175,7 +2391,7 @@ class CalibrationWindow:
         self.cap.release()
         self._unbind_keys()
 
-        rms, cam_mat, dist = cv2.aruco.calibrateCameraCharuco(
+        rms, cam_mat, dist, _, _ = cv2.aruco.calibrateCameraCharuco(
             self.all_corners, self.all_ids, self.board, self.image_size, None, None,
         )
         self.win.destroy()

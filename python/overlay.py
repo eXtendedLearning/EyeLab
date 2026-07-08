@@ -24,6 +24,19 @@ Pixel = tuple[int, int]
 Segment = tuple[Pixel, Pixel]
 
 _ZERO_VEC = np.zeros((3, 1), dtype=np.float32)
+_INT32_MIN = int(np.iinfo(np.int32).min)
+_INT32_MAX = int(np.iinfo(np.int32).max)
+
+
+def _drawable_pixel(x: float, y: float) -> Pixel | None:
+    """Return a plain Python-int pixel point if OpenCV can safely draw it."""
+    if not (np.isfinite(x) and np.isfinite(y)):
+        return None
+    px = int(round(float(x)))
+    py = int(round(float(y)))
+    if not (_INT32_MIN <= px <= _INT32_MAX and _INT32_MIN <= py <= _INT32_MAX):
+        return None
+    return px, py
 
 
 def project_nodes(
@@ -76,10 +89,12 @@ def project_nodes(
         dist_coeffs,
     )
     image_pts = image_pts.reshape(-1, 2)
-    return {
-        nid: (int(round(image_pts[i, 0])), int(round(image_pts[i, 1])))
-        for i, nid in enumerate(ids)
-    }
+    projected: dict[int, Pixel] = {}
+    for i, nid in enumerate(ids):
+        point = _drawable_pixel(image_pts[i, 0], image_pts[i, 1])
+        if point is not None:
+            projected[nid] = point
+    return projected
 
 
 def wireframe_segments(

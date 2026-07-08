@@ -1,0 +1,123 @@
+{
+  "markers": [
+    {
+      "markerId": 0,
+      "unvPosition": [
+        0.01,
+        0.0,
+        0.01
+      ],
+      "normal": [
+        0.0,
+        -1.0,
+        0.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 20.0,
+      "nodeId": 1,
+      "description": ""
+    },
+    {
+      "markerId": 1,
+      "unvPosition": [
+        0.15,
+        0.01,
+        0.05
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 20.0,
+      "nodeId": 20,
+      "description": ""
+    },
+    {
+      "markerId": 2,
+      "unvPosition": [
+        0.15,
+        0.1,
+        0.01
+      ],
+      "normal": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 20.0,
+      "nodeId": 30,
+      "description": ""
+    },
+    {
+      "markerId": 3,
+      "unvPosition": [
+        0.0,
+        0.09,
+        0.04
+      ],
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 20.0,
+      "nodeId": 26,
+      "description": ""
+    },
+    {
+      "markerId": 4,
+      "unvPosition": [
+        0.01,
+        0.05,
+        0.05
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rollDeg": -90.0,
+      "markerSizeMm": 20.0,
+      "nodeId": 21,
+      "description": ""
+    },
+    {
+      "markerId": 5,
+      "unvPosition": [
+        0.01,
+        0.01,
+        0.05
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rollDeg": -90.0,
+      "markerSizeMm": 20.0,
+      "nodeId": 16,
+      "description": ""
+    },
+    {
+      "markerId": 6,
+      "unvPosition": [
+        0.15,
+        0.05,
+        0.04
+      ],
+      "normal": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 20.0,
+      "nodeId": 25,
+      "description": ""
+    }
+  ]
+}

@@ -69,6 +69,65 @@ class FrameResult:
 
 ARUCO_DICT_ID = cv2.aruco.DICT_4X4_50
 DEFAULT_MARKER_SIZE_M = 0.012   # 12 mm
+MIN_STRUCTURE_MARKERS_FOR_BOARD_POSE = 3
+
+
+@dataclass(frozen=True)
+class ArucoDetectorTuning:
+    """Small set of ArUco knobs exposed to the GUI for live tuning."""
+    clip_limit: float = 2.5
+    adaptive_thresh_win_size_max: int = 37
+    adaptive_thresh_win_size_step: int = 6
+    adaptive_thresh_constant: float = 8.0
+    min_marker_perimeter_rate: float = 0.022
+    polygonal_approx_accuracy_rate: float = 0.055
+    error_correction_rate: float = 0.70
+    corner_refinement_win_size: int = 5
+    min_corner_distance_rate: float = 0.04
+    min_marker_distance_rate: float = 0.04
+    min_distance_to_border: int = 3
+    perspective_remove_pixel_per_cell: int = 6
+    perspective_remove_ignored_margin_per_cell: float = 0.16
+    min_otsu_std_dev: float = 4.0
+
+
+DETECTOR_TUNING_PRESETS: dict[str, ArucoDetectorTuning] = {
+    "strict": ArucoDetectorTuning(
+        clip_limit=2.0,
+        adaptive_thresh_win_size_max=23,
+        adaptive_thresh_win_size_step=10,
+        adaptive_thresh_constant=10.0,
+        min_marker_perimeter_rate=0.03,
+        polygonal_approx_accuracy_rate=0.03,
+        error_correction_rate=0.60,
+        corner_refinement_win_size=5,
+        min_corner_distance_rate=0.05,
+        min_marker_distance_rate=0.05,
+        min_distance_to_border=3,
+        perspective_remove_pixel_per_cell=4,
+        perspective_remove_ignored_margin_per_cell=0.13,
+        min_otsu_std_dev=5.0,
+    ),
+    "balanced": ArucoDetectorTuning(),
+    "forgiving": ArucoDetectorTuning(
+        clip_limit=3.0,
+        adaptive_thresh_win_size_max=53,
+        adaptive_thresh_win_size_step=4,
+        adaptive_thresh_constant=7.0,
+        min_marker_perimeter_rate=0.015,
+        polygonal_approx_accuracy_rate=0.08,
+        error_correction_rate=0.80,
+        corner_refinement_win_size=7,
+        min_corner_distance_rate=0.03,
+        min_marker_distance_rate=0.03,
+        min_distance_to_border=2,
+        perspective_remove_pixel_per_cell=8,
+        perspective_remove_ignored_margin_per_cell=0.20,
+        min_otsu_std_dev=3.0,
+    ),
+}
+DEFAULT_ARUCO_DETECTOR_TUNING = DETECTOR_TUNING_PRESETS["balanced"]
+ARUCO_PREPROCESS_CLIP_LIMIT = DEFAULT_ARUCO_DETECTOR_TUNING.clip_limit
 
 
 # ── Threaded capture ──────────────────────────────────────────────────────────
@@ -124,10 +183,57 @@ class ThreadedCapture:
 
 # ── CLAHE pre-processing ─────────────────────────────────────────────────────
 
-def preprocess_frame(gray: np.ndarray, clip_limit: float = 2.0) -> np.ndarray:
+def preprocess_frame(gray: np.ndarray, clip_limit: float = ARUCO_PREPROCESS_CLIP_LIMIT) -> np.ndarray:
     """Apply CLAHE contrast enhancement for robust detection under varying lighting."""
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
     return clahe.apply(gray)
+
+
+def _odd_int_at_least(value: int, minimum: int) -> int:
+    value = max(int(value), minimum)
+    return value if value % 2 == 1 else value + 1
+
+
+def make_detector_parameters(tuning: ArucoDetectorTuning | None = None) -> cv2.aruco.DetectorParameters:
+    """Build OpenCV detector parameters from the current ArUco tuning."""
+    tuning = tuning or DEFAULT_ARUCO_DETECTOR_TUNING
+    params = cv2.aruco.DetectorParameters()
+
+    # Adaptive thresholding is the main recall/precision dial for uneven light.
+    params.adaptiveThreshWinSizeMin = 3
+    params.adaptiveThreshWinSizeMax = _odd_int_at_least(tuning.adaptive_thresh_win_size_max, 3)
+    params.adaptiveThreshWinSizeStep = max(1, int(tuning.adaptive_thresh_win_size_step))
+    params.adaptiveThreshConstant = float(tuning.adaptive_thresh_constant)
+
+    params.minMarkerPerimeterRate = max(0.001, float(tuning.min_marker_perimeter_rate))
+    params.maxMarkerPerimeterRate = 4.0
+    params.polygonalApproxAccuracyRate = max(0.001, float(tuning.polygonal_approx_accuracy_rate))
+    params.minCornerDistanceRate = max(0.001, float(tuning.min_corner_distance_rate))
+    params.minMarkerDistanceRate = max(0.001, float(tuning.min_marker_distance_rate))
+    params.minDistanceToBorder = max(0, int(tuning.min_distance_to_border))
+
+    params.errorCorrectionRate = min(1.0, max(0.0, float(tuning.error_correction_rate)))
+    params.markerBorderBits = 1
+    params.perspectiveRemovePixelPerCell = max(1, int(tuning.perspective_remove_pixel_per_cell))
+    params.perspectiveRemoveIgnoredMarginPerCell = min(
+        0.49,
+        max(0.0, float(tuning.perspective_remove_ignored_margin_per_cell)),
+    )
+    params.minOtsuStdDev = max(0.0, float(tuning.min_otsu_std_dev))
+
+    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    params.cornerRefinementWinSize = max(1, int(tuning.corner_refinement_win_size))
+    params.cornerRefinementMaxIterations = 50
+    params.cornerRefinementMinAccuracy = 0.02
+
+    return params
+
+
+def make_forgiving_detector_parameters(
+    tuning: ArucoDetectorTuning | None = None,
+) -> cv2.aruco.DetectorParameters:
+    """Compatibility wrapper for older tests/imports."""
+    return make_detector_parameters(tuning)
 
 
 # ── Kalman filter ─────────────────────────────────────────────────────────────
@@ -204,7 +310,7 @@ class OpticalFlowTracker:
 
     def should_detect(self) -> bool:
         """Return True if a full ArUco detection should run this frame."""
-        return self._frame_counter % self.detect_interval == 0
+        return self._prev_corners is None or self._frame_counter % self.detect_interval == 0
 
     def store_detection(
         self,
@@ -370,6 +476,19 @@ def board_from_correspondences(
     return cv2.aruco.Board(obj_points, dictionary, np.array(ids, dtype=np.int32))
 
 
+def _ids_from_board(board: Optional[cv2.aruco.Board]) -> Optional[set[int]]:
+    """Best-effort extraction of marker IDs from an OpenCV Board."""
+    if board is None or not hasattr(board, "getIds"):
+        return None
+    try:
+        ids = board.getIds()
+    except Exception:
+        return None
+    if ids is None:
+        return None
+    return {int(marker_id) for marker_id in np.asarray(ids).flatten().tolist()}
+
+
 # ── L-structure detector ──────────────────────────────────────────────────────
 
 class LStructureDetector:
@@ -386,21 +505,38 @@ class LStructureDetector:
         marker_size_m: float = DEFAULT_MARKER_SIZE_M,
         allowed_ids: Optional[set[int]] = None,
         marker_size_by_id_m: Optional[dict[int, float]] = None,
+        board_marker_ids: Optional[set[int]] = None,
+        min_board_markers: int = MIN_STRUCTURE_MARKERS_FOR_BOARD_POSE,
+        detector_tuning: ArucoDetectorTuning | None = None,
     ):
         self.board = board
         self.marker_size_m = marker_size_m
         self.allowed_ids = allowed_ids
+        self.board_marker_ids = (
+            {int(marker_id) for marker_id in board_marker_ids}
+            if board_marker_ids is not None
+            else _ids_from_board(board)
+        )
+        self.min_board_markers = max(1, int(min_board_markers))
         self.marker_size_by_id_m = {
             int(marker_id): float(size_m)
             for marker_id, size_m in (marker_size_by_id_m or {}).items()
         }
+        self.detector_tuning = detector_tuning or DEFAULT_ARUCO_DETECTOR_TUNING
 
         self.dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
-        self.det_params = cv2.aruco.DetectorParameters()
-        # Tuned for lab conditions
-        self.det_params.adaptiveThreshConstant = 10
-        self.det_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        self._rebuild_detector()
+
+    def _rebuild_detector(self) -> None:
+        self.det_params = make_detector_parameters(self.detector_tuning)
         self.detector = cv2.aruco.ArucoDetector(self.dictionary, self.det_params)
+
+    def set_detector_tuning(self, tuning: ArucoDetectorTuning) -> None:
+        self.detector_tuning = tuning
+        self._rebuild_detector()
+
+    def set_allowed_ids(self, allowed_ids: Optional[set[int]]) -> None:
+        self.allowed_ids = allowed_ids
 
     def detect(
         self, gray: np.ndarray,
@@ -452,11 +588,27 @@ class LStructureDetector:
 
         # Board mode
         if self.board is not None:
+            board_corners = corners
+            board_ids = ids
+            board_ids_flat = ids_flat
+            if self.board_marker_ids is not None:
+                keep = [
+                    i for i, marker_id in enumerate(ids_flat)
+                    if int(marker_id) in self.board_marker_ids
+                ]
+                if len(keep) < self.min_board_markers:
+                    return None
+                board_corners = [corners[i] for i in keep]
+                board_ids = ids[keep]
+                board_ids_flat = [ids_flat[i] for i in keep]
+            elif len(ids_flat) < self.min_board_markers:
+                return None
+
             try:
-                obj_pts, img_pts = self.board.matchImagePoints(corners, ids)
+                obj_pts, img_pts = self.board.matchImagePoints(board_corners, board_ids)
             except cv2.error:
                 obj_pts, img_pts = None, None
-            if obj_pts is not None and len(obj_pts) >= 4:
+            if obj_pts is not None and len(obj_pts) >= self.min_board_markers * 4:
                 ok, rvec, tvec = cv2.solvePnP(
                     obj_pts, img_pts, camera_matrix, dist_coeffs,
                     flags=cv2.SOLVEPNP_ITERATIVE,
@@ -468,6 +620,7 @@ class LStructureDetector:
                     )
             if rvec is None:
                 return None
+            ids_flat = board_ids_flat
 
         # Fallback: single marker
         if rvec is None and self.board is None and len(corners) > 0:
@@ -511,6 +664,7 @@ class ArucoPipeline:
         marker_size_mm: float = 12.0,
         allowed_ids: Optional[set[int]] = None,
         marker_size_by_id_mm: Optional[dict[int, float]] = None,
+        detector_tuning: ArucoDetectorTuning | None = None,
         use_optical_flow: bool = True,
         optical_flow_interval: int = 3,
         udp_host: Optional[str] = None,
@@ -523,6 +677,7 @@ class ArucoPipeline:
             for marker_id, size_mm in (marker_size_by_id_mm or {}).items()
         }
         self.use_optical_flow = use_optical_flow
+        self.detector_tuning = detector_tuning or DEFAULT_ARUCO_DETECTOR_TUNING
 
         # Camera calibration
         self.camera_matrix: Optional[np.ndarray] = None
@@ -541,12 +696,21 @@ class ArucoPipeline:
                 marker_size_by_id_m=marker_size_by_id_m,
             )
         self.uses_structure_board = board is not None
+        board_marker_ids = (
+            {int(corr.marker_id) for corr in board_correspondences}
+            if board_correspondences
+            else None
+        )
+        if self.uses_structure_board:
+            self.use_optical_flow = False
 
         self.l_detector = LStructureDetector(
             board=board,
             marker_size_m=self.marker_size_m,
             allowed_ids=allowed_ids,
             marker_size_by_id_m=marker_size_by_id_m,
+            board_marker_ids=board_marker_ids,
+            detector_tuning=self.detector_tuning,
         )
 
         self.kalman = PoseKalmanFilter()
@@ -578,6 +742,13 @@ class ArucoPipeline:
         if self.udp:
             self.udp.close()
 
+    def apply_detector_tuning(self, tuning: ArucoDetectorTuning) -> None:
+        self.detector_tuning = tuning
+        self.l_detector.set_detector_tuning(tuning)
+
+    def apply_allowed_ids(self, allowed_ids: Optional[set[int]]) -> None:
+        self.l_detector.set_allowed_ids(allowed_ids)
+
     @property
     def is_running(self) -> bool:
         return self._capture is not None and self._capture.is_opened
@@ -600,7 +771,7 @@ class ArucoPipeline:
             self._fps_t0 = now
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        enhanced = preprocess_frame(gray)
+        enhanced = preprocess_frame(gray, clip_limit=self.detector_tuning.clip_limit)
 
         corners: list[np.ndarray] = []
         ids: Optional[np.ndarray] = None
