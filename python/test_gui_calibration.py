@@ -3,7 +3,8 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from eyelab_gui import CalibrationWindow, marker_up_label, position_ui_to_m, position_m_to_ui
+from gui_calibration import CalibrationWindow
+from gui_common import marker_up_label, position_ui_to_m, position_m_to_ui
 
 
 class _FakeWindow:
@@ -45,7 +46,7 @@ class CalibrationWindowFinishTests(unittest.TestCase):
         window._running = True
 
         with patch(
-            "eyelab_gui.cv2.aruco.calibrateCameraCharuco",
+            "gui_calibration.cv2.aruco.calibrateCameraCharuco",
             return_value=(0.42, camera_matrix, dist_coeffs, [], []),
         ) as calibrate:
             window._finish()

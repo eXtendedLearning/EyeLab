@@ -115,6 +115,27 @@ class DetectorParameterTests(unittest.TestCase):
         self.assertEqual(detector.det_params.adaptiveThreshWinSizeMax, 23)
         self.assertAlmostEqual(detector.det_params.errorCorrectionRate, 0.6)
 
+    def test_detector_records_raw_allowed_and_rejected_counts(self):
+        class FakeArucoDetector:
+            def detectMarkers(self, _gray):
+                corners = [
+                    np.zeros((1, 4, 2), dtype=np.float32),
+                    np.ones((1, 4, 2), dtype=np.float32),
+                ]
+                ids = np.array([[1], [7]], dtype=np.int32)
+                rejected = [np.zeros((1, 4, 2), dtype=np.float32) for _ in range(3)]
+                return corners, ids, rejected
+
+        detector = LStructureDetector(allowed_ids={7})
+        detector.detector = FakeArucoDetector()
+
+        _corners, ids = detector.detect(np.zeros((20, 20), dtype=np.uint8))
+
+        np.testing.assert_array_equal(ids, np.array([[7]], dtype=np.int32))
+        self.assertEqual(detector.last_raw_marker_count, 2)
+        self.assertEqual(detector.last_allowed_marker_count, 1)
+        self.assertEqual(detector.last_rejected_count, 3)
+
 
 class ArucoPipelineModeTests(unittest.TestCase):
     def test_structure_board_mode_uses_full_detection_every_frame(self):

@@ -15,7 +15,6 @@ Designed to be imported by the GUI (eyelab_gui.py) or used standalone for benchm
 
 from __future__ import annotations
 
-import json
 import os
 import socket
 import struct
@@ -63,6 +62,11 @@ class FrameResult:
     pose: Optional[PoseResult] = None
     fps: float = 0.0
     timestamp: float = 0.0
+    raw_marker_count: int = 0
+    allowed_marker_count: int = 0
+    rejected_count: int = 0
+    mean_marker_area_px: float = 0.0
+    used_optical_flow: bool = False
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -489,6 +493,17 @@ def _ids_from_board(board: Optional[cv2.aruco.Board]) -> Optional[set[int]]:
     return {int(marker_id) for marker_id in np.asarray(ids).flatten().tolist()}
 
 
+def _mean_marker_area_px(corners: list[np.ndarray]) -> float:
+    """Average visible marker area in image pixels, useful for detection health."""
+    areas: list[float] = []
+    for corner in corners:
+        pts = np.asarray(corner, dtype=np.float32).reshape(4, 2)
+        area = abs(float(cv2.contourArea(pts)))
+        if np.isfinite(area):
+            areas.append(area)
+    return float(np.mean(areas)) if areas else 0.0
+
+
 # ── L-structure detector ──────────────────────────────────────────────────────
 
 class LStructureDetector:
@@ -523,6 +538,9 @@ class LStructureDetector:
             for marker_id, size_m in (marker_size_by_id_m or {}).items()
         }
         self.detector_tuning = detector_tuning or DEFAULT_ARUCO_DETECTOR_TUNING
+        self.last_rejected_count = 0
+        self.last_raw_marker_count = 0
+        self.last_allowed_marker_count = 0
 
         self.dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
         self._rebuild_detector()
@@ -542,7 +560,10 @@ class LStructureDetector:
         self, gray: np.ndarray,
     ) -> tuple[list[np.ndarray], Optional[np.ndarray]]:
         """Run ArUco detection, optionally filtering by allowed IDs."""
-        corners, ids, _ = self.detector.detectMarkers(gray)
+        corners, ids, rejected = self.detector.detectMarkers(gray)
+        self.last_rejected_count = len(rejected) if rejected is not None else 0
+        self.last_raw_marker_count = 0 if ids is None else int(len(ids))
+        self.last_allowed_marker_count = 0
         if ids is None or len(ids) == 0:
             return [], None
 
@@ -553,6 +574,7 @@ class LStructureDetector:
             corners = [corners[i] for i in keep]
             ids = ids[keep]
 
+        self.last_allowed_marker_count = int(len(ids))
         return corners, ids
 
     def marker_size_for_id(self, marker_id: int) -> float:
@@ -775,17 +797,31 @@ class ArucoPipeline:
 
         corners: list[np.ndarray] = []
         ids: Optional[np.ndarray] = None
+        detector_ran = False
+        used_optical_flow = False
 
         # Detection or optical-flow tracking
         self.of_tracker.tick()
         if not self.use_optical_flow or self.of_tracker.should_detect():
+            detector_ran = True
             corners, ids = self.l_detector.detect(enhanced)
             self.of_tracker.store_detection(enhanced, corners, ids)
         else:
+            used_optical_flow = True
             tracked_corners, tracked_ids = self.of_tracker.track(enhanced)
             if tracked_corners is not None:
                 corners = tracked_corners
                 ids = tracked_ids
+
+        if detector_ran:
+            raw_marker_count = self.l_detector.last_raw_marker_count
+            allowed_marker_count = self.l_detector.last_allowed_marker_count
+            rejected_count = self.l_detector.last_rejected_count
+        else:
+            raw_marker_count = 0 if ids is None else int(len(ids))
+            allowed_marker_count = raw_marker_count
+            rejected_count = 0
+        mean_marker_area_px = _mean_marker_area_px(corners)
 
         # Build marker list with per-marker individual poses
         # (tvec = marker centre in camera frame — used by registration)
@@ -830,6 +866,11 @@ class ArucoPipeline:
             pose=pose,
             fps=self._fps,
             timestamp=time.time(),
+            raw_marker_count=raw_marker_count,
+            allowed_marker_count=allowed_marker_count,
+            rejected_count=rejected_count,
+            mean_marker_area_px=mean_marker_area_px,
+            used_optical_flow=used_optical_flow,
         )
 
     def draw_overlay(
