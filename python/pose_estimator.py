@@ -31,6 +31,13 @@ import yaml
 
 from calibrate import load_calibration
 from camera_utils import open_camera
+from pose_lock import (
+    LOCK_SEARCHING,
+    MarkerCarryover,
+    PoseLock,
+    PoseLockConfig,
+    RoiRedetector,
+)
 from registration import MarkerCorrespondence, marker_object_corners
 
 
@@ -51,6 +58,8 @@ class PoseResult:
     marker_ids: list[int]
     marker_count: int
     timestamp: float = 0.0
+    rms_reproj_px: Optional[float] = None
+    coasted: bool = False
 
 
 @dataclass
@@ -67,6 +76,11 @@ class FrameResult:
     rejected_count: int = 0
     mean_marker_area_px: float = 0.0
     used_optical_flow: bool = False
+    lock_state: str = LOCK_SEARCHING
+    lock_reject_reason: Optional[str] = None
+    carryover_count: int = 0
+    refine_recovered_count: int = 0
+    roi_recovered_count: int = 0
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -268,6 +282,30 @@ class PoseKalmanFilter:
         self.kf.errorCovPost = np.eye(12, dtype=np.float32)
         self.kf.statePost = np.zeros((12, 1), dtype=np.float32)
         self._initialized = False
+
+    @property
+    def initialized(self) -> bool:
+        return self._initialized
+
+    def predict_measurement(self) -> tuple[np.ndarray, np.ndarray]:
+        """One-step (rvec, tvec) prediction WITHOUT mutating filter state."""
+        s = self.kf.statePost
+        pred = s[:6] + s[6:12]
+        return (
+            pred[3:6].reshape(3, 1).astype(np.float64),
+            pred[0:3].reshape(3, 1).astype(np.float64),
+        )
+
+    def coast(self) -> tuple[np.ndarray, np.ndarray]:
+        """Advance the filter one predict-only step (measurement dropout)."""
+        pred = self.kf.predict()
+        # Roll the prediction into the posterior so repeated coasting advances
+        self.kf.statePost = self.kf.statePre.copy()
+        self.kf.errorCovPost = self.kf.errorCovPre.copy()
+        return (
+            pred[3:6].reshape(3, 1).astype(np.float64),
+            pred[0:3].reshape(3, 1).astype(np.float64),
+        )
 
     def update(self, rvec: np.ndarray, tvec: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         meas = np.array([
@@ -493,6 +531,30 @@ def _ids_from_board(board: Optional[cv2.aruco.Board]) -> Optional[set[int]]:
     return {int(marker_id) for marker_id in np.asarray(ids).flatten().tolist()}
 
 
+def _reprojection_rms_px(
+    obj_pts: np.ndarray,
+    img_pts: np.ndarray,
+    rvec: np.ndarray,
+    tvec: np.ndarray,
+    camera_matrix: np.ndarray,
+    dist_coeffs: Optional[np.ndarray],
+) -> Optional[float]:
+    """RMS reprojection error (px) of a solved pose over its point set."""
+    try:
+        proj, _ = cv2.projectPoints(
+            np.asarray(obj_pts, dtype=np.float64).reshape(-1, 3),
+            rvec, tvec, camera_matrix, dist_coeffs,
+        )
+    except cv2.error:
+        return None
+    proj = proj.reshape(-1, 2)
+    img = np.asarray(img_pts, dtype=np.float64).reshape(-1, 2)
+    if proj.shape != img.shape or len(proj) == 0:
+        return None
+    err = np.linalg.norm(proj - img, axis=1)
+    return float(np.sqrt(np.mean(err ** 2)))
+
+
 def _mean_marker_area_px(corners: list[np.ndarray]) -> float:
     """Average visible marker area in image pixels, useful for detection health."""
     areas: list[float] = []
@@ -541,6 +603,7 @@ class LStructureDetector:
         self.last_rejected_count = 0
         self.last_raw_marker_count = 0
         self.last_allowed_marker_count = 0
+        self.last_refine_recovered_count = 0
 
         self.dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
         self._rebuild_detector()
@@ -557,10 +620,40 @@ class LStructureDetector:
         self.allowed_ids = allowed_ids
 
     def detect(
-        self, gray: np.ndarray,
+        self,
+        gray: np.ndarray,
+        camera_matrix: Optional[np.ndarray] = None,
+        dist_coeffs: Optional[np.ndarray] = None,
     ) -> tuple[list[np.ndarray], Optional[np.ndarray]]:
-        """Run ArUco detection, optionally filtering by allowed IDs."""
+        """
+        Run ArUco detection, optionally filtering by allowed IDs.
+
+        When a board is configured, rejected candidates are re-examined with
+        cv2.aruco's board-guided refinement: markers whose decode narrowly
+        failed are recovered using the geometry of the markers already found.
+        """
         corners, ids, rejected = self.detector.detectMarkers(gray)
+        self.last_refine_recovered_count = 0
+
+        if (
+            self.board is not None
+            and ids is not None and len(ids) > 0
+            and rejected is not None and len(rejected) > 0
+        ):
+            before = int(len(ids))
+            try:
+                corners, ids, rejected, _recovered = (
+                    self.detector.refineDetectedMarkers(
+                        gray, self.board, corners, ids, rejected,
+                        cameraMatrix=camera_matrix,
+                        distCoeffs=dist_coeffs,
+                    )
+                )
+            except cv2.error:
+                pass
+            if ids is not None:
+                self.last_refine_recovered_count = int(len(ids)) - before
+
         self.last_rejected_count = len(rejected) if rejected is not None else 0
         self.last_raw_marker_count = 0 if ids is None else int(len(ids))
         self.last_allowed_marker_count = 0
@@ -597,15 +690,21 @@ class LStructureDetector:
         ids: np.ndarray,
         camera_matrix: np.ndarray,
         dist_coeffs: np.ndarray,
+        min_markers: Optional[int] = None,
     ) -> Optional[PoseResult]:
         """
         Estimate 6-DoF pose.  Uses board-based solvePnP when configured board
         corners are available; falls back to single-marker IPPE_SQUARE otherwise.
+
+        `min_markers` overrides the configured board minimum for this call
+        (the pose lock relaxes it to 2 once a lock is established).
         """
         if ids is None or len(ids) == 0:
             return None
 
+        min_board = self.min_board_markers if min_markers is None else max(1, int(min_markers))
         rvec, tvec = None, None
+        rms_reproj_px: Optional[float] = None
         ids_flat = ids.flatten().tolist()
 
         # Board mode
@@ -618,19 +717,19 @@ class LStructureDetector:
                     i for i, marker_id in enumerate(ids_flat)
                     if int(marker_id) in self.board_marker_ids
                 ]
-                if len(keep) < self.min_board_markers:
+                if len(keep) < min_board:
                     return None
                 board_corners = [corners[i] for i in keep]
                 board_ids = ids[keep]
                 board_ids_flat = [ids_flat[i] for i in keep]
-            elif len(ids_flat) < self.min_board_markers:
+            elif len(ids_flat) < min_board:
                 return None
 
             try:
                 obj_pts, img_pts = self.board.matchImagePoints(board_corners, board_ids)
             except cv2.error:
                 obj_pts, img_pts = None, None
-            if obj_pts is not None and len(obj_pts) >= self.min_board_markers * 4:
+            if obj_pts is not None and len(obj_pts) >= min_board * 4:
                 ok, rvec, tvec = cv2.solvePnP(
                     obj_pts, img_pts, camera_matrix, dist_coeffs,
                     flags=cv2.SOLVEPNP_ITERATIVE,
@@ -639,6 +738,9 @@ class LStructureDetector:
                     # Levenberg-Marquardt refinement
                     rvec, tvec = cv2.solvePnPRefineLM(
                         obj_pts, img_pts, camera_matrix, dist_coeffs, rvec, tvec,
+                    )
+                    rms_reproj_px = _reprojection_rms_px(
+                        obj_pts, img_pts, rvec, tvec, camera_matrix, dist_coeffs,
                     )
             if rvec is None:
                 return None
@@ -664,6 +766,7 @@ class LStructureDetector:
             marker_ids=ids_flat,
             marker_count=len(ids_flat),
             timestamp=time.time(),
+            rms_reproj_px=rms_reproj_px,
         )
 
 
@@ -691,6 +794,8 @@ class ArucoPipeline:
         optical_flow_interval: int = 3,
         udp_host: Optional[str] = None,
         udp_port: int = 9000,
+        lock_config: Optional[PoseLockConfig] = None,
+        enable_roi_redetect: bool = True,
     ):
         self.camera_index = camera_index
         self.marker_size_m = marker_size_mm / 1000.0
@@ -724,6 +829,8 @@ class ArucoPipeline:
             else None
         )
         if self.uses_structure_board:
+            # Board mode detects every frame; interval-skipping optical flow
+            # is replaced by MarkerCarryover gap-filling below.
             self.use_optical_flow = False
 
         self.l_detector = LStructureDetector(
@@ -737,6 +844,17 @@ class ArucoPipeline:
 
         self.kalman = PoseKalmanFilter()
         self.of_tracker = OpticalFlowTracker(detect_interval=optical_flow_interval)
+
+        # Pose-lock resilience layer (board mode)
+        self.lock_config = lock_config or PoseLockConfig()
+        self.pose_lock = PoseLock(self.kalman, self.lock_config)
+        self.carryover = MarkerCarryover() if self.uses_structure_board else None
+        self.roi_redetector: Optional[RoiRedetector] = None
+        if self.uses_structure_board and enable_roi_redetect:
+            self.roi_redetector = RoiRedetector(
+                board=board,
+                detector=self.l_detector.detector,
+            )
 
         # UDP
         self.udp: Optional[UDPPoseSender] = None
@@ -767,6 +885,9 @@ class ArucoPipeline:
     def apply_detector_tuning(self, tuning: ArucoDetectorTuning) -> None:
         self.detector_tuning = tuning
         self.l_detector.set_detector_tuning(tuning)
+        if self.roi_redetector is not None:
+            # Rebuilding tuning replaces the cv2 detector; keep ROI in sync
+            self.roi_redetector.detector = self.l_detector.detector
 
     def apply_allowed_ids(self, allowed_ids: Optional[set[int]]) -> None:
         self.l_detector.set_allowed_ids(allowed_ids)
@@ -799,12 +920,16 @@ class ArucoPipeline:
         ids: Optional[np.ndarray] = None
         detector_ran = False
         used_optical_flow = False
+        carryover_count = 0
+        roi_recovered_count = 0
 
         # Detection or optical-flow tracking
         self.of_tracker.tick()
         if not self.use_optical_flow or self.of_tracker.should_detect():
             detector_ran = True
-            corners, ids = self.l_detector.detect(enhanced)
+            corners, ids = self.l_detector.detect(
+                enhanced, self.camera_matrix, self.dist_coeffs,
+            )
             self.of_tracker.store_detection(enhanced, corners, ids)
         else:
             used_optical_flow = True
@@ -821,6 +946,18 @@ class ArucoPipeline:
             raw_marker_count = 0 if ids is None else int(len(ids))
             allowed_marker_count = raw_marker_count
             rejected_count = 0
+
+        # Board-mode resilience: pose-guided ROI recovery + LK carryover
+        if self.uses_structure_board:
+            corners, ids, roi_recovered_count = self._recover_missing_markers(
+                enhanced, corners, ids,
+            )
+            if self.carryover is not None:
+                corners, ids = self.carryover.process(enhanced, corners, ids)
+                carryover_count = self.carryover.last_carryover_count
+                if carryover_count:
+                    used_optical_flow = True
+
         mean_marker_area_px = _mean_marker_area_px(corners)
 
         # Build marker list with per-marker individual poses
@@ -843,21 +980,33 @@ class ArucoPipeline:
                         dm.tvec = tv
                 markers.append(dm)
 
-        # Board-level pose estimation
+        # Board-level pose estimation (lock-aware)
         pose: Optional[PoseResult] = None
-        if self.camera_matrix is not None and ids is not None and len(ids) > 0:
-            pose = self.l_detector.estimate_pose(
-                corners, ids, self.camera_matrix, self.dist_coeffs,
-            )
-            if pose is not None:
-                # Kalman smoothing
-                pose.rvec, pose.tvec = self.kalman.update(pose.rvec, pose.tvec)
-
-                # UDP
-                if self.udp:
-                    self.udp.send(pose.rvec, pose.tvec)
+        if self.camera_matrix is not None:
+            measured: Optional[PoseResult] = None
+            if ids is not None and len(ids) > 0:
+                measured = self.l_detector.estimate_pose(
+                    corners, ids, self.camera_matrix, self.dist_coeffs,
+                    min_markers=(
+                        self.pose_lock.min_markers
+                        if self.uses_structure_board
+                        else None
+                    ),
+                )
+            if self.uses_structure_board:
+                # Lock owns smoothing, validation gates, and coasting
+                pose = self.pose_lock.process(measured)
+            elif measured is not None:
+                measured.rvec, measured.tvec = self.kalman.update(
+                    measured.rvec, measured.tvec,
+                )
+                pose = measured
+            else:
+                self.kalman.reset()
+            if pose is not None and self.udp:
+                self.udp.send(pose.rvec, pose.tvec)
         else:
-            self.kalman.reset()
+            self.pose_lock.reset()
 
         return FrameResult(
             frame=frame,
@@ -871,6 +1020,63 @@ class ArucoPipeline:
             rejected_count=rejected_count,
             mean_marker_area_px=mean_marker_area_px,
             used_optical_flow=used_optical_flow,
+            lock_state=self.pose_lock.state,
+            lock_reject_reason=self.pose_lock.last_reject_reason,
+            carryover_count=carryover_count,
+            refine_recovered_count=self.l_detector.last_refine_recovered_count,
+            roi_recovered_count=roi_recovered_count,
+        )
+
+    def _recover_missing_markers(
+        self,
+        enhanced: np.ndarray,
+        corners: list[np.ndarray],
+        ids: Optional[np.ndarray],
+    ) -> tuple[list[np.ndarray], Optional[np.ndarray], int]:
+        """
+        Pose-guided ROI re-detection for board markers missing this frame.
+
+        Only runs when the pose lock has a usable prediction and fewer board
+        markers than the acquisition minimum are currently visible.
+        """
+        if (
+            self.roi_redetector is None
+            or self.camera_matrix is None
+            or not self.pose_lock.is_locked
+        ):
+            return corners, ids, 0
+
+        board_ids = self.l_detector.board_marker_ids or set(
+            self.roi_redetector.object_corners_by_id
+        )
+        present = (
+            {int(i) for i in ids.flatten()} if ids is not None and len(ids) else set()
+        )
+        present_board = present & board_ids
+        if len(present_board) >= self.lock_config.acquire_min_markers:
+            return corners, ids, 0
+
+        prediction = self.pose_lock.predicted_pose()
+        if prediction is None:
+            return corners, ids, 0
+        pred_rvec, pred_tvec = prediction
+
+        missing = sorted(board_ids - present)
+        rec_corners, rec_ids = self.roi_redetector.recover(
+            enhanced, missing, pred_rvec, pred_tvec,
+            self.camera_matrix, self.dist_coeffs,
+        )
+        if not rec_ids:
+            return corners, ids, 0
+
+        merged_corners = list(corners) + rec_corners
+        merged_ids = (
+            [int(i) for i in ids.flatten()] if ids is not None and len(ids) else []
+        ) + rec_ids
+        return (
+            merged_corners,
+            np.array(merged_ids, dtype=np.int32).reshape(-1, 1),
+            len(rec_ids),
         )
 
     def draw_overlay(

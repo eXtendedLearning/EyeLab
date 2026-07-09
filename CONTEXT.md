@@ -2,7 +2,7 @@
 
 > Living glossary and shared-mental-model notes. Captures terms, decisions, and open issues surfaced during grilling. Authoritative scope/plan lives in `.docs/PROJECT.md`, theory in `.docs/THEORY.md`, task plan in `.docs/TASKS.md`, decisions in `.docs/adr/`. This file holds **deltas the project plan does not capture** plus the live "open question" board.
 >
-> Last updated: 2026-07-08 (webcam-phase detector-tuning work + repo hygiene pass; Status section below still reflects the 2026-05-14 snapshot and needs a proper revision).
+> Last updated: 2026-07-09 (pose-lock resilience layer: board-guided marker recovery, LK carryover, 2-marker sustain + 0.3 s coasting state machine, pose-guided ROI re-detection — `python/pose_lock.py`; Status section below still reflects the 2026-05-14 snapshot and needs a proper revision).
 
 ## Status
 
@@ -87,4 +87,5 @@ Source: local `eyelab_xreal/Packages/com.xreal.xr/Runtime/Scripts/` SDK install.
 - `.docs/TASKS.md` — full task plan, WP1–WP6, T1.1–T6.3.
 - `.docs/tasks/T2.6-xreal-port.md` — implementation guide for the XREAL port. **Pending substantive rewrite** (open issue 1).
 - `.docs/adr/` — Architecture Decision Records.
-- `python/` — webcam-phase code; will be extended to the E
+- `python/` — webcam-phase code; will be extended to the EyeLab Service for Step C.
+- `EyeLab - Siemens XR Project/` — reserved sub-folder for AR-app-specific docs.

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `python/pose_lock.py` - pose-lock resilience layer for the board pipeline:
+  `PoseLock` state machine (acquire with 3 markers, sustain with 2, coast on
+  Kalman prediction up to 0.3 s through full dropouts; full-count poses are
+  accepted unconditionally while 2-marker sustain poses pass an adaptive
+  reprojection-RMS gate — max(3 px, 2.5x the learned baseline) — plus
+  translation/rotation jump gates; `last_reject_reason` surfaces why a pose
+  was refused), `MarkerCarryover` (LK optical
+  flow carries recently seen marker corners through detection flicker), and
+  `RoiRedetector` (projects missing board markers through the predicted pose
+  and re-detects in a 2x-upscaled crop for small/distant markers).
+- `python/pose_estimator.py` - board-guided recovery of rejected candidates
+  via `cv2.aruco.refineDetectedMarkers`; board reprojection RMS reported in
+  `PoseResult.rms_reproj_px`; `estimate_pose(min_markers=...)` override;
+  `PoseKalmanFilter.coast()` / `predict_measurement()`; `FrameResult` gains
+  `lock_state`, `carryover_count`, `refine_recovered_count`,
+  `roi_recovered_count`.
+- `python/test_pose_lock.py` - unit tests for the lock state machine, rvec
+  continuity, Kalman coasting, marker carryover, and ROI re-detection.
+
+### Changed
+- `python/eyelab_gui.py` - detection diagnostics show lock state and
+  recovered-marker counters; AR status marks coasting poses; hints explain
+  acquire-3 / sustain-2 behaviour.
+
 ---
 
 ## [0.1.0] — 2026-07-08

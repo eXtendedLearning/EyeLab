@@ -694,8 +694,15 @@ class EyeLabApp:
             hints.append("some decoded markers are filtered out by Expected IDs")
         if 0 < result.mean_marker_area_px < 900:
             hints.append("markers are very small in the image; move closer or use larger print")
-        if structure_seen > 0 and pose_seen < MIN_STRUCTURE_MARKERS_FOR_BOARD_POSE:
-            hints.append(f"need {MIN_STRUCTURE_MARKERS_FOR_BOARD_POSE}+ structure markers for stable board pose")
+        if (
+            structure_seen > 0
+            and pose_seen < MIN_STRUCTURE_MARKERS_FOR_BOARD_POSE
+            and result.lock_state == "searching"
+        ):
+            hints.append(
+                f"need {MIN_STRUCTURE_MARKERS_FOR_BOARD_POSE}+ structure markers to acquire pose"
+                " (2 sustain it once locked)"
+            )
         rms = self._current_calibration_rms()
         if rms is None and not self.calibration_loaded:
             hints.append("no camera calibration loaded")
@@ -718,8 +725,19 @@ class EyeLabApp:
         rms_text = "n/a" if rms is None else f"{rms:.3f} px"
         mode = "flow" if result.used_optical_flow else "detect"
         hint = self._detection_health_hint(result, structure_seen, pose_seen)
+        recovered_bits = []
+        if result.refine_recovered_count:
+            recovered_bits.append(f"refine +{result.refine_recovered_count}")
+        if result.roi_recovered_count:
+            recovered_bits.append(f"roi +{result.roi_recovered_count}")
+        if result.carryover_count:
+            recovered_bits.append(f"carry +{result.carryover_count}")
+        recovered_text = f" | Recovered: {', '.join(recovered_bits)}" if recovered_bits else ""
+        lock_text = result.lock_state
+        if result.lock_reject_reason:
+            lock_text += f" (reject: {result.lock_reject_reason})"
         self.det_diag_var.set(
-            f"Mode: {mode} | Expected IDs: {expected_text}\n"
+            f"Mode: {mode} | Lock: {lock_text}{recovered_text} | Expected IDs: {expected_text}\n"
             f"Decoded: {result.raw_marker_count} raw / {result.allowed_marker_count} accepted\n"
             f"Rejected candidates: {result.rejected_count} | Avg area: {result.mean_marker_area_px:.0f} px^2\n"
             f"Structure: {structure_seen} | Pose markers: {pose_seen} | Hammer: {hammer_seen}\n"
@@ -1589,13 +1607,14 @@ class EyeLabApp:
     ) -> str:
         if result.pose:
             t = result.pose.tvec.flatten()
+            coasting = "  |  COASTING" if result.pose.coasted else ""
             return (
-                f"T: [{t[0]*1000:.1f}, {t[1]*1000:.1f}, {t[2]*1000:.1f}] mm"
+                f"T: [{t[0]*1000:.1f}, {t[1]*1000:.1f}, {t[2]*1000:.1f}] mm{coasting}"
                 f"  |  Pose markers: {pose_seen}  |  Structure: {structure_seen}  |  Hammer: {hammer_seen}"
             )
         if structure_seen:
             return (
-                f"Need {MIN_STRUCTURE_MARKERS_FOR_BOARD_POSE}+ structure markers for stable pose"
+                f"Need {MIN_STRUCTURE_MARKERS_FOR_BOARD_POSE}+ structure markers to acquire pose"
                 f"  |  Structure: {structure_seen}  |  Hammer: {hammer_seen}"
             )
         return f"Structure: {structure_seen}  |  Hammer: {hammer_seen}"
