@@ -66,6 +66,7 @@ from gui_common import (
     MARKERS_DIR,
     TEST_ASSETS_DIR,
 )
+from gui_geometry_editor import GeometryEditorTab
 from gui_markers import CorrespondenceEditor, MarkerGenWindow, MarkerLoaderWindow
 import overlay
 from pose_estimator import (
@@ -423,6 +424,8 @@ class EyeLabApp:
         self.screenshot_btn.pack(side=tk.LEFT, padx=4, pady=4)
         self.fullscreen_btn = ttk.Button(ar_frame, text="Fullscreen", command=self._toggle_fullscreen_ar, state="disabled")
         self.fullscreen_btn.pack(side=tk.LEFT, padx=4, pady=4)
+        self.show_marker_axes_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(ar_frame, text="Marker axes", variable=self.show_marker_axes_var).pack(side=tk.LEFT, padx=4)
         self.ar_fps_var = tk.StringVar(value="")
         ttk.Label(ar_frame, textvariable=self.ar_fps_var).pack(side=tk.LEFT, padx=8)
 
@@ -453,6 +456,16 @@ class EyeLabApp:
         self.notebook.add(self.flt_tab, text="FLT")
         self.flt_canvas_label = ttk.Label(self.flt_tab, text="Press 'Start AR' to inspect the filtered detector image.")
         self.flt_canvas_label.pack(fill=tk.BOTH, expand=True)
+
+        # Tab 4: synthetic geometry editor
+        self.editor_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.editor_tab, text="Geometry Editor")
+        self.geometry_editor = GeometryEditorTab(
+            self.editor_tab,
+            log=self.log,
+            on_send_geometry=self._use_editor_geometry,
+            get_current_geometry=lambda: self.geometry_data,
+        )
 
         # ── Bottom: log ───────────────────────────────────────────────────
         log_frame = ttk.LabelFrame(self.root, text="Log")
@@ -701,7 +714,7 @@ class EyeLabApp:
         ):
             hints.append(
                 f"need {MIN_STRUCTURE_MARKERS_FOR_BOARD_POSE}+ structure markers to acquire pose"
-                " (2 sustain it once locked)"
+                " (1 sustains it once locked)"
             )
         rms = self._current_calibration_rms()
         if rms is None and not self.calibration_loaded:
@@ -964,6 +977,17 @@ class EyeLabApp:
             self._update_3d_preview()
         except Exception as e:
             messagebox.showerror("JSON Error", str(e))
+
+    def _use_editor_geometry(self, data: dict) -> None:
+        """Adopt geometry handed over by the Geometry Editor tab."""
+        self.geometry_data = data
+        self.geometry_path = None
+        n = len(data.get("nodes", []))
+        e = len(data.get("traceLines", []))
+        self.geo_status_var.set(f"Geometry editor: {n} nodes, {e} edges")
+        self.log(f"Loaded geometry from editor ({n} nodes, {e} edges)")
+        self._update_3d_preview()
+        self.notebook.select(self.preview_tab)
 
     # ══════════════════════════════════════════════════════════════════════
     #  3D Preview
@@ -1560,7 +1584,10 @@ class EyeLabApp:
             show_flt = self._is_workspace_tab_selected(self.flt_tab)
 
             if show_ar:
-                vis = self.pipeline.draw_overlay(result, draw_markers=True, draw_axes=True)
+                vis = self.pipeline.draw_overlay(
+                    result, draw_markers=True, draw_axes=True,
+                    draw_marker_axes=bool(self.show_marker_axes_var.get()),
+                )
                 self._draw_marker_roles(vis, result)
                 cv2.putText(vis, status_text, (10, vis.shape[0] - 15),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)

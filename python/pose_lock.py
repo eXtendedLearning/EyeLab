@@ -42,7 +42,7 @@ LOCK_COASTING = "coasting"
 class PoseLockConfig:
     """Tunables for the pose-lock state machine."""
     acquire_min_markers: int = 3      # markers required to (re)acquire lock
-    sustain_min_markers: int = 2      # markers that keep an existing lock alive
+    sustain_min_markers: int = 1      # markers that keep an existing lock alive
     coast_duration_s: float = 0.3     # predict-only coasting on full dropout
     # RMS gate applies ONLY to low-marker-count (sustain) poses. Full-count
     # poses are accepted unconditionally — real board geometry (hand-measured

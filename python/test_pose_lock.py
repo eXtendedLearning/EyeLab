@@ -122,7 +122,25 @@ class PoseLockStateMachineTests(unittest.TestCase):
     def test_min_markers_property_tracks_state(self):
         self.assertEqual(self.lock.min_markers, 3)
         self._acquire(t=0.0)
-        self.assertEqual(self.lock.min_markers, 2)
+        self.assertEqual(self.lock.min_markers, 1)
+
+    def test_single_marker_sustains_lock(self):
+        self._acquire(t=0.0)
+        out = self.lock.process(_pose(1), now=0.033)
+        self.assertIsNotNone(out)
+        self.assertEqual(self.lock.state, LOCK_LOCKED)
+
+    def test_single_marker_rejected_while_searching(self):
+        self.assertIsNone(self.lock.process(_pose(1), now=0.0))
+        self.assertEqual(self.lock.state, LOCK_SEARCHING)
+
+    def test_single_marker_pose_with_jump_is_rejected(self):
+        self._acquire(t=0.0)
+        jumped = _pose(1, tvec=(0.5, 0.0, 0.3))  # 0.5 m jump
+        out = self.lock.process(jumped, now=0.033)
+        self.assertEqual(self.lock.state, LOCK_COASTING)
+        self.assertTrue(out.coasted)
+        self.assertEqual(self.lock.last_reject_reason, "jump")
 
 
 class KalmanCoastTests(unittest.TestCase):

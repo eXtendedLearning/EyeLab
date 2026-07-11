@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Single-marker pose sustain: `PoseLockConfig.sustain_min_markers` default
+  lowered to 1. Planar point sets (one marker, or several coplanar markers)
+  are now solved with `SOLVEPNP_IPPE` via `solvePnPGeneric`; both mirror
+  solutions of the planar pose ambiguity are computed and the one closest to
+  the Kalman prediction is kept (`LStructureDetector._solve_board_pose`,
+  `estimate_pose(prior=...)`). Acquisition still requires 3 markers — with no
+  prior there is no reliable way to disambiguate a single planar marker.
+- Per-marker orientation axes in the AR overlay
+  (`draw_overlay(draw_marker_axes=True)`, "Marker axes" checkbox): X red /
+  Y green / Z blue drawn on each detected marker to catch upside-down or
+  rolled prints.
+- `python/gui_geometry_editor.py` - interactive synthetic-geometry editor
+  ("Geometry Editor" tab, also runs standalone): click on a working plane
+  (XY/XZ/YZ + offset) to insert nodes, drag to rotate, two-click node
+  connection into trace lines, per-axis sliders + numeric entries for precise
+  positioning, undo, JSON import/export, .unv export, hand-off to the main
+  viewer.
+- `python/unv_writer.py` - UNV writer (datasets 164 + 2411 + 82 via pyuff),
+  inverse of `unv_to_json.py`; greedy segment-to-polyline chaining with
+  pen-up separators.
+- `python/test_unv_writer.py` - writer round-trip tests through `UNVParser`
+  plus editor math tests (click ray, plane intersection, node picking).
+- `docs/aruco_marker_best_practices.pdf` - sourced field guide on printing,
+  flatness/mounting, marker orientation, size/distance/angle budgets, the
+  planar pose ambiguity, multi-marker layout, calibration and lighting.
+
+### Previously added
 - `python/pose_lock.py` - pose-lock resilience layer for the board pipeline:
   `PoseLock` state machine (acquire with 3 markers, sustain with 2, coast on
   Kalman prediction up to 0.3 s through full dropouts; full-count poses are
@@ -30,7 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `python/eyelab_gui.py` - detection diagnostics show lock state and
   recovered-marker counters; AR status marks coasting poses; hints explain
-  acquire-3 / sustain-2 behaviour.
+  acquire-3 / sustain-1 behaviour; new Geometry Editor tab and "Marker axes"
+  toggle.
 
 ---
 

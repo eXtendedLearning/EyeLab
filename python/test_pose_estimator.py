@@ -78,6 +78,45 @@ class BoardPoseMarkerSelectionTests(unittest.TestCase):
         np.testing.assert_array_equal(board.calls[0][1], np.array([[0], [2], [1]], dtype=np.int32))
 
 
+class PlanarPoseSolveTests(unittest.TestCase):
+    """Single-marker (planar) board solves must resolve the two-fold ambiguity."""
+
+    def setUp(self):
+        self.detector = LStructureDetector()
+        fx = 800.0
+        self.cam = np.array(
+            [[fx, 0, 320], [0, fx, 240], [0, 0, 1]], dtype=np.float64,
+        )
+        self.dist = np.zeros(5, dtype=np.float64)
+        half = 0.006  # 12 mm marker
+        self.obj = np.array(
+            [[-half, half, 0], [half, half, 0],
+             [half, -half, 0], [-half, -half, 0]],
+            dtype=np.float64,
+        )
+
+    def test_points_are_planar(self):
+        self.assertTrue(LStructureDetector._points_are_planar(self.obj))
+        nonplanar = self.obj.copy()
+        nonplanar[0, 2] = 0.05
+        self.assertFalse(LStructureDetector._points_are_planar(nonplanar))
+
+    def test_planar_solve_with_prior_recovers_true_pose(self):
+        true_rvec = np.array([[0.4], [0.3], [0.1]], dtype=np.float64)
+        true_tvec = np.array([[0.01], [0.02], [0.30]], dtype=np.float64)
+        img, _ = cv2.projectPoints(self.obj, true_rvec, true_tvec, self.cam, self.dist)
+
+        rvec, tvec = self.detector._solve_board_pose(
+            self.obj, img.reshape(-1, 2), self.cam, self.dist,
+            prior=(true_rvec, true_tvec),
+        )
+
+        self.assertIsNotNone(rvec)
+        from pose_lock import rotation_angle_between
+        self.assertLess(rotation_angle_between(rvec, true_rvec), 2.0)
+        np.testing.assert_allclose(tvec.flatten(), true_tvec.flatten(), atol=2e-3)
+
+
 class DetectorParameterTests(unittest.TestCase):
     def test_default_detector_parameters_are_balanced_between_strict_and_forgiving(self):
         strict = DETECTOR_TUNING_PRESETS["strict"]

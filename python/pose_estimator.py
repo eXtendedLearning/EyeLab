@@ -37,6 +37,7 @@ from pose_lock import (
     PoseLock,
     PoseLockConfig,
     RoiRedetector,
+    rotation_angle_between,
 )
 from registration import MarkerCorrespondence, marker_object_corners
 
@@ -684,6 +685,70 @@ class LStructureDetector:
             [-half, -half, 0],
         ], dtype=np.float32)
 
+    @staticmethod
+    def _points_are_planar(obj_pts: np.ndarray, tol_m: float = 1e-4) -> bool:
+        """True if the object points lie (numerically) on a single plane."""
+        pts = np.asarray(obj_pts, dtype=np.float64).reshape(-1, 3)
+        if len(pts) < 4:
+            return True
+        centered = pts - pts.mean(axis=0)
+        singular_values = np.linalg.svd(centered, compute_uv=False)
+        return bool(singular_values[-1] < tol_m)
+
+    def _solve_board_pose(
+        self,
+        obj_pts: np.ndarray,
+        img_pts: np.ndarray,
+        camera_matrix: np.ndarray,
+        dist_coeffs: Optional[np.ndarray],
+        prior: Optional[tuple[np.ndarray, np.ndarray]] = None,
+    ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """
+        Solve the board pose, handling the planar two-fold ambiguity.
+
+        Planar point sets (a single marker, or several markers on the same
+        face) admit two mirror pose solutions; SOLVEPNP_ITERATIVE can converge
+        to the wrong one. For planar sets, both IPPE solutions are computed and
+        the one closest to `prior` (Kalman prediction) is kept — or the one
+        with lower reprojection error when no prior is available.
+        """
+        obj = np.asarray(obj_pts, dtype=np.float64).reshape(-1, 3)
+        img = np.asarray(img_pts, dtype=np.float64).reshape(-1, 2)
+        rvec, tvec = None, None
+
+        if self._points_are_planar(obj):
+            try:
+                n_sol, rvecs, tvecs, _errs = cv2.solvePnPGeneric(
+                    obj, img, camera_matrix, dist_coeffs,
+                    flags=cv2.SOLVEPNP_IPPE,
+                )
+            except cv2.error:
+                n_sol = 0
+            if n_sol:
+                idx = 0  # solutions are sorted by reprojection error
+                if prior is not None and n_sol > 1:
+                    idx = min(
+                        range(n_sol),
+                        key=lambda k: rotation_angle_between(rvecs[k], prior[0]),
+                    )
+                rvec, tvec = rvecs[idx], tvecs[idx]
+
+        if rvec is None:
+            ok, rvec, tvec = cv2.solvePnP(
+                obj, img, camera_matrix, dist_coeffs,
+                flags=cv2.SOLVEPNP_ITERATIVE,
+            )
+            if not ok:
+                return None, None
+
+        try:
+            rvec, tvec = cv2.solvePnPRefineLM(
+                obj, img, camera_matrix, dist_coeffs, rvec, tvec,
+            )
+        except cv2.error:
+            pass
+        return rvec, tvec
+
     def estimate_pose(
         self,
         corners: list[np.ndarray],
@@ -691,13 +756,15 @@ class LStructureDetector:
         camera_matrix: np.ndarray,
         dist_coeffs: np.ndarray,
         min_markers: Optional[int] = None,
+        prior: Optional[tuple[np.ndarray, np.ndarray]] = None,
     ) -> Optional[PoseResult]:
         """
         Estimate 6-DoF pose.  Uses board-based solvePnP when configured board
         corners are available; falls back to single-marker IPPE_SQUARE otherwise.
 
         `min_markers` overrides the configured board minimum for this call
-        (the pose lock relaxes it to 2 once a lock is established).
+        (the pose lock relaxes it to 1 once a lock is established).
+        `prior` is an (rvec, tvec) prediction used to disambiguate planar poses.
         """
         if ids is None or len(ids) == 0:
             return None
@@ -730,15 +797,10 @@ class LStructureDetector:
             except cv2.error:
                 obj_pts, img_pts = None, None
             if obj_pts is not None and len(obj_pts) >= min_board * 4:
-                ok, rvec, tvec = cv2.solvePnP(
-                    obj_pts, img_pts, camera_matrix, dist_coeffs,
-                    flags=cv2.SOLVEPNP_ITERATIVE,
+                rvec, tvec = self._solve_board_pose(
+                    obj_pts, img_pts, camera_matrix, dist_coeffs, prior=prior,
                 )
-                if ok:
-                    # Levenberg-Marquardt refinement
-                    rvec, tvec = cv2.solvePnPRefineLM(
-                        obj_pts, img_pts, camera_matrix, dist_coeffs, rvec, tvec,
-                    )
+                if rvec is not None:
                     rms_reproj_px = _reprojection_rms_px(
                         obj_pts, img_pts, rvec, tvec, camera_matrix, dist_coeffs,
                     )
@@ -992,6 +1054,11 @@ class ArucoPipeline:
                         if self.uses_structure_board
                         else None
                     ),
+                    prior=(
+                        self.pose_lock.predicted_pose()
+                        if self.uses_structure_board
+                        else None
+                    ),
                 )
             if self.uses_structure_board:
                 # Lock owns smoothing, validation gates, and coasting
@@ -1085,6 +1152,7 @@ class ArucoPipeline:
         draw_markers: bool = True,
         draw_axes: bool = True,
         axis_length_m: float = 0.02,
+        draw_marker_axes: bool = False,
     ) -> np.ndarray:
         """Draw detection + pose overlay on a copy of the frame."""
         vis = result.frame.copy()
@@ -1093,6 +1161,19 @@ class ArucoPipeline:
             corners_list = [m.corners.reshape(1, 4, 2) for m in result.markers]
             ids_arr = np.array([m.marker_id for m in result.markers]).reshape(-1, 1)
             cv2.aruco.drawDetectedMarkers(vis, corners_list, ids_arr)
+
+        if draw_marker_axes and result.markers and self.camera_matrix is not None:
+            # Per-marker axes: X red (right), Y green (top), Z blue (out of the
+            # printed face, toward the camera). Shows how each physical marker
+            # is oriented — useful to catch upside-down or rolled prints.
+            for m in result.markers:
+                if m.rvec is None or m.tvec is None:
+                    continue
+                size_m = self.l_detector.marker_size_for_id(m.marker_id)
+                cv2.drawFrameAxes(
+                    vis, self.camera_matrix, self.dist_coeffs,
+                    m.rvec, m.tvec, 0.75 * size_m, 2,
+                )
 
         if draw_axes and result.pose and self.camera_matrix is not None:
             cv2.drawFrameAxes(

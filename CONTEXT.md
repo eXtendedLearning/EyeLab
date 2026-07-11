@@ -2,7 +2,7 @@
 
 > Living glossary and shared-mental-model notes. Captures terms, decisions, and open issues surfaced during grilling. Authoritative scope/plan lives in `.docs/PROJECT.md`, theory in `.docs/THEORY.md`, task plan in `.docs/TASKS.md`, decisions in `.docs/adr/`. This file holds **deltas the project plan does not capture** plus the live "open question" board.
 >
-> Last updated: 2026-07-09 (pose-lock resilience layer: board-guided marker recovery, LK carryover, 2-marker sustain + 0.3 s coasting state machine, pose-guided ROI re-detection — `python/pose_lock.py`; Status section below still reflects the 2026-05-14 snapshot and needs a proper revision).
+> Last updated: 2026-07-10 (single-marker sustain via IPPE planar-ambiguity resolution against the Kalman prior — acquire still needs 3; per-marker axis overlay; Geometry Editor tab + `unv_writer.py` for synthetic .unv authoring; `docs/aruco_marker_best_practices.pdf`; Status section below still reflects the 2026-05-14 snapshot and needs a proper revision).
 
 ## Status
 
