@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- CI break from OpenCV 5.0 (`opencv-contrib-python` 5.0.0.93, PyPI
+  2026-07-02): OpenCV 5 removed the legacy `cv2.aruco.calibrateCameraCharuco`
+  used by `gui_calibration.py` and `calibrate.py` (and mocked in
+  `test_gui_calibration.py`). Pinned `opencv-contrib-python>=4.8.0,<5.0`;
+  lift after migrating to `board.matchImagePoints` + `cv2.calibrateCamera`.
+- CI workflow: bumped `actions/checkout@v5` and `actions/setup-python@v6`
+  (Node 20 runner deprecation warning).
+
 ### Added
 - Single-marker pose sustain: `PoseLockConfig.sustain_min_markers` default
   lowered to 1. Planar point sets (one marker, or several coplanar markers)
