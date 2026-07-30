@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -70,6 +73,27 @@ class WriteUnvRoundTripTests(unittest.TestCase):
 
 
 class EditorHelperTests(unittest.TestCase):
+    def test_import_respects_configured_matplotlib_backend(self):
+        env = os.environ.copy()
+        env["MPLBACKEND"] = "Agg"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import matplotlib; "
+                    "import gui_geometry_editor; "
+                    "assert matplotlib.get_backend().lower() == 'agg', "
+                    "matplotlib.get_backend()"
+                ),
+            ],
+            cwd=Path(__file__).resolve().parent,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_ray_plane_intersection(self):
         import numpy as np
         from gui_geometry_editor import ray_plane_intersection

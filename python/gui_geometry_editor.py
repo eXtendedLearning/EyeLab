@@ -35,10 +35,9 @@ try:  # headless test environments have no tkinter
 except ImportError:  # pragma: no cover
     tk = None
 
-import matplotlib
-
-if tk is not None:  # pragma: no cover - backend selection is environment-bound
-    matplotlib.use("TkAgg")
+if tk is not None:  # pragma: no cover - Tk availability is environment-bound
+    # The canvas is selected explicitly below; keep MPLBACKEND untouched so
+    # importing the geometry helpers remains safe in headless environments.
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt  # noqa: E402
 from mpl_toolkits.mplot3d import proj3d  # noqa: E402
