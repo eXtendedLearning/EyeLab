@@ -62,6 +62,9 @@ class UNVParser:
         2: {"name": "MM_N_S",    "description": "millimeters, newtons, seconds"},
         4: {"name": "MM_KG_S",   "description": "millimeters, kilograms, seconds"},
         6: {"name": "IN_LBF_S",  "description": "inches, pounds-force, seconds"},
+        # Testlab writes code 9 for user-defined units; the real scale then lives in
+        # the Dataset 164 length factor, which this parser reads and applies.
+        9: {"name": "USER_DEFINED", "description": "user-defined, scale from length factor"},
     }
 
     def __init__(self, unv_file: Path, validate_cs: bool = True, verbose: bool = False):
@@ -118,23 +121,34 @@ class UNVParser:
         units_ds  = self._get_dataset(datasets, self.DATASET_UNITS)
 
         try:
+            # Units first: node coordinates are scaled to metres as they are parsed,
+            # so every consumer of parse() gets metres and nothing has to remember
+            # to convert. A .unv in millimetres would otherwise be read as metres
+            # and overlay 1000x oversized.
+            units = self._parse_units(units_ds) if units_ds is not None else self._default_units()
+            length_factor = float(units["lengthFactor"])
+
             if nodes_ds is not None:
                 nodes = self._parse_nodes(nodes_ds)
             elif legacy_nodes_ds is not None:
                 nodes = self._parse_nodes_legacy(legacy_nodes_ds)
             else:
                 nodes = []
+            if length_factor != 1.0:
+                self._scale_nodes_to_metres(nodes, length_factor)
             trace_lines: List[List[int]] = []
             for lds in lines_ds_all:
                 trace_lines.extend(self._parse_trace_lines(lds))
             if not trace_lines and nodes:
                 trace_lines = self._infer_axis_aligned_grid_edges(nodes)
             coord_systems = self._parse_coord_systems(cs_ds)  if cs_ds is not None     else []
-            units        = self._parse_units(units_ds)        if units_ds is not None  else self._default_units()
         except UNVParseError:
             raise
         except Exception as e:
             raise UNVParseError(f"Failed to parse datasets: {e}") from e
+
+        if nodes:
+            self._check_coordinate_systems(nodes, coord_systems)
 
         if self.validate_cs and len(coord_systems) > 0:
             self._validate_cs_references(nodes, coord_systems)
@@ -164,10 +178,15 @@ class UNVParser:
     # ── Dataset parsers ───────────────────────────────────────────────────────
 
     def _parse_nodes(self, dataset: Dict) -> List[Dict[str, Any]]:
-        """Parse Dataset 2411 (Nodes)."""
+        """Parse Dataset 2411 (Nodes).
+
+        pyuff names the coordinate-system columns `def_cs` / `disp_cs`. Reading only
+        `coord_sys` / `disp_coord_sys` silently defaulted every node to system 0,
+        which disabled the coordinate-system checks entirely. Accept both spellings.
+        """
         node_ids  = dataset.get("node_nums", [])
-        export_cs = dataset.get("coord_sys", [])
-        disp_cs   = dataset.get("disp_coord_sys", [])
+        export_cs = self._first_present(dataset, "def_cs", "coord_sys")
+        disp_cs   = self._first_present(dataset, "disp_cs", "disp_coord_sys")
         x_coords  = dataset.get("x", [])
         y_coords  = dataset.get("y", [])
         z_coords  = dataset.get("z", [])
@@ -316,6 +335,62 @@ class UNVParser:
         logger.debug(f"Parsed {len(coord_systems)} coordinate systems from Dataset 2420")
         return coord_systems
 
+    @staticmethod
+    def _first_present(dataset: Dict, *keys: str) -> Any:
+        """Return the first non-empty value among `keys`, or an empty list."""
+        for key in keys:
+            value = dataset.get(key)
+            if value is not None and len(value) > 0:
+                return value
+        return []
+
+    @staticmethod
+    def _scale_nodes_to_metres(nodes: List[Dict[str, Any]], length_factor: float) -> None:
+        """Scale parsed node coordinates in place from file units to metres."""
+        for node in nodes:
+            node["x"] *= length_factor
+            node["y"] *= length_factor
+            node["z"] *= length_factor
+
+    def _check_coordinate_systems(
+        self,
+        nodes: List[Dict[str, Any]],
+        coord_systems: List[Dict[str, Any]],
+    ) -> None:
+        """Reject geometry whose node coordinates are not already in one Cartesian frame.
+
+        Datasets 2411/15 store each node in its own definition coordinate system.
+        This parser emits raw coordinates, so it is only correct when every node is
+        expressed in the same rectangular frame. Cylindrical or spherical systems
+        would need (r, theta, z) converted to Cartesian, and multiple systems would
+        need composing through their 2420 transforms; neither is implemented, and
+        both fail silently and badly if ignored.
+        """
+        by_id = {int(cs["id"]): cs for cs in coord_systems}
+        non_rect = sorted(
+            {int(cs["id"]) for cs in coord_systems if cs.get("type") != "rectangular"}
+        )
+        used = sorted({int(n.get("exportCS", 0) or 0) for n in nodes})
+
+        offending = [cs_id for cs_id in used if cs_id in non_rect]
+        if offending:
+            kinds = {by_id[i]["type"] for i in offending}
+            raise UNVParseError(
+                f"Nodes reference non-rectangular coordinate system(s) {offending} "
+                f"of type {sorted(kinds)}. Converting {'/'.join(sorted(kinds))} "
+                f"coordinates to Cartesian is not implemented, and reading them as "
+                f"Cartesian would silently produce wrong geometry. Re-export the "
+                f"geometry with all nodes in a single rectangular coordinate system."
+            )
+
+        if len(used) > 1:
+            raise UNVParseError(
+                f"Nodes are defined across {len(used)} different coordinate systems "
+                f"{used}. Composing them through their Dataset 2420 transforms is not "
+                f"implemented, so the coordinates cannot be placed in one frame. "
+                f"Re-export the geometry in a single coordinate system."
+            )
+
     def _infer_axis_aligned_grid_edges(self, nodes: List[Dict[str, Any]]) -> List[List[int]]:
         """
         Infer trace edges for nodes-only, axis-aligned plate grids.
@@ -368,22 +443,64 @@ class UNVParser:
         )
         return edges
 
-    def _parse_units(self, dataset: Dict) -> Dict[str, Any]:
-        """Parse Dataset 164 (Units)."""
-        unit_code = int(dataset.get("unit_code", 1))
-        factors   = list(dataset.get("factors", [1.0, 1.0, 1.0]))
-        factors  += [1.0] * (3 - len(factors))   # pad to 3 if shorter
+    # Fallback length factors (file unit -> metres) by unit code, used only when
+    # Dataset 164 omits an explicit factor.
+    UNIT_CODE_LENGTH_FACTORS: Dict[int, float] = {
+        1: 1.0,        # SI: metres
+        2: 0.001,      # MM_N_S: millimetres
+        4: 0.001,      # MM_KG_S: millimetres
+        6: 0.0254,     # IN_LBF_S: inches
+        9: 1.0,        # USER_DEFINED with no factor: assume metres
+    }
 
-        unit_info = self.UNIT_CODES.get(unit_code, {"name": "UNKNOWN", "description": "unknown"})
-        logger.debug(f"Parsed units: {unit_info['name']}")
+    def _parse_units(self, dataset: Dict) -> Dict[str, Any]:
+        """Parse Dataset 164 (Units).
+
+        pyuff exposes this dataset as `units_code` plus separate `length` / `force`
+        / `temp` factors. Earlier versions of this parser looked for `unit_code`
+        and `factors`, which never matched, so every file silently reported SI with
+        a length factor of 1.0 regardless of what it declared.
+
+        The returned `lengthFactor` converts file units to METRES. The parser
+        applies it to node coordinates, so everything downstream of `parse()` is in
+        metres unconditionally.
+        """
+        unit_code = int(dataset.get("units_code", dataset.get("unit_code", 1)))
+        unit_info = self.UNIT_CODES.get(
+            unit_code, {"name": "UNKNOWN", "description": "unknown"}
+        )
+
+        raw_length = dataset.get("length")
+        if raw_length is None:
+            legacy = dataset.get("factors")
+            raw_length = legacy[0] if legacy else None
+        if raw_length is None or float(raw_length) <= 0.0:
+            raw_length = self.UNIT_CODE_LENGTH_FACTORS.get(unit_code)
+            if raw_length is None:
+                raise UNVParseError(
+                    f"Dataset 164 declares unknown unit code {unit_code} and carries no "
+                    f"usable length factor, so node coordinates cannot be converted to "
+                    f"metres. Re-export the geometry in SI or MM units."
+                )
+            logger.warning(
+                "Dataset 164 has no explicit length factor; assuming %g m per file "
+                "unit from unit code %d (%s).", raw_length, unit_code, unit_info["name"]
+            )
+
+        length_factor = float(raw_length)
+        if length_factor != 1.0:
+            logger.info(
+                "Geometry is in %s; scaling node coordinates by %g to metres.",
+                unit_info["name"], length_factor,
+            )
 
         return {
             "code":                unit_code,
             "name":                unit_info["name"],
             "description":         unit_info["description"],
-            "lengthFactor":        float(factors[0]),
-            "forceFactor":         float(factors[1]),
-            "temperatureFactor":   float(factors[2]),
+            "lengthFactor":        length_factor,
+            "forceFactor":         float(dataset.get("force", 1.0) or 1.0),
+            "temperatureFactor":   float(dataset.get("temp", 1.0) or 1.0),
         }
 
     # ── Validation ────────────────────────────────────────────────────────────

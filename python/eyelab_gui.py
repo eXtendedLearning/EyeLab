@@ -24,7 +24,10 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import time
 import tkinter as tk
+import traceback
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -44,13 +47,14 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from mpl_toolkits.mplot3d import Axes3D, proj3d  # noqa: F401 - registers 3D projection
 
 # EyeLab modules
+from ar_watchdog import ARWatchdog
 from calibrate import (
     BOARD_COLS,
     BOARD_ROWS,
     load_calibration,
     save_calibration,
 )
-from camera_utils import list_cameras
+from camera_utils import CameraOpener, CameraScanner
 from eyelab_logger import SessionLogger
 from eyelab_version import VERSION_STRING
 from generate_markers import generate_markers, MARKER_SIZE_MM
@@ -79,7 +83,7 @@ from pose_estimator import (
 from registration import (
     SpatialRegistration,
     MarkerCorrespondence,
-    load_marker_config,
+    read_marker_config,
     marker_axes_from_normal,
     marker_object_corners,
     normal_label,
@@ -117,6 +121,13 @@ DETECTION_TUNING_HELP = {
 }
 
 
+# Opening a webcam is slow on Windows: 32 s for one DSHOW open measured on
+# 2026-09-19, and a fallback to the second backend can cost as much again.
+# The wait is generous because it no longer blocks the GUI - the button
+# says Cancel and the elapsed time is shown - but it is not unbounded.
+CAMERA_OPEN_TIMEOUT_S = 60.0
+
+
 # ── Main application ──────────────────────────────────────────────────────────
 
 class EyeLabApp:
@@ -133,11 +144,24 @@ class EyeLabApp:
         # Start session logger (captures stdout/stderr/exceptions to .logs/*.jsonl)
         self.session_log = SessionLogger.start(LOG_DIR)
 
+        # AR freeze diagnostics. A watchdog thread records where the main
+        # thread stalls, into .logs/ar_debug_*.jsonl; see ar_watchdog.py.
+        # Passive: it observes and writes files, it changes no behaviour.
+        self.watchdog = ARWatchdog(LOG_DIR).start()
+        self.watchdog.event(
+            "app_start",
+            version=VERSION_STRING,
+            opencv=cv2.__version__,
+            python=sys.version.split()[0],
+        )
+        self.watchdog.attach(self.root.after)
+
         # Route uncaught Tk callback errors into the session log
         def _tk_callback_exception(exc, val, tb):
             import traceback as _tb
             text = "".join(_tb.format_exception(exc, val, tb))
             self.session_log.error(f"Tk callback exception:\n{text}")
+            self.watchdog.event("tk_exception", error=repr(val), traceback=text)
             # Show in GUI log too
             try:
                 self.log(f"Tk callback exception: {val}", level="ERROR")
@@ -159,6 +183,13 @@ class EyeLabApp:
         self.pipeline: Optional[ArucoPipeline] = None
         self.ar_running = False
         self._ar_after_id: Optional[str] = None
+        # Camera opens and index scans run on worker threads; these hold
+        # the in-flight one so it can be polled and cancelled.
+        self._camera_opener: Optional[CameraOpener] = None
+        self._camera_scan: Optional[CameraScanner] = None
+        self._camera_open_deadline = 0.0
+        self._camera_open_started = 0.0
+        self._pending_detector_tuning = None
         self.fullscreen_win: Optional[tk.Toplevel] = None
         self.fullscreen_label: Optional[tk.Label] = None
         self._fullscreen_photo: Optional[ImageTk.PhotoImage] = None
@@ -848,14 +879,36 @@ class EyeLabApp:
     # ══════════════════════════════════════════════════════════════════════
 
     def _refresh_cameras(self) -> None:
-        cams = list_cameras()
+        """Scan camera indices on a worker thread.
+
+        One VideoCapture open can take tens of seconds on Windows and this
+        runs at startup, so it must never sit on the tk main thread.
+        """
+        if self._camera_scan is not None:
+            return
+        self.camera_combo["values"] = []
+        self.camera_var.set("Scanning cameras...")
+        self._camera_scan = CameraScanner().start()
+        self._await_camera_scan()
+
+    def _await_camera_scan(self) -> None:
+        scan = self._camera_scan
+        if scan is None:
+            return
+        cams = scan.poll()
+        if cams is None:
+            self.root.after(200, self._await_camera_scan)
+            return
+
+        self._camera_scan = None
+        self._camera_indices = cams
         labels = [f"Camera {i}" for i in cams]
         self.camera_combo["values"] = labels
         if labels:
             self.camera_combo.current(0)
         else:
             self.camera_var.set("No camera found")
-        self._camera_indices = cams
+        self.watchdog.event("camera_scan", cameras=cams)
 
     def _get_camera_index(self) -> int:
         idx = self.camera_combo.current()
@@ -880,9 +933,18 @@ class EyeLabApp:
 
         if MARKER_CONFIG_FILE.exists():
             try:
-                self.correspondences = load_marker_config(str(MARKER_CONFIG_FILE))
+                marker_config = read_marker_config(str(MARKER_CONFIG_FILE))
+                self.correspondences = marker_config.markers
                 self.registration.set_correspondences(self.correspondences)
                 self.corr_status_var.set(f"{len(self.correspondences)} correspondences")
+                # Each structure records the marker size actually printed for it.
+                # Adopt it so the session default matches the physical markers.
+                if marker_config.default_marker_size_mm is not None:
+                    self.marker_size_var.set(marker_config.default_marker_size_mm)
+                    self.log(
+                        f"Marker size for this structure: "
+                        f"{marker_config.default_marker_size_mm:g} mm (from marker config)"
+                    )
                 self.log(f"Marker config loaded: {len(self.correspondences)} correspondences")
             except Exception as e:
                 self.log(f"Failed to load marker config: {e}")
@@ -1468,11 +1530,23 @@ class EyeLabApp:
     #  Correspondence editor (marker ↔ mesh node)
     # ══════════════════════════════════════════════════════════════════════
 
+    def _structure_marker_size_mm(self) -> float:
+        """Marker edge size configured for the currently loaded structure (mm)."""
+        try:
+            size_mm = float(self.marker_size_var.get())
+        except (tk.TclError, ValueError):
+            return MARKER_SIZE_MM
+        return size_mm if size_mm > 0 else MARKER_SIZE_MM
+
     def _show_correspondence_editor(self) -> None:
         CorrespondenceEditor(self.root, self)
 
     def _save_correspondences(self) -> None:
-        save_marker_config(str(MARKER_CONFIG_FILE), self.correspondences)
+        save_marker_config(
+            str(MARKER_CONFIG_FILE),
+            self.correspondences,
+            default_marker_size_mm=self._structure_marker_size_mm(),
+        )
         self.registration.set_correspondences(self.correspondences)
         self.corr_status_var.set(f"{len(self.correspondences)} correspondences")
         self._update_3d_preview()
@@ -1482,7 +1556,9 @@ class EyeLabApp:
     # ══════════════════════════════════════════════════════════════════════
 
     def _toggle_ar(self) -> None:
-        if self.ar_running:
+        if self._camera_opener is not None:
+            self._cancel_ar_open("cancelled")
+        elif self.ar_running:
             self._stop_ar()
         else:
             self._start_ar()
@@ -1517,18 +1593,98 @@ class EyeLabApp:
         except ValueError as e:
             messagebox.showerror("Detection Tuning", str(e))
             return
-        try:
-            self.pipeline = ArucoPipeline(
-                camera_index=cam_idx,
-                calibration_path=str(CALIBRATION_FILE),
-                board_correspondences=self.correspondences,
-                marker_size_mm=self.marker_size_var.get(),
-                marker_size_by_id_mm=self._marker_size_by_id_mm(),
-                allowed_ids=self._expected_detection_ids(),
-                detector_tuning=detector_tuning,
+        self.watchdog.event(
+            "ar_start_requested",
+            camera_index=cam_idx,
+            marker_size_mm=self.marker_size_var.get(),
+            correspondences=len(self.correspondences),
+            geometry_nodes=len(self.geometry_data.get("nodes", [])) if self.geometry_data else 0,
+            geometry_edges=len(self.geometry_data.get("traceLines", [])) if self.geometry_data else 0,
+            loop_delay_ms=self._ar_loop_delay_ms(),
+        )
+
+        # Opening the device is the slow, hang-prone step (32 s measured on
+        # 2026-09-19), so it runs on a worker thread and the GUI polls for it.
+        self._pending_detector_tuning = detector_tuning
+        self._camera_opener = CameraOpener(cam_idx).start()
+        self._camera_open_started = time.monotonic()
+        self._camera_open_deadline = self._camera_open_started + CAMERA_OPEN_TIMEOUT_S
+        self.ar_btn.configure(text="Cancel")
+        self.ar_fps_var.set(f"Opening camera {cam_idx}...")
+        self.log(f"Opening camera {cam_idx}...")
+        self._await_camera()
+
+    def _await_camera(self) -> None:
+        opener = self._camera_opener
+        if opener is None:
+            return
+        result = opener.poll()
+        if result is None:
+            if time.monotonic() > self._camera_open_deadline:
+                self._cancel_ar_open("timed out")
+                detail = (
+                    f"Camera {opener.camera_index} did not open within "
+                    f"{CAMERA_OPEN_TIMEOUT_S:.0f} s. Close any other application "
+                    "using the webcam, or unplug and replug it, then try again."
+                )
+                self.log(detail, level="ERROR")
+                messagebox.showerror("Camera Error", detail)
+                return
+            waited = time.monotonic() - self._camera_open_started
+            self.ar_fps_var.set(
+                f"Opening camera {opener.camera_index}... {waited:.0f}s"
             )
-            self.pipeline.start()
+            self.root.after(100, self._await_camera)
+            return
+
+        self._camera_opener = None
+        self.ar_btn.configure(text="Start AR")
+        self.ar_fps_var.set("")
+        self.watchdog.event(
+            "camera_open_result",
+            ok=result.ok, backend=result.backend,
+            seconds=result.elapsed_s, attempts=result.attempts,
+        )
+        if not result.ok:
+            self.log(result.detail, level="ERROR")
+            messagebox.showerror("Camera Error", result.detail)
+            return
+        self.log(f"{result.detail} ({result.elapsed_s:.1f} s)")
+        self._begin_ar(result.cap)
+
+    def _cancel_ar_open(self, reason: str) -> None:
+        opener, self._camera_opener = self._camera_opener, None
+        if opener is not None:
+            # Releases the device even if the open lands after this point.
+            opener.cancel()
+        self.ar_btn.configure(text="Start AR")
+        self.ar_fps_var.set("")
+        self.watchdog.event("camera_open_cancelled", reason=reason)
+        self.log(f"Camera open {reason}.", level="WARNING")
+
+    def _begin_ar(self, cap) -> None:
+        """Build the pipeline around an already-opened camera and run."""
+        cam_idx = self._get_camera_index()
+        try:
+            with self.watchdog.phase("start.pipeline_init"):
+                self.pipeline = ArucoPipeline(
+                    camera_index=cam_idx,
+                    calibration_path=str(CALIBRATION_FILE),
+                    board_correspondences=self.correspondences,
+                    marker_size_mm=self.marker_size_var.get(),
+                    marker_size_by_id_mm=self._marker_size_by_id_mm(),
+                    allowed_ids=self._expected_detection_ids(),
+                    detector_tuning=self._pending_detector_tuning,
+                )
+            with self.watchdog.phase("start.capture_thread"):
+                self.pipeline.start(cap=cap)
         except Exception as e:
+            self.watchdog.event("ar_start_failed", error=repr(e))
+            try:
+                cap.release()
+            except Exception:
+                pass
+            self.pipeline = None
             messagebox.showerror("Camera Error", str(e))
             return
 
@@ -1538,16 +1694,26 @@ class EyeLabApp:
         self.fullscreen_btn.configure(state="normal")
         self.notebook.select(self.ar_tab)
         self.log("AR overlay started.")
+        self.watchdog.event(
+            "ar_started",
+            board_mode=bool(self.pipeline.uses_structure_board),
+            capture=self.pipeline.capture_stats(),
+        )
         self._ar_loop()
 
     def _stop_ar(self) -> None:
         self.ar_running = False
+        self.watchdog.event(
+            "ar_stop_requested",
+            capture=self.pipeline.capture_stats() if self.pipeline is not None else None,
+        )
         self._close_fullscreen_ar()
         if self._ar_after_id is not None:
             self.root.after_cancel(self._ar_after_id)
             self._ar_after_id = None
         if self.pipeline:
-            self.pipeline.stop()
+            with self.watchdog.phase("stop.camera_release"):
+                self.pipeline.stop()
         self.pipeline = None
         self.ar_btn.configure(text="Start AR")
         self.screenshot_btn.configure(state="disabled")
@@ -1558,14 +1724,46 @@ class EyeLabApp:
         if hasattr(self, "det_diag_var"):
             self.det_diag_var.set("AR stopped.")
         self.log("AR overlay stopped.")
+        self.watchdog.event("ar_stopped")
 
     def _ar_loop(self) -> None:
         if not self.ar_running or self.pipeline is None:
             return
 
-        result = self.pipeline.process_frame()
-        if result is not None:
-            registration_result = None
+        try:
+            self._ar_frame()
+        except Exception as e:
+            self.watchdog.event(
+                "ar_loop_exception", error=repr(e), traceback=traceback.format_exc(),
+            )
+            self.log(f"AR loop error: {e}", level="ERROR")
+            self._stop_ar()
+            return
+
+        error = self.pipeline.capture_error() if self.pipeline is not None else None
+        if error:
+            self.watchdog.event("capture_failed", error=error)
+            self.log(error, level="ERROR")
+            self._stop_ar()
+            messagebox.showerror("Camera Error", error)
+            return
+
+        self._ar_after_id = self.root.after(self._ar_loop_delay_ms(), self._ar_loop)
+
+    def _ar_frame(self) -> None:
+        """Render one AR frame.
+
+        Split out of ``_ar_loop`` so that every stage runs inside a named
+        watchdog phase: if the GUI freezes, the stage the main thread was in
+        is named in .logs/ar_debug_*.jsonl (see ar_watchdog.py).
+        """
+        with self.watchdog.phase("frame.process"):
+            result = self.pipeline.process_frame()
+        if result is None:
+            self.watchdog.frame(no_frame=True, capture=self.pipeline.capture_stats())
+            return
+
+        with self.watchdog.phase("frame.registration"):
             structure_ids = self._structure_marker_ids()
             structure_seen = sum(1 for marker in result.markers if marker.marker_id in structure_ids)
             hammer_seen = sum(1 for marker in result.markers if marker.marker_id in self.hammer_marker_ids)
@@ -1578,12 +1776,14 @@ class EyeLabApp:
                     )
             registration_result = self.registration.compute()
 
+        with self.watchdog.phase("frame.diagnostics"):
             status_text = self._ar_status_text(result, structure_seen, hammer_seen, pose_seen)
             self._update_detection_diagnostics(result, structure_seen, hammer_seen, pose_seen)
             show_ar = self._is_workspace_tab_selected(self.ar_tab) or self._fullscreen_is_open()
             show_flt = self._is_workspace_tab_selected(self.flt_tab)
 
-            if show_ar:
+        if show_ar:
+            with self.watchdog.phase("frame.overlay"):
                 vis = self.pipeline.draw_overlay(
                     result, draw_markers=True, draw_axes=True,
                     draw_marker_axes=bool(self.show_marker_axes_var.get()),
@@ -1600,18 +1800,29 @@ class EyeLabApp:
                 )
                 if self.geometry_data and (board_pose_ready or registration_result is not None):
                     self._draw_registered_wireframe(vis, result)
+            with self.watchdog.phase("frame.display"):
                 self._update_ar_display(vis)
-                self._last_ar_frame = vis
+            self._last_ar_frame = vis
 
-            if show_flt:
+        if show_flt:
+            with self.watchdog.phase("frame.filtered"):
                 self._update_filtered_display(result, status_text)
 
-            # FPS
-            self.ar_fps_var.set(
-                f"FPS: {result.fps:.1f} | S {structure_seen} | Pose {pose_seen} | H {hammer_seen}"
-            )
-
-        self._ar_after_id = self.root.after(self._ar_loop_delay_ms(), self._ar_loop)
+        # FPS
+        self.ar_fps_var.set(
+            f"FPS: {result.fps:.1f} | S {structure_seen} | Pose {pose_seen} | H {hammer_seen}"
+        )
+        self.watchdog.frame(
+            capture_fps=round(result.fps, 1),
+            markers=len(result.markers),
+            structure=structure_seen,
+            pose_markers=pose_seen,
+            hammer=hammer_seen,
+            pose=result.pose is not None,
+            coasting=bool(result.pose.coasted) if result.pose is not None else False,
+            views=("ar" if show_ar else "") + ("+flt" if show_flt else ""),
+            capture=self.pipeline.capture_stats(),
+        )
 
     def _is_workspace_tab_selected(self, tab: ttk.Frame) -> bool:
         try:
@@ -1824,12 +2035,22 @@ class EyeLabApp:
     # ══════════════════════════════════════════════════════════════════════
 
     def _on_close(self) -> None:
-        if self.ar_running:
-            self._stop_ar()
-        else:
-            self._close_fullscreen_ar()
-        plt.close("all")
-        SessionLogger.shutdown()
+        self.watchdog.event("app_close")
+        if self._camera_opener is not None:
+            self._cancel_ar_open("app closed")
+        if self._camera_scan is not None:
+            self._camera_scan.cancel()
+            self._camera_scan = None
+        with self.watchdog.phase("close.stop_ar"):
+            if self.ar_running:
+                self._stop_ar()
+            else:
+                self._close_fullscreen_ar()
+        with self.watchdog.phase("close.matplotlib"):
+            plt.close("all")
+        with self.watchdog.phase("close.session_log"):
+            SessionLogger.shutdown()
+        self.watchdog.stop(reason="app_close")
         self.root.destroy()
 
     # ══════════════════════════════════════════════════════════════════════

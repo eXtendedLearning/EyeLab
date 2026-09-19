@@ -156,6 +156,45 @@ class RegistrationResult:
 
 # ── Marker config I/O ─────────────────────────────────────────────────────────
 
+@dataclass
+class MarkerConfig:
+    """A structure's marker set plus the default marker edge size for that structure."""
+    markers: list[MarkerCorrespondence] = field(default_factory=list)
+    default_marker_size_mm: Optional[float] = None
+
+
+def read_marker_config(json_path: str) -> MarkerConfig:
+    """
+    Load a marker config, including the per-structure default marker size.
+
+    Each structure keeps its own config file, so `defaultMarkerSizeMm` is how a
+    structure records the marker size actually printed and applied to it. Markers
+    may still override it individually via `markerSizeMm`.
+    """
+    with open(json_path) as f:
+        data = json.load(f)
+    default_mm = data.get("defaultMarkerSizeMm")
+    return MarkerConfig(
+        markers=_correspondences_from_entries(data["markers"]),
+        default_marker_size_mm=float(default_mm) if default_mm is not None else None,
+    )
+
+
+def _correspondences_from_entries(entries: list[dict]) -> list[MarkerCorrespondence]:
+    correspondences = []
+    for entry in entries:
+        correspondences.append(MarkerCorrespondence(
+            marker_id=entry["markerId"],
+            unv_position=np.array(entry["unvPosition"], dtype=np.float64),
+            node_id=entry.get("nodeId"),
+            description=entry.get("description", ""),
+            normal=np.array(entry.get("normal", DEFAULT_MARKER_NORMAL), dtype=np.float64),
+            roll_deg=float(entry.get("rollDeg", 0.0)),
+            marker_size_mm=entry.get("markerSizeMm"),
+        ))
+    return correspondences
+
+
 def load_marker_config(json_path: str) -> list[MarkerCorrespondence]:
     """
     Load marker correspondences from a JSON file.
@@ -178,37 +217,35 @@ def load_marker_config(json_path: str) -> list[MarkerCorrespondence]:
     """
     with open(json_path) as f:
         data = json.load(f)
-
-    correspondences = []
-    for entry in data["markers"]:
-        correspondences.append(MarkerCorrespondence(
-            marker_id=entry["markerId"],
-            unv_position=np.array(entry["unvPosition"], dtype=np.float64),
-            node_id=entry.get("nodeId"),
-            description=entry.get("description", ""),
-            normal=np.array(entry.get("normal", DEFAULT_MARKER_NORMAL), dtype=np.float64),
-            roll_deg=float(entry.get("rollDeg", 0.0)),
-            marker_size_mm=entry.get("markerSizeMm"),
-        ))
-    return correspondences
+    return _correspondences_from_entries(data["markers"])
 
 
-def save_marker_config(json_path: str, correspondences: list[MarkerCorrespondence]) -> None:
-    """Save marker correspondences to JSON."""
-    data = {
-        "markers": [
-            {
-                "markerId": c.marker_id,
-                "unvPosition": c.unv_position.tolist(),
-                "normal": normalize_vector(c.normal).tolist(),
-                "rollDeg": float(c.roll_deg),
-                "markerSizeMm": c.marker_size_mm,
-                "nodeId": c.node_id,
-                "description": c.description,
-            }
-            for c in correspondences
-        ]
-    }
+def save_marker_config(
+    json_path: str,
+    correspondences: list[MarkerCorrespondence],
+    default_marker_size_mm: Optional[float] = None,
+) -> None:
+    """
+    Save marker correspondences to JSON.
+
+    `default_marker_size_mm` records the marker size printed for THIS structure.
+    It is the fallback for markers that do not carry their own `marker_size_mm`.
+    """
+    data: dict = {}
+    if default_marker_size_mm is not None:
+        data["defaultMarkerSizeMm"] = float(default_marker_size_mm)
+    data["markers"] = [
+        {
+            "markerId": c.marker_id,
+            "unvPosition": c.unv_position.tolist(),
+            "normal": normalize_vector(c.normal).tolist(),
+            "rollDeg": float(c.roll_deg),
+            "markerSizeMm": c.marker_size_mm,
+            "nodeId": c.node_id,
+            "description": c.description,
+        }
+        for c in correspondences
+    ]
     Path(json_path).parent.mkdir(parents=True, exist_ok=True)
     with open(json_path, "w") as f:
         json.dump(data, f, indent=2)

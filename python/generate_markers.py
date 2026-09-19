@@ -21,9 +21,16 @@ import numpy as np
 
 # EyeLab marker specification (flangia / L-shaped structure)
 ARUCO_DICT = cv2.aruco.DICT_4X4_50   # 4x4 bit, 50 unique IDs
-MARKER_SIZE_MM = 12.0                  # Physical marker edge length (mm)
-GRID_SPACING_MM = 16.0                 # Grid spacing on flangia (mm)
-# Physical border between markers: 16 - 12 = 4 mm gap on each side => 2 mm each side
+MARKER_SIZE_MM = 20.0                  # Default physical marker edge length (mm)
+GRID_SPACING_MM = 26.0                 # Default grid spacing on the printed sheet (mm)
+# Physical border between markers: 26 - 20 = 6 mm gap => 3 mm quiet zone each side.
+#
+# 20 mm is the project standard and matches output/pdf/aruco_markers_20mm_A4.pdf.
+# It is only a DEFAULT: each structure stores its own size in that structure's
+# marker config (defaultMarkerSizeMm), and individual markers may override it
+# (MarkerCorrespondence.marker_size_mm). Whatever is configured must match the
+# printed marker, because a size mismatch scales every pose linearly while
+# leaving the reprojection residual at zero -- no quality gate can detect it.
 
 
 def mm_to_px(mm: float, dpi: int) -> int:

@@ -17,7 +17,7 @@ Current XREAL planning lives in `CONTEXT.md`, `docs/adr/`, and `docs/tasks/`.
 - **UNV parsing** — load Siemens Universal File Format geometry (datasets 2411 / 82 / 2420 / 164)
   via `pyuff`, with displacement coordinate-system validation.
 - **3D geometry preview** — interactive matplotlib viewer embedded in the GUI.
-- **ArUco marker generation** — DICT_4X4_50, 12 mm markers, named generically
+- **ArUco marker generation** — DICT_4X4_50, 20 mm markers by default, named generically
   (`aruco01`, `aruco02`, …) so printed sheets can be reused across sessions.
 - **ChArUco camera calibration** — 5×7 board, persistent OpenCV YAML output.
 - **Marker-to-mesh registration** — Kabsch / Procrustes rigid alignment between detected
@@ -128,7 +128,10 @@ matching, and a Simcenter Testlab COM bridge for live state synchronisation.
 
 - Python 3.9+
 - A USB webcam (any resolution; 720p+ recommended for marker detection at distance)
-- Printed ArUco markers (DICT_4X4_50, 12 mm) and a printed ChArUco board for calibration
+- Printed ArUco markers (DICT_4X4_50, 20 mm default) and a printed ChArUco board for calibration.
+  The configured size must match the printed size: a mismatch scales every pose
+  linearly and produces no reprojection error, so nothing in the pipeline can
+  detect it. Each structure stores its own size in its marker config.
 
 Core Python dependencies: `numpy`, `scipy`, `opencv-python`, `opencv-contrib-python`,
 `pyuff`, `pandas`, `matplotlib`, `pyyaml`, `Pillow`. See `python/requirements.txt`.

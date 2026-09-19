@@ -29,7 +29,7 @@ import cv2
 import numpy as np
 import yaml
 
-from calibrate import load_calibration
+from calibrate import describe_resolution_mismatch, read_calibration
 from camera_utils import open_camera
 from pose_lock import (
     LOCK_SEARCHING,
@@ -151,16 +151,51 @@ ARUCO_PREPROCESS_CLIP_LIMIT = DEFAULT_ARUCO_DETECTOR_TUNING.clip_limit
 
 # ── Threaded capture ──────────────────────────────────────────────────────────
 
+# A cv2 read that fails returns immediately, so a reader loop without this
+# pause spins as fast as the interpreter allows: 70.9 million failed reads in
+# 30 s were measured on 2026-09-19, which starved the tk main thread and left
+# the webcam needing a replug. The pause costs nothing while frames arrive,
+# because a successful read blocks until the next frame is ready.
+CAPTURE_RETRY_SLEEP_S = 0.01
+# No frame for this long means the device is gone or held by another process.
+# Reading forever cannot recover it, so the reader stops and says so.
+CAPTURE_GIVE_UP_S = 5.0
+
+
 class ThreadedCapture:
     """Non-blocking webcam capture running in a daemon thread."""
 
-    def __init__(self, camera_index: int = 0, width: int = 1280, height: int = 720):
-        self.cap = open_camera(camera_index, width=width, height=height, fps=30)
+    def __init__(
+        self,
+        camera_index: int = 0,
+        width: int = 1280,
+        height: int = 720,
+        cap: Optional[cv2.VideoCapture] = None,
+    ):
+        # A caller that already opened the device (off the UI thread, since
+        # opening can block for tens of seconds on Windows) passes it in.
+        self.camera_index = camera_index
+        self.cap = cap if cap is not None else open_camera(
+            camera_index, width=width, height=height, fps=30,
+        )
+        self.error: Optional[str] = None
 
         self._frame: Optional[np.ndarray] = None
         self._lock = threading.Lock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
+
+        # Capture-health counters for the AR diagnostics log. Written only
+        # by the reader thread and read without a lock: they are advisory,
+        # and a lock in the read loop would perturb the timing they exist
+        # to measure.
+        self._reads = 0
+        self._failures = 0
+        self._fail_streak = 0
+        self._max_fail_streak = 0
+        self._max_read_ms = 0.0
+        self._last_ok: Optional[float] = None
+        self._join_timed_out = False
 
     @property
     def is_opened(self) -> bool:
@@ -183,11 +218,35 @@ class ThreadedCapture:
         return self
 
     def _reader(self) -> None:
+        last_ok = time.perf_counter()
         while self._running:
+            started = time.perf_counter()
             ok, frame = self.cap.read()
+            now = time.perf_counter()
+            self._reads += 1
+            self._max_read_ms = max(self._max_read_ms, (now - started) * 1000.0)
             if ok:
                 with self._lock:
                     self._frame = frame
+                last_ok = now
+                self._last_ok = now
+                self._fail_streak = 0
+                continue
+
+            self._failures += 1
+            self._fail_streak += 1
+            self._max_fail_streak = max(self._max_fail_streak, self._fail_streak)
+            starved_s = now - last_ok
+            if starved_s >= CAPTURE_GIVE_UP_S:
+                self.error = (
+                    f"Camera {self.camera_index} delivered no frames for "
+                    f"{starved_s:.0f} s ({self._failures} failed reads). Close any "
+                    "other application using the webcam, or unplug and replug it, "
+                    "then start again."
+                )
+                self._running = False
+                break
+            time.sleep(CAPTURE_RETRY_SLEEP_S)
 
     def read(self) -> Optional[np.ndarray]:
         with self._lock:
@@ -197,7 +256,33 @@ class ThreadedCapture:
         self._running = False
         if self._thread is not None:
             self._thread.join(timeout=2.0)
+            # A reader still alive here is inside cap.read(); releasing the
+            # device under it is a known Windows hang, so record the fact.
+            self._join_timed_out = self._thread.is_alive()
         self.cap.release()
+
+    def stats(self) -> dict:
+        """Capture-thread health snapshot for the AR diagnostics log.
+
+        Deliberately touches no cv2.VideoCapture method: querying the
+        device from the GUI thread while the reader is inside ``read()``
+        can itself block, which is one of the freezes being hunted.
+        """
+        last_ok = self._last_ok
+        return {
+            "reads": self._reads,
+            "failures": self._failures,
+            "fail_streak": self._fail_streak,
+            "max_fail_streak": self._max_fail_streak,
+            "max_read_ms": round(self._max_read_ms, 1),
+            "last_ok_age_ms": (
+                None if last_ok is None
+                else round((time.perf_counter() - last_ok) * 1000.0, 1)
+            ),
+            "thread_alive": bool(self._thread is not None and self._thread.is_alive()),
+            "join_timed_out": self._join_timed_out,
+            "error": self.error,
+        }
 
 
 # ── CLAHE pre-processing ─────────────────────────────────────────────────────
@@ -871,8 +956,12 @@ class ArucoPipeline:
         # Camera calibration
         self.camera_matrix: Optional[np.ndarray] = None
         self.dist_coeffs: Optional[np.ndarray] = None
+        self.calibration_image_size: Optional[tuple[int, int]] = None
         if calibration_path and Path(calibration_path).exists():
-            self.camera_matrix, self.dist_coeffs = load_calibration(calibration_path)
+            calibration = read_calibration(calibration_path)
+            self.camera_matrix = calibration.camera_matrix
+            self.dist_coeffs = calibration.dist_coeffs
+            self.calibration_image_size = calibration.image_size
 
         # Board
         board = None
@@ -931,10 +1020,27 @@ class ArucoPipeline:
         self._fps_count = 0
         self._fps = 0.0
 
-    def start(self) -> None:
-        self._capture = ThreadedCapture(self.camera_index)
+    def start(self, cap: Optional[cv2.VideoCapture] = None) -> None:
+        """Start capture. ``cap`` is an already-opened device, if the caller
+        opened it off its own thread (see ``camera_utils.CameraOpener``)."""
+        self._capture = ThreadedCapture(self.camera_index, cap=cap)
         if not self._capture.is_opened:
             raise RuntimeError(f"Cannot open camera {self.camera_index}")
+
+        # The camera may ignore the requested resolution, so check what it actually
+        # delivers against what the calibration was computed at. A mismatch is a
+        # silent scale error on every pose that no reprojection-based gate can see,
+        # so refuse rather than produce plausible-looking wrong measurements.
+        if self.camera_matrix is not None:
+            mismatch = describe_resolution_mismatch(
+                self.calibration_image_size,
+                (self._capture.width, self._capture.height),
+            )
+            if mismatch is not None:
+                self._capture.stop()
+                self._capture = None
+                raise RuntimeError(mismatch)
+
         self._capture.start()
 
     def stop(self) -> None:
@@ -957,6 +1063,14 @@ class ArucoPipeline:
     @property
     def is_running(self) -> bool:
         return self._capture is not None and self._capture.is_opened
+
+    def capture_stats(self) -> Optional[dict]:
+        """Capture-thread health, or None when the pipeline is stopped."""
+        return self._capture.stats() if self._capture is not None else None
+
+    def capture_error(self) -> Optional[str]:
+        """Why the capture thread gave up, or None while it is healthy."""
+        return self._capture.error if self._capture is not None else None
 
     def process_frame(self) -> Optional[FrameResult]:
         """Process one frame. Returns None if no frame available."""

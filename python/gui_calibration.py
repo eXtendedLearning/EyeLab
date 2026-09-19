@@ -8,6 +8,7 @@ eyelab_gui.py so the main module only hosts the application shell.
 from __future__ import annotations
 
 import os
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import TYPE_CHECKING
@@ -22,7 +23,7 @@ from calibrate import (
     make_charuco_board,
     generate_board_image,
 )
-from camera_utils import open_camera
+from camera_utils import CameraOpener
 from gui_common import CHARUCO_SQUARE_M, CHARUCO_MARKER_M
 
 if TYPE_CHECKING:
@@ -270,6 +271,13 @@ class ArucoCalibrationWizard:
         self.app._start_calibration()
 
 
+# Matches eyelab_gui.CAMERA_OPEN_TIMEOUT_S; see camera_utils for why an open
+# needs a timeout at all.
+CAMERA_OPEN_TIMEOUT_S = 60.0
+# A live preview that has had no frame for this long is not coming back.
+NO_FRAME_GIVE_UP_S = 5.0
+
+
 class CalibrationWindow:
     """Live ChArUco calibration window."""
 
@@ -281,12 +289,8 @@ class CalibrationWindow:
         self.win.transient(parent)
         self.win.protocol("WM_DELETE_WINDOW", self._abort)
 
-        self.cap = open_camera(camera_index)
-        if not self.cap.isOpened():
-            messagebox.showerror("Camera Error", f"Cannot open camera {camera_index}.")
-            self.win.destroy()
-            return
-
+        self.camera_index = camera_index
+        self.cap = None
         self.board = make_charuco_board(BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_M, CHARUCO_MARKER_M)
         self.detector = cv2.aruco.CharucoDetector(self.board)
         self.all_corners = []
@@ -296,8 +300,9 @@ class CalibrationWindow:
         self._current_corners = None
         self._current_ids = None
         self._frame_failures = 0
+        self._no_frame_since = None
 
-        self.label = ttk.Label(self.win, text="Waiting for camera frame...", anchor="center")
+        self.label = ttk.Label(self.win, text=f"Opening camera {camera_index}...", anchor="center")
         self.label.pack(fill=tk.BOTH, expand=True)
 
         status = ttk.Frame(self.win)
@@ -313,7 +318,51 @@ class CalibrationWindow:
         self._photo = None
         self._running = True
         self.win.after(100, self.win.focus_force)
+
+        # Opening a camera blocks for tens of seconds on Windows, so it runs
+        # on a worker thread while this window stays responsive.
+        self._opener = CameraOpener(camera_index).start()
+        self._open_started = time.monotonic()
+        self._open_deadline = self._open_started + CAMERA_OPEN_TIMEOUT_S
+        self._await_camera()
+
+    def _await_camera(self) -> None:
+        if not self._running or self._opener is None:
+            return
+        result = self._opener.poll()
+        if result is None:
+            if time.monotonic() > self._open_deadline:
+                self._camera_unavailable(
+                    f"Camera {self.camera_index} did not open within "
+                    f"{CAMERA_OPEN_TIMEOUT_S:.0f} s. Close any other application "
+                    "using the webcam, or unplug and replug it, then try again."
+                )
+                return
+            waited = time.monotonic() - self._open_started
+            self.label.configure(
+                text=f"Opening camera {self.camera_index}... {waited:.0f}s"
+            )
+            self.win.after(100, self._await_camera)
+            return
+
+        self._opener = None
+        if not result.ok:
+            self._camera_unavailable(result.detail)
+            return
+        self.cap = result.cap
+        self.status_var.set(
+            f"Captured: 0/{self.min_frames}  -  SPACE/Capture to save frame, ESC/Finish to compute"
+        )
         self._loop()
+
+    def _camera_unavailable(self, detail: str) -> None:
+        """Report a camera that never came up, and leave the window closable."""
+        opener, self._opener = getattr(self, "_opener", None), None
+        if opener is not None:
+            opener.cancel()
+        self._running = False
+        self.label.configure(text=detail, wraplength=680, justify="center")
+        self.status_var.set("Camera unavailable - close this window and retry.")
 
     def _loop(self) -> None:
         if not self._running:
@@ -321,6 +370,7 @@ class CalibrationWindow:
         ok, frame = self.cap.read()
         if ok:
             self._frame_failures = 0
+            self._no_frame_since = None
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if self.image_size is None:
                 self.image_size = (gray.shape[1], gray.shape[0])
@@ -361,9 +411,35 @@ class CalibrationWindow:
             self._gray = gray
         else:
             self._frame_failures += 1
+            now = time.monotonic()
+            if self._no_frame_since is None:
+                self._no_frame_since = now
+            elif now - self._no_frame_since >= NO_FRAME_GIVE_UP_S:
+                # Reading a dead device forever is what left the window stuck
+                # on "Waiting for camera frame..." with no way to tell why.
+                self._release_camera()
+                self._camera_unavailable(
+                    f"Camera {self.camera_index} stopped delivering frames "
+                    f"({self._frame_failures} failed reads in "
+                    f"{now - self._no_frame_since:.0f} s). Close any other "
+                    "application using the webcam, or unplug and replug it."
+                )
+                return
             if self._frame_failures == 1 or self._frame_failures % 30 == 0:
                 self.status_var.set("No camera frame received. Check camera selection and close other camera apps.")
         self.win.after(30, self._loop)
+
+    def _release_camera(self) -> None:
+        """Release the device once, whether or not it ever opened."""
+        opener, self._opener = getattr(self, "_opener", None), None
+        if opener is not None:
+            opener.cancel()
+        cap, self.cap = self.cap, None
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
 
     def _capture(self, event=None) -> None:
         if not hasattr(self, "_gray"):
@@ -384,7 +460,7 @@ class CalibrationWindow:
             self.status_var.set(f"Need {self.min_frames} frames (have {n}). Keep capturing.")
             return
         self._running = False
-        self.cap.release()
+        self._release_camera()
         self._unbind_keys()
 
         rms, cam_mat, dist, _, _ = cv2.aruco.calibrateCameraCharuco(
@@ -395,7 +471,7 @@ class CalibrationWindow:
 
     def _abort(self) -> None:
         self._running = False
-        self.cap.release()
+        self._release_camera()
         self._unbind_keys()
         self.win.destroy()
 

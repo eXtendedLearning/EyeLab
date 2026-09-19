@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest.mock import patch
 
@@ -5,12 +6,15 @@ import numpy as np
 
 import cv2
 
+import pose_estimator
+
 from pose_estimator import (
     ARUCO_PREPROCESS_CLIP_LIMIT,
     ArucoDetectorTuning,
     ArucoPipeline,
     DETECTOR_TUNING_PRESETS,
     LStructureDetector,
+    ThreadedCapture,
     make_detector_parameters,
 )
 from registration import MarkerCorrespondence
@@ -204,6 +208,87 @@ class ArucoPipelineModeTests(unittest.TestCase):
         pipeline.apply_allowed_ids({3, 4})
 
         self.assertEqual(pipeline.l_detector.allowed_ids, {3, 4})
+
+
+class _FakeCapture:
+    """Minimal cv2.VideoCapture stand-in: N good frames, then failures."""
+
+    def __init__(self, good_frames: int):
+        self.good_frames = good_frames
+        self.released = False
+
+    def isOpened(self):
+        return True
+
+    def set(self, *_args):
+        return True
+
+    def get(self, *_args):
+        return 0.0
+
+    def read(self):
+        if self.good_frames > 0:
+            self.good_frames -= 1
+            return True, np.zeros((4, 4, 3), dtype=np.uint8)
+        time.sleep(0.001)
+        return False, None
+
+    def release(self):
+        self.released = True
+
+
+class ThreadedCaptureStatsTests(unittest.TestCase):
+    """The capture counters feeding the AR freeze diagnostics log."""
+
+    def _capture(self, good_frames: int) -> ThreadedCapture:
+        with patch("pose_estimator.open_camera", return_value=_FakeCapture(good_frames)):
+            return ThreadedCapture(camera_index=0)
+
+    def test_counts_reads_and_failures(self):
+        capture = self._capture(good_frames=3)
+        capture.start()
+        deadline = time.perf_counter() + 0.3
+        while capture._reads < 10 and time.perf_counter() < deadline:
+            time.sleep(0.005)
+        capture.stop()
+
+        stats = capture.stats()
+        self.assertGreaterEqual(stats["reads"], 10)
+        self.assertGreaterEqual(stats["failures"], 1)
+        self.assertGreaterEqual(stats["max_fail_streak"], 1)
+        self.assertEqual(stats["fail_streak"], stats["max_fail_streak"])
+        self.assertIsNotNone(stats["last_ok_age_ms"])
+        self.assertFalse(stats["thread_alive"])
+        self.assertFalse(stats["join_timed_out"])
+
+    def test_gives_up_instead_of_spinning_on_a_dead_camera(self):
+        capture = self._capture(good_frames=0)
+        with patch.object(pose_estimator, "CAPTURE_GIVE_UP_S", 0.2):
+            capture.start()
+            deadline = time.perf_counter() + 3.0
+            while capture._thread.is_alive() and time.perf_counter() < deadline:
+                time.sleep(0.01)
+
+        stats = capture.stats()
+        self.assertFalse(stats["thread_alive"], "the reader must stop, not retry forever")
+        self.assertIsNotNone(stats["error"])
+        self.assertIn("no frames", stats["error"])
+        # The bug this replaces managed 70.9 million failed reads in 30 s.
+        self.assertLess(stats["reads"], 200, "failed reads must be paced, not spun")
+        capture.stop()
+
+    def test_accepts_an_already_opened_capture(self):
+        cap = _FakeCapture(good_frames=1)
+        capture = ThreadedCapture(camera_index=3, cap=cap)
+        self.assertIs(capture.cap, cap)
+        self.assertEqual(capture.camera_index, 3)
+
+    def test_stats_before_start_are_empty(self):
+        capture = self._capture(good_frames=1)
+        stats = capture.stats()
+        self.assertEqual(stats["reads"], 0)
+        self.assertIsNone(stats["last_ok_age_ms"])
+        self.assertFalse(stats["thread_alive"])
 
 
 if __name__ == "__main__":

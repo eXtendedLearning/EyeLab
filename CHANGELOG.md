@@ -7,7 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **AR freeze diagnostics** (`python/ar_watchdog.py`,
+  [`docs/ar-freeze-diagnostics.md`](docs/ar-freeze-diagnostics.md)). `Start AR`
+  can render a couple of frames and then leave the GUI black and unresponsive
+  with nothing in the console or the session log, because no exception is ever
+  raised - the tk main thread simply stops. A watchdog thread now samples a
+  liveness stamp that the main thread refreshes and writes
+  `.logs/ar_debug_<ts>.jsonl`: `stall` records naming the AR stage the main
+  thread was in, with every thread's Python stack, plus per-stage timings and
+  capture-thread health. A `faulthandler` timer, re-armed only while the main
+  thread is healthy, dumps all stacks to `.logs/ar_stacks_<ts>.log` during a
+  hard freeze, when no Python code can run at all. `ThreadedCapture` gained
+  `stats()` (plain counters written by the reader thread, no lock) and
+  `ArucoPipeline` gained `capture_stats()`. Purely passive: one daemon thread
+  and two files, no runtime behaviour change.
+- `python/test_ar_watchdog.py` (8 tests) and `ThreadedCaptureStatsTests` in
+  `python/test_pose_estimator.py`.
+
 ### Fixed
+
+- **Opening a camera froze the GUI, and a silent camera was read in a tight
+  loop.** Diagnosed from `.logs/ar_debug_20260919_113447.jsonl`; details and
+  the raw numbers in
+  [`docs/ar-freeze-diagnostics.md`](docs/ar-freeze-diagnostics.md).
+  - `cv2.VideoCapture(0, CAP_DSHOW)` blocked its caller for up to 32 s, and
+    every call site was on the tkinter main thread: startup camera scan
+    (14.7 s), `CalibrationWindow` (41.2 s), `Start AR` (32.2 s). The window
+    could not repaint, which is the "black screen / not responding" report.
+    Camera opens and index scans now run on a worker thread
+    (`camera_utils.CameraOpener`, `camera_utils.CameraScanner`); the GUI shows
+    the elapsed seconds, stays usable, and can cancel. A capture that arrives
+    after a cancel is released instead of leaked.
+  - A backend that reports `isOpened()` and then delivers nothing is no longer
+    accepted: `camera_utils.open_camera_result()` requires a real frame within
+    `WARMUP_S` and otherwise falls through to the next backend (DSHOW -> MSMF),
+    reporting each attempt so the GUI can say *why* a camera failed.
+    `EYELAB_CAPTURE_BACKEND=dshow|msmf|any` forces one backend.
+  - `ThreadedCapture._reader` had no pause and no give-up on failed reads:
+    70 905 456 failed reads in ~30 s were recorded, starving the tk main
+    thread and leaving the webcam needing a replug. It now paces retries
+    (`CAPTURE_RETRY_SLEEP_S`) and stops after `CAPTURE_GIVE_UP_S` with an
+    error the AR loop surfaces before stopping cleanly.
+  - `CalibrationWindow` opens asynchronously and gives up on a camera that
+    delivers no frame for 5 s, with the reason on screen, instead of sitting
+    on "Waiting for camera frame..." indefinitely. It also releases the device
+    on every exit path.
+  - `python/test_camera_utils.py` (9 tests) plus reader give-up and
+    pre-opened-capture tests in `python/test_pose_estimator.py`.
+
+- **Three silent scale errors** (2026-09-18 audit, findings S1a-S1c). Each made
+  every pose wrong by a constant factor while leaving the reprojection residual
+  at zero, so no quality gate in the pipeline could detect them.
+  - **Marker size.** Default raised from 12 mm to 20 mm to match the printed
+    sheet in `output/pdf/` (`generate_markers.MARKER_SIZE_MM`, grid spacing
+    16 -> 26 mm). The 12 mm default against 20 mm markers reported depth 40 %
+    short. Marker size is now also stored **per structure** in that structure's
+    marker config (`defaultMarkerSizeMm`), loaded into the GUI on config load,
+    and still overridable per marker via `markerSizeMm`.
+  - **Calibration resolution.** `save_calibration()` wrote `image_width` /
+    `image_height`; nothing read them back, so a calibration taken at one
+    resolution and used at another silently scaled every distance (measured:
+    +50 % depth error, 5.5 deg rotation error, 0.71 px reprojection RMS). Added
+    `calibrate.read_calibration()` / `CalibrationData` and
+    `describe_resolution_mismatch()`; `ArucoPipeline.start()` and
+    `webcam_pipeline` now refuse to run on a mismatch. `load_calibration()`
+    keeps its old two-tuple signature.
+  - **UNV units.** `unv_to_json._parse_units` read `unit_code` and `factors`;
+    pyuff emits `units_code`, `length`, `force`, `temp`. Every file therefore
+    reported SI with a length factor of 1.0 whatever it declared, and the factor
+    was never applied anyway - a Testlab geometry in millimetres was consumed as
+    metres, 1000x oversized. `UNVParser.parse()` now reads the real keys and
+    scales node coordinates to **metres unconditionally**. Unit code 9
+    (USER_DEFINED) registered.
+- `unv_to_json._parse_nodes` read `coord_sys` / `disp_coord_sys` for Dataset
+  2411; pyuff emits `def_cs` / `disp_cs`, so every node's coordinate system
+  silently defaulted to 0 and the CS checks never ran. Both spellings accepted.
+- Geometry whose nodes span multiple coordinate systems, or use a cylindrical /
+  spherical system, is now refused with an explanatory error instead of being
+  read as if it were Cartesian in one frame.
+- `python/test_scale_contracts.py` - 16 regression tests pinning all of the above,
+  including the "wrong but reprojects perfectly" property that hid them.
+- `calibrate.generate_board_image()` stretched the ChArUco board to fill the whole
+  printable area, so `--generate` produced squares of ~38.0 x 39.6 mm - neither
+  square nor the 25 mm the software reports. It now renders at **true physical
+  scale**, centred, and refuses a board that does not fit the page. This does not
+  affect calibration accuracy (camera intrinsics are invariant to the target's
+  scale - verified: identical fx/fy/cx/cy for declared sizes from 0.4x to 2.0x),
+  but it is the only way an operator can confirm their printed board against the
+  GUI's ruler check.
+
+### Added
+
+- `calibrate.py --generate` can now write a **PDF** as well as a PNG (chosen by
+  file extension; PDF via Pillow, no new dependency) and honours `--square`,
+  `--cols` and `--rows`, which it previously ignored. Every sheet carries a
+  100 mm ruler line so a rescaled print is caught before it is used.
+- `output/pdf/charuco_5x7_25mm_A4.pdf` - 5x7, 25 mm square / 19 mm marker,
+  matching the `CHARUCO_SQUARE_M` / `CHARUCO_MARKER_M` defaults.
+- `output/pdf/charuco_5x7_35mm_A4.pdf` - same grid at 35 mm square / 26 mm
+  marker, nearly filling A4. Preferred for new prints: a larger board fills more
+  of the frame, which improves the corner coverage that `.docs/THEORY.md` 3.3
+  identifies as a calibration-quality requirement. Calibrate with
+  `--square 0.035 --marker 0.026`.
 - CI break from OpenCV 5.0 (`opencv-contrib-python` 5.0.0.93, PyPI
   2026-07-02): OpenCV 5 removed the legacy `cv2.aruco.calibrateCameraCharuco`
   used by `gui_calibration.py` and `calibrate.py` (and mocked in

@@ -42,7 +42,7 @@ EyeLab ChArUco calibration wizard
 =================================
 
 1. Generate and print the board
-   python calibrate.py --generate --board-image charuco_board.png
+   python calibrate.py --generate --board-image charuco_board.pdf
    Print at 100% scale. Do not use 'fit to page'.
 
 2. Measure or confirm physical sizes
@@ -71,12 +71,16 @@ if Path(sys.argv[0]).name.lower() == "calibrate.py" and "--wizard" in sys.argv[1
 
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import cv2
+from dataclasses import dataclass
+from typing import Optional
+
 import numpy as np
 
 from camera_utils import open_camera
 
 
 # ── Board defaults ────────────────────────────────────────────────────────────
+CHARUCO_SQUARE_M = 0.025   # default printed square side (m); see gui_common
 BOARD_COLS = 5          # number of squares in X
 BOARD_ROWS = 7          # number of squares in Y
 ARUCO_DICT_ID = cv2.aruco.DICT_4X4_50
@@ -111,28 +115,91 @@ def generate_board_image(
     page_width_mm: float = 210.0,
     page_height_mm: float = 297.0,
     margin_mm: float = 10.0,
+    square_m: float | None = None,
+    rows_cols: tuple[int, int] | None = None,
 ) -> None:
-    """Render the ChArUco board to a PNG sized for A4 printing at `dpi`."""
-    def mm2px(mm: float) -> int:
-        return int(round(mm * dpi / 25.4))
+    """Render the ChArUco board at TRUE PHYSICAL SCALE, centred on the page.
 
-    w_px = mm2px(page_width_mm - 2 * margin_mm)
-    h_px = mm2px(page_height_mm - 2 * margin_mm)
+    Writes a .png or a .pdf depending on the extension of `output_path`; the PDF
+    carries the physical size in its own metadata, so it prints to scale on any
+    printer that is not asked to fit-to-page.
 
-    img = board.generateImage((w_px, h_px), marginSize=0, borderBits=1)
+    The previous version stretched the board to fill the whole printable area,
+    which produced squares of about 38.0 x 39.6 mm — neither square nor the size
+    the software reported. That does not corrupt the intrinsics (they are
+    invariant to the calibration target's scale), but it makes the GUI's ruler
+    check disagree with the printed sheet, which is the only way an operator has
+    to confirm the board is right.
 
-    # Embed to full page with margin
-    page_w = mm2px(page_width_mm)
-    page_h = mm2px(page_height_mm)
-    m = mm2px(margin_mm)
-    page = np.full((page_h, page_w), 255, dtype=np.uint8)
-    page[m : m + h_px, m : m + w_px] = img
+    A ruler reference line is printed below the board: measure it, and if it is
+    not exactly 100 mm the print was scaled and the sheet should be reprinted.
+    """
+    cols, rows = rows_cols if rows_cols else (BOARD_COLS, BOARD_ROWS)
+    square_mm = (square_m if square_m else CHARUCO_SQUARE_M) * 1000.0
 
-    cv2.imwrite(output_path, page)
-    print(f"Board image saved to: {output_path}")
-    print(f"  Resolution : {page_w}×{page_h} px  ({dpi} DPI)")
-    print(f"  Page size  : A4 ({page_width_mm}×{page_height_mm} mm)")
-    print("  Print at 100% — do NOT scale to fit.")
+    px_per_mm = dpi / 25.4
+    mm2px = lambda mm: int(round(mm * px_per_mm))
+
+    board_w_mm = cols * square_mm
+    board_h_mm = rows * square_mm
+    avail_w_mm = page_width_mm - 2 * margin_mm
+    avail_h_mm = page_height_mm - 2 * margin_mm - 22.0   # room for the ruler strip
+    if board_w_mm > avail_w_mm or board_h_mm > avail_h_mm:
+        raise ValueError(
+            f"A {cols}x{rows} board of {square_mm:.1f} mm squares is "
+            f"{board_w_mm:.0f}x{board_h_mm:.0f} mm and does not fit the "
+            f"{avail_w_mm:.0f}x{avail_h_mm:.0f} mm printable area. Use smaller "
+            f"squares, a smaller grid, or a larger page."
+        )
+
+    # Render the board at exactly its physical size — square squares, true scale.
+    img = board.generateImage((mm2px(board_w_mm), mm2px(board_h_mm)),
+                              marginSize=0, borderBits=1)
+
+    page = np.full((mm2px(page_height_mm), mm2px(page_width_mm)), 255, dtype=np.uint8)
+    x0 = (page.shape[1] - img.shape[1]) // 2
+    y0 = mm2px(margin_mm + 8.0)
+    page[y0 : y0 + img.shape[0], x0 : x0 + img.shape[1]] = img
+
+    def label(text, x_mm, y_mm, scale=0.5, thickness=1):
+        cv2.putText(page, text, (mm2px(x_mm), mm2px(y_mm)),
+                    cv2.FONT_HERSHEY_SIMPLEX, scale * dpi / 150.0,
+                    0, max(1, int(thickness * dpi / 150.0)), cv2.LINE_AA)
+
+    label(f"EyeLab ChArUco calibration board - {cols}x{rows} squares, "
+          f"{square_mm:.1f} mm square, {board.getMarkerLength()*1000:.1f} mm marker, DICT_4X4_50",
+          margin_mm, margin_mm + 4.0, scale=0.42)
+
+    # Ruler reference: the single check that the print was not rescaled.
+    ruler_y_mm = margin_mm + 8.0 + board_h_mm + 10.0
+    rx0, rx1 = mm2px(margin_mm), mm2px(margin_mm + 100.0)
+    ry = mm2px(ruler_y_mm)
+    cv2.line(page, (rx0, ry), (rx1, ry), 0, max(1, int(dpi / 150)), cv2.LINE_AA)
+    for i in range(11):
+        tick = mm2px(margin_mm + i * 10.0)
+        h = mm2px(3.0 if i % 5 == 0 else 1.8)
+        cv2.line(page, (tick, ry - h), (tick, ry), 0, max(1, int(dpi / 200)), cv2.LINE_AA)
+    label("|<------------------ this line must measure exactly 100 mm ------------------>|",
+          margin_mm, ruler_y_mm + 6.0, scale=0.38)
+    label("Print at 100% scale. Disable 'fit to page' / 'shrink oversized pages'.",
+          margin_mm, ruler_y_mm + 11.0, scale=0.38)
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if out.suffix.lower() == ".pdf":
+        from PIL import Image
+        Image.fromarray(page).convert("L").save(
+            str(out), "PDF", resolution=float(dpi), title="EyeLab ChArUco board"
+        )
+    else:
+        cv2.imwrite(str(out), page)
+
+    print(f"Board saved to: {out}")
+    print(f"  Grid        : {cols} x {rows} squares")
+    print(f"  Square      : {square_mm:.1f} mm   Marker: {board.getMarkerLength()*1000:.1f} mm")
+    print(f"  Board area  : {board_w_mm:.1f} x {board_h_mm:.1f} mm on A4 "
+          f"({page_width_mm:.0f} x {page_height_mm:.0f} mm), {dpi} DPI")
+    print("  Print at 100% - do NOT scale to fit; verify with the 100 mm ruler line.")
 
 
 # ── Frame collection helpers ──────────────────────────────────────────────────
@@ -297,15 +364,76 @@ def save_calibration(
     print(f"Calibration saved to: {output_path}")
 
 
-def load_calibration(yaml_path: str) -> tuple[np.ndarray, np.ndarray]:
-    """Load camera_matrix and dist_coeffs from a calibration YAML."""
+@dataclass
+class CalibrationData:
+    """A calibration plus the image size it was computed at.
+
+    The image size is load-bearing, not metadata: the intrinsics are expressed in
+    pixels of a specific resolution. Using them at a different capture resolution
+    scales every pose while leaving the reprojection residual near zero, so no
+    downstream quality gate can detect the mistake. Always pair the intrinsics
+    with the size they came from.
+    """
+    camera_matrix: np.ndarray
+    dist_coeffs: np.ndarray
+    image_size: Optional[tuple[int, int]] = None   # (width, height)
+    rms_error: Optional[float] = None
+
+
+def read_calibration(yaml_path: str) -> CalibrationData:
+    """Load the full calibration record, including the image size it was taken at."""
     fs = cv2.FileStorage(yaml_path, cv2.FILE_STORAGE_READ)
     if not fs.isOpened():
         raise FileNotFoundError(f"Cannot open calibration file: {yaml_path}")
     camera_matrix = fs.getNode("camera_matrix").mat()
     dist_coeffs   = fs.getNode("dist_coeffs").mat()
+
+    def _num(key):
+        node = fs.getNode(key)
+        return None if node.isNone() else float(node.real())
+
+    width, height = _num("image_width"), _num("image_height")
+    rms = _num("rms_error")
     fs.release()
-    return camera_matrix, dist_coeffs
+
+    image_size = (int(width), int(height)) if width and height else None
+    return CalibrationData(camera_matrix, dist_coeffs, image_size, rms)
+
+
+def load_calibration(yaml_path: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load camera_matrix and dist_coeffs from a calibration YAML.
+
+    Prefer `read_calibration`, which also returns the image size the calibration
+    was computed at — see `CalibrationData` for why that matters.
+    """
+    data = read_calibration(yaml_path)
+    return data.camera_matrix, data.dist_coeffs
+
+
+def describe_resolution_mismatch(
+    calibration_size: Optional[tuple[int, int]],
+    capture_size: tuple[int, int],
+) -> Optional[str]:
+    """Return an explanatory message if a calibration is being used at the wrong size.
+
+    Returns None when the sizes match, or when the calibration predates the
+    image_width/image_height fields and the check cannot be made.
+    """
+    if calibration_size is None:
+        return None
+    if tuple(calibration_size) == tuple(capture_size):
+        return None
+    cal_w, cal_h = calibration_size
+    cap_w, cap_h = capture_size
+    scale = cap_w / cal_w if cal_w else float("nan")
+    return (
+        f"Calibration resolution mismatch: the camera parameters were computed at "
+        f"{cal_w}x{cal_h} but the camera is delivering {cap_w}x{cap_h}. "
+        f"Using them as-is would scale every distance by roughly {scale:.2f}x "
+        f"while still reporting a low reprojection error, so nothing downstream "
+        f"would flag it. Recalibrate at {cap_w}x{cap_h}, or force the camera to "
+        f"{cal_w}x{cal_h}."
+    )
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -338,8 +466,9 @@ def main() -> int:
                         help=f"Board rows (default: {BOARD_ROWS})")
     parser.add_argument("--output", "-o", default="camera_params.yaml",
                         help="Output calibration YAML file (default: camera_params.yaml)")
-    parser.add_argument("--board-image", default="charuco_board.png",
-                        help="Output board image path for --generate (default: charuco_board.png)")
+    parser.add_argument("--board-image", default="charuco_board.pdf",
+                        help="Output board path for --generate; .pdf or .png "
+                             "(default: charuco_board.pdf)")
     parser.add_argument("--dpi", type=int, default=300,
                         help="DPI for generated board image (default: 300)")
     parser.add_argument("--min-frames", type=int, default=MIN_FRAMES,
@@ -355,7 +484,10 @@ def main() -> int:
 
     # ── Generate mode ────────────────────────────────────────────────────────
     if args.generate:
-        generate_board_image(board, args.board_image, dpi=args.dpi)
+        generate_board_image(
+            board, args.board_image, dpi=args.dpi,
+            square_m=args.square, rows_cols=(args.cols, args.rows),
+        )
         return 0
 
     # ── Calibration modes ────────────────────────────────────────────────────

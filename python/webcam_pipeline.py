@@ -43,7 +43,7 @@ import yaml
 
 from camera_utils import open_camera
 
-from calibrate import load_calibration
+from calibrate import describe_resolution_mismatch, read_calibration
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -277,7 +277,8 @@ def estimate_pose_single(
 def run_pipeline(args: argparse.Namespace) -> int:
     # Load calibration
     print(f"Loading calibration: {args.calibration}")
-    camera_matrix, dist_coeffs = load_calibration(args.calibration)
+    calibration = read_calibration(args.calibration)
+    camera_matrix, dist_coeffs = calibration.camera_matrix, calibration.dist_coeffs
 
     # Load optional board config
     board: cv2.aruco.Board | None = None
@@ -310,6 +311,13 @@ def run_pipeline(args: argparse.Namespace) -> int:
     actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"Camera {args.camera}: {actual_w}×{actual_h}")
+
+    # Intrinsics are pixel quantities tied to the resolution they were solved at.
+    mismatch = describe_resolution_mismatch(calibration.image_size, (actual_w, actual_h))
+    if mismatch is not None:
+        cap.release()
+        print(f"ERROR: {mismatch}", file=sys.stderr)
+        return 1
 
     # Optional video writer
     writer: cv2.VideoWriter | None = None

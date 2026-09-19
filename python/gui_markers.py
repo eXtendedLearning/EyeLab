@@ -29,8 +29,8 @@ from gui_common import (
 from registration import (
     AXIS_NORMALS,
     MarkerCorrespondence,
-    load_marker_config,
     normal_label,
+    read_marker_config,
     save_marker_config,
 )
 
@@ -414,7 +414,10 @@ class CorrespondenceEditor:
         if not path:
             return
         try:
-            self.app.correspondences = load_marker_config(path)
+            marker_config = read_marker_config(path)
+            self.app.correspondences = marker_config.markers
+            if marker_config.default_marker_size_mm is not None:
+                self.app.marker_size_var.set(marker_config.default_marker_size_mm)
             self.app._save_correspondences()
             self.refresh()
             self.app.log(f"Loaded {len(self.app.correspondences)} correspondences from {path}")
@@ -433,7 +436,11 @@ class CorrespondenceEditor:
         if not path:
             return
         try:
-            save_marker_config(path, self.app.correspondences)
+            save_marker_config(
+                path,
+                self.app.correspondences,
+                default_marker_size_mm=self.app._structure_marker_size_mm(),
+            )
             self.app.log(f"Saved {len(self.app.correspondences)} correspondences to {path}")
         except Exception as e:
             messagebox.showerror("Save Correspondences", str(e))
