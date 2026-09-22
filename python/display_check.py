@@ -24,6 +24,7 @@ Usage::
     python python/display_check.py --list-monitors
     python python/display_check.py --monitor 2
     python python/display_check.py --monitor 2 --sbs --disparity 40
+    python python/display_check.py --monitor 2 --placement windowed   # debug placement
 
 Keys: ``space``/``right`` next page, ``left`` previous, ``c`` cycle colour,
 ``[`` / ``]`` adjust disparity in SBS mode, ``f`` toggle fullscreen,
@@ -82,6 +83,32 @@ class Monitor:
         )
 
 
+_DPI_AWARE = False
+
+
+def ensure_dpi_aware() -> bool:
+    """Opt into physical-pixel coordinates before any window is created.
+
+    Without this, Windows virtualises coordinates for a DPI-unaware process
+    and every monitor rectangle comes back scaled -- which on a 200%-scaled
+    Surface panel means the window lands somewhere other than where it was
+    asked to. Must happen before the first Tk window exists, and only once.
+    """
+    global _DPI_AWARE
+    if _DPI_AWARE or sys.platform != "win32":
+        return _DPI_AWARE or sys.platform == "win32"
+    try:
+        # PROCESS_PER_MONITOR_DPI_AWARE where available, else the legacy call.
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()
+        _DPI_AWARE = True
+    except Exception:  # pragma: no cover - defensive
+        return False
+    return True
+
+
 def list_monitors() -> list[Monitor]:
     """Enumerate monitors in virtual-desktop coordinates.
 
@@ -93,11 +120,9 @@ def list_monitors() -> list[Monitor]:
     if sys.platform != "win32":
         return [Monitor(index=1, x=0, y=0, width=1920, height=1080, primary=True)]
 
-    try:
-        user32 = ctypes.windll.user32
-        user32.SetProcessDPIAware()
-    except Exception:  # pragma: no cover - defensive
+    if not ensure_dpi_aware():
         return [Monitor(index=1, x=0, y=0, width=1920, height=1080, primary=True)]
+    user32 = ctypes.windll.user32
 
     class RECT(ctypes.Structure):
         _fields_ = [
@@ -172,6 +197,45 @@ def pick_monitor(monitors: Sequence[Monitor], requested: Optional[int]) -> Monit
         if not monitor.primary:
             return monitor
     return monitors[0]
+
+
+PLACEMENTS = ("borderless", "fullscreen", "windowed")
+
+
+@dataclass(frozen=True)
+class WindowPlan:
+    """How to put a window on a specific monitor, as settings to apply in order.
+
+    ``-fullscreen`` is *not* the default, and that is the whole point of this
+    type. Tk applies that attribute to whichever monitor Windows currently
+    believes the window occupies; a geometry set in the same breath has not
+    been processed yet, so the window fullscreens on the primary display no
+    matter which monitor was requested. Placing a borderless window at
+    explicit virtual-desktop coordinates is deterministic instead.
+    """
+
+    geometry: str
+    borderless: bool
+    fullscreen: bool
+    topmost: bool
+
+
+def window_plan(monitor: Monitor, placement: str = "borderless") -> WindowPlan:
+    if placement not in PLACEMENTS:
+        raise ValueError(f"unknown placement {placement!r}; try {', '.join(PLACEMENTS)}")
+    if placement == "windowed":
+        inset = 60
+        geom = (
+            f"{max(320, monitor.width - inset * 2)}x"
+            f"{max(240, monitor.height - inset * 2)}+"
+            f"{monitor.x + inset}+{monitor.y + inset}"
+        )
+        return WindowPlan(geom, borderless=False, fullscreen=False, topmost=False)
+    if placement == "fullscreen":
+        return WindowPlan(monitor.geometry, borderless=False, fullscreen=True,
+                          topmost=False)
+    return WindowPlan(monitor.geometry, borderless=True, fullscreen=False,
+                      topmost=True)
 
 
 def grey(level: int) -> str:
@@ -400,15 +464,29 @@ def run_gui(monitor: Monitor, args: argparse.Namespace) -> int:  # pragma: no co
         "page": PAGES.index(args.page) if args.page in PAGES else 0,
         "colour": 0,
         "disparity": args.disparity,
-        "fullscreen": True,
     }
+
+    plan = window_plan(monitor, args.placement)
 
     root = tk.Tk()
     root.title("EyeLab — display check")
     root.configure(bg="black")
-    root.geometry(monitor.geometry)
-    root.overrideredirect(False)
-    root.attributes("-fullscreen", True)
+
+    # Order matters. Geometry first, then let Tk actually process it, and only
+    # then apply window-manager attributes -- otherwise every attribute is
+    # decided against the window's default position on the primary monitor.
+    root.geometry(plan.geometry)
+    root.update_idletasks()
+    if plan.borderless:
+        root.overrideredirect(True)
+        root.geometry(plan.geometry)  # re-assert: overrideredirect can reset it
+    if plan.fullscreen:
+        root.attributes("-fullscreen", True)
+    if plan.topmost:
+        root.attributes("-topmost", True)
+    root.update_idletasks()
+    root.lift()
+    root.focus_force()
 
     canvas = tk.Canvas(
         root, bg="black", highlightthickness=0, bd=0, width=monitor.width,
@@ -438,6 +516,17 @@ def run_gui(monitor: Monitor, args: argparse.Namespace) -> int:  # pragma: no co
         hud += "   [space] page  [c] colour  [ ] disparity  [Esc] quit"
         canvas.create_text(20, 20, text=hud, fill="#606060", anchor="nw")
 
+        # If this line does not match the monitor you asked for, the window
+        # did not land where it was told -- which is the failure worth seeing
+        # immediately rather than inferring from which panel lit up.
+        placed = (
+            f"requested monitor {monitor.index} at {monitor.x:+d},{monitor.y:+d}"
+            f"   |   window actually at "
+            f"{root.winfo_x():+d},{root.winfo_y():+d}"
+            f"   |   placement={args.placement}"
+        )
+        canvas.create_text(20, 44, text=placed, fill="#606060", anchor="nw")
+
     def step_page(delta):
         state["page"] = (state["page"] + delta) % len(PAGES)
         redraw()
@@ -450,9 +539,12 @@ def run_gui(monitor: Monitor, args: argparse.Namespace) -> int:  # pragma: no co
         state["disparity"] += delta
         redraw()
 
-    def toggle_fullscreen(_e=None):
-        state["fullscreen"] = not state["fullscreen"]
-        root.attributes("-fullscreen", state["fullscreen"])
+    def reassert_placement(_e=None):
+        """Re-apply geometry. Useful if Windows moved the window on a mode change."""
+        root.geometry(plan.geometry)
+        root.update_idletasks()
+        root.lift()
+        root.focus_force()
         redraw()
 
     root.bind("<Escape>", lambda e: root.destroy())
@@ -465,7 +557,7 @@ def run_gui(monitor: Monitor, args: argparse.Namespace) -> int:  # pragma: no co
     root.bind("bracketright", lambda e: nudge(4))
     root.bind("[", lambda e: nudge(-4))
     root.bind("]", lambda e: nudge(4))
-    root.bind("f", toggle_fullscreen)
+    root.bind("f", reassert_placement)
     canvas.bind("<Configure>", redraw)
 
     root.after(60, redraw)
@@ -485,8 +577,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="side-by-side stereo (set the glasses to a 3D mode)")
     parser.add_argument("--disparity", type=int, default=0,
                         help="horizontal disparity in px; + pushes away, - pulls near")
+    parser.add_argument("--placement", default="borderless", choices=PLACEMENTS,
+                        help="borderless (default, reliable on secondary monitors); "
+                             "fullscreen (Tk attribute, often ignores the monitor); "
+                             "windowed (draggable, for debugging placement)")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
+    ensure_dpi_aware()
     monitors = list_monitors()
     if args.list_monitors:
         for monitor in monitors:
@@ -500,6 +597,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
 
     print(f"using {monitor.describe()}  — Esc to quit")
+    print(f"placement={args.placement}  geometry={window_plan(monitor, args.placement).geometry}")
+    if monitor.primary:
+        print("warning: that is the PRIMARY display — pass --monitor N for the glasses")
     return run_gui(monitor, args)
 
 

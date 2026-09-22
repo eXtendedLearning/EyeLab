@@ -14,6 +14,8 @@ from unittest.mock import patch
 import display_check
 from display_check import (
     BLACK_LEVELS,
+    PLACEMENTS,
+    window_plan,
     COLOURS,
     LINE_WIDTHS,
     PAGES,
@@ -99,6 +101,63 @@ class MonitorSelectionTests(unittest.TestCase):
 
     def test_list_monitors_never_returns_empty(self):
         self.assertTrue(len(display_check.list_monitors()) >= 1)
+
+
+class WindowPlacementTests(unittest.TestCase):
+    """Regression cover for the bug that put the window on the wrong monitor.
+
+    Tk's ``-fullscreen`` attribute is applied against whatever monitor Windows
+    thinks the window is on. Setting it in the same breath as a geometry that
+    has not been processed yet fullscreens the primary display regardless of
+    which monitor was requested -- observed on a Surface, 2026-09-22.
+    """
+
+    def setUp(self):
+        self.glasses = Monitor(2, 2736, 0, 1920, 1080, False)
+
+    def test_default_placement_is_not_the_fullscreen_attribute(self):
+        plan = window_plan(self.glasses)
+        self.assertFalse(plan.fullscreen)
+        self.assertTrue(plan.borderless)
+
+    def test_default_geometry_targets_the_requested_monitor(self):
+        plan = window_plan(self.glasses)
+        self.assertEqual(plan.geometry, "1920x1080+2736+0")
+
+    def test_geometry_carries_the_monitor_origin_for_every_placement(self):
+        for placement in PLACEMENTS:
+            plan = window_plan(self.glasses, placement)
+            self.assertIn("+", plan.geometry, placement)
+            offset = plan.geometry.split("+", 1)[1]
+            x = int(offset.split("+")[0])
+            self.assertGreaterEqual(x, self.glasses.x, placement)
+
+    def test_negative_origin_monitor_is_expressed_correctly(self):
+        left = Monitor(2, -1920, 0, 1920, 1080, False)
+        self.assertEqual(window_plan(left).geometry, "1920x1080+-1920+0")
+
+    def test_windowed_is_inset_and_decorated(self):
+        plan = window_plan(self.glasses, "windowed")
+        self.assertFalse(plan.borderless)
+        self.assertFalse(plan.fullscreen)
+        self.assertTrue(plan.geometry.startswith("1800x960"))
+
+    def test_fullscreen_placement_is_available_but_opt_in(self):
+        plan = window_plan(self.glasses, "fullscreen")
+        self.assertTrue(plan.fullscreen)
+        self.assertFalse(plan.borderless)
+
+    def test_unknown_placement_rejected(self):
+        with self.assertRaises(ValueError):
+            window_plan(self.glasses, "maximised")
+
+    def test_tiny_monitor_does_not_produce_negative_size(self):
+        tiny = Monitor(2, 0, 0, 200, 150, False)
+        plan = window_plan(tiny, "windowed")
+        w, rest = plan.geometry.split("x", 1)
+        h = rest.split("+", 1)[0]
+        self.assertGreater(int(w), 0)
+        self.assertGreater(int(h), 0)
 
 
 class PageRenderTests(unittest.TestCase):
