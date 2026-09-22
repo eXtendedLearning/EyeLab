@@ -82,6 +82,7 @@ class FrameResult:
     carryover_count: int = 0
     refine_recovered_count: int = 0
     roi_recovered_count: int = 0
+    timings_ms: dict[str, float] = field(default_factory=dict)
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -89,6 +90,19 @@ class FrameResult:
 ARUCO_DICT_ID = cv2.aruco.DICT_4X4_50
 DEFAULT_MARKER_SIZE_M = 0.012   # 12 mm
 MIN_STRUCTURE_MARKERS_FOR_BOARD_POSE = 3
+
+# refineDetectedMarkers re-examines every rejected candidate against the board
+# geometry. It recovers markers whose decode narrowly failed, but at 1280x720
+# in a cluttered scene it is the most expensive call in the detect path and it
+# ran on every frame. It stays on every frame while it is actually recovering
+# something; after REFINE_IDLE_LIMIT consecutive frames that recover nothing it
+# drops to one frame in REFINE_DUTY_CYCLE, and returns to every frame the
+# moment it recovers a marker again. Frames with more than REFINE_MAX_REJECTED
+# candidates skip it outright: that is the pathological cost case and the
+# recovery rate there is poor.
+REFINE_IDLE_LIMIT = 30
+REFINE_DUTY_CYCLE = 5
+REFINE_MAX_REJECTED = 64
 
 
 @dataclass(frozen=True)
@@ -287,9 +301,22 @@ class ThreadedCapture:
 
 # ── CLAHE pre-processing ─────────────────────────────────────────────────────
 
+_CLAHE_CACHE: dict[float, "cv2.CLAHE"] = {}
+
+
 def preprocess_frame(gray: np.ndarray, clip_limit: float = ARUCO_PREPROCESS_CLIP_LIMIT) -> np.ndarray:
-    """Apply CLAHE contrast enhancement for robust detection under varying lighting."""
-    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+    """Apply CLAHE contrast enhancement for robust detection under varying lighting.
+
+    The CLAHE object is cached per clip limit. Building one per frame is pure
+    overhead — it carries no state between calls — and the AR loop called this
+    once per frame. cv2.CLAHE is not documented as thread-safe, so a detector
+    running on a worker thread must build its own rather than share this cache.
+    """
+    key = round(float(clip_limit), 3)
+    clahe = _CLAHE_CACHE.get(key)
+    if clahe is None:
+        clahe = cv2.createCLAHE(clipLimit=key, tileGridSize=(8, 8))
+        _CLAHE_CACHE[key] = clahe
     return clahe.apply(gray)
 
 
@@ -690,6 +717,8 @@ class LStructureDetector:
         self.last_raw_marker_count = 0
         self.last_allowed_marker_count = 0
         self.last_refine_recovered_count = 0
+        self._refine_idle_frames = 0
+        self._refine_frame_counter = 0
 
         self.dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
         self._rebuild_detector()
@@ -721,11 +750,12 @@ class LStructureDetector:
         corners, ids, rejected = self.detector.detectMarkers(gray)
         self.last_refine_recovered_count = 0
 
-        if (
+        has_refine_candidates = (
             self.board is not None
             and ids is not None and len(ids) > 0
             and rejected is not None and len(rejected) > 0
-        ):
+        )
+        if has_refine_candidates and self._should_refine(len(rejected)):
             before = int(len(ids))
             try:
                 corners, ids, rejected, _recovered = (
@@ -739,6 +769,10 @@ class LStructureDetector:
                 pass
             if ids is not None:
                 self.last_refine_recovered_count = int(len(ids)) - before
+            if self.last_refine_recovered_count > 0:
+                self._refine_idle_frames = 0
+            else:
+                self._refine_idle_frames += 1
 
         self.last_rejected_count = len(rejected) if rejected is not None else 0
         self.last_raw_marker_count = 0 if ids is None else int(len(ids))
@@ -755,6 +789,15 @@ class LStructureDetector:
 
         self.last_allowed_marker_count = int(len(ids))
         return corners, ids
+
+    def _should_refine(self, rejected_count: int) -> bool:
+        """Duty-cycle board refinement once it stops recovering markers."""
+        self._refine_frame_counter += 1
+        if rejected_count > REFINE_MAX_REJECTED:
+            return False
+        if self._refine_idle_frames < REFINE_IDLE_LIMIT:
+            return True
+        return self._refine_frame_counter % REFINE_DUTY_CYCLE == 0
 
     def marker_size_for_id(self, marker_id: int) -> float:
         """Return the physical marker edge size in metres for one ArUco ID."""
@@ -1089,8 +1132,10 @@ class ArucoPipeline:
             self._fps_count = 0
             self._fps_t0 = now
 
+        t_start = time.perf_counter()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         enhanced = preprocess_frame(gray, clip_limit=self.detector_tuning.clip_limit)
+        t_preprocess = time.perf_counter()
 
         corners: list[np.ndarray] = []
         ids: Optional[np.ndarray] = None
@@ -1114,6 +1159,8 @@ class ArucoPipeline:
                 corners = tracked_corners
                 ids = tracked_ids
 
+        t_detect = time.perf_counter()
+
         if detector_ran:
             raw_marker_count = self.l_detector.last_raw_marker_count
             allowed_marker_count = self.l_detector.last_allowed_marker_count
@@ -1134,6 +1181,7 @@ class ArucoPipeline:
                 if carryover_count:
                     used_optical_flow = True
 
+        t_recover = time.perf_counter()
         mean_marker_area_px = _mean_marker_area_px(corners)
 
         # Build marker list with per-marker individual poses
@@ -1189,6 +1237,15 @@ class ArucoPipeline:
         else:
             self.pose_lock.reset()
 
+        t_end = time.perf_counter()
+        timings_ms = {
+            "preprocess": (t_preprocess - t_start) * 1000.0,
+            "detect": (t_detect - t_preprocess) * 1000.0,
+            "recover": (t_recover - t_detect) * 1000.0,
+            "pose": (t_end - t_recover) * 1000.0,
+            "total": (t_end - t_start) * 1000.0,
+        }
+
         return FrameResult(
             frame=frame,
             gray=enhanced,
@@ -1206,6 +1263,7 @@ class ArucoPipeline:
             carryover_count=carryover_count,
             refine_recovered_count=self.l_detector.last_refine_recovered_count,
             roi_recovered_count=roi_recovered_count,
+            timings_ms=timings_ms,
         )
 
     def _recover_missing_markers(

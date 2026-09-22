@@ -14,8 +14,12 @@ from pose_estimator import (
     ArucoPipeline,
     DETECTOR_TUNING_PRESETS,
     LStructureDetector,
+    REFINE_DUTY_CYCLE,
+    REFINE_IDLE_LIMIT,
+    REFINE_MAX_REJECTED,
     ThreadedCapture,
     make_detector_parameters,
+    preprocess_frame,
 )
 from registration import MarkerCorrespondence
 
@@ -289,6 +293,69 @@ class ThreadedCaptureStatsTests(unittest.TestCase):
         self.assertEqual(stats["reads"], 0)
         self.assertIsNone(stats["last_ok_age_ms"])
         self.assertFalse(stats["thread_alive"])
+
+
+class TestRefineDutyCycle(unittest.TestCase):
+    """refineDetectedMarkers is the priciest call in detect(); it must not run
+    unconditionally once it has stopped recovering markers."""
+
+    def _detector(self):
+        return LStructureDetector(board=None)
+
+    def test_runs_every_frame_while_still_recovering(self):
+        det = self._detector()
+        self.assertTrue(all(det._should_refine(4) for _ in range(REFINE_IDLE_LIMIT)))
+
+    def test_duty_cycles_once_idle(self):
+        det = self._detector()
+        det._refine_idle_frames = REFINE_IDLE_LIMIT
+        runs = sum(1 for _ in range(4 * REFINE_DUTY_CYCLE) if det._should_refine(4))
+        self.assertEqual(runs, 4)
+
+    def test_recovering_a_marker_restores_every_frame(self):
+        det = self._detector()
+        det._refine_idle_frames = REFINE_IDLE_LIMIT
+        det._refine_idle_frames = 0  # what detect() does on a successful recovery
+        self.assertTrue(all(det._should_refine(4) for _ in range(REFINE_DUTY_CYCLE)))
+
+    def test_skipped_when_candidates_explode(self):
+        det = self._detector()
+        self.assertFalse(det._should_refine(REFINE_MAX_REJECTED + 1))
+
+
+class TestClaheCache(unittest.TestCase):
+    """CLAHE carries no state between calls, so one per frame was pure cost."""
+
+    def setUp(self):
+        pose_estimator._CLAHE_CACHE.clear()
+        self.addCleanup(pose_estimator._CLAHE_CACHE.clear)
+        self.gray = np.full((32, 32), 120, dtype=np.uint8)
+
+    def test_same_clip_limit_builds_one_object(self):
+        with patch.object(
+            pose_estimator.cv2, "createCLAHE", wraps=cv2.createCLAHE
+        ) as make:
+            for _ in range(5):
+                preprocess_frame(self.gray, clip_limit=2.5)
+        self.assertEqual(make.call_count, 1)
+
+    def test_distinct_clip_limits_get_distinct_objects(self):
+        with patch.object(
+            pose_estimator.cv2, "createCLAHE", wraps=cv2.createCLAHE
+        ) as make:
+            preprocess_frame(self.gray, clip_limit=2.0)
+            preprocess_frame(self.gray, clip_limit=3.0)
+            preprocess_frame(self.gray, clip_limit=2.0)
+        self.assertEqual(make.call_count, 2)
+
+    def test_output_is_unchanged_by_caching(self):
+        first = preprocess_frame(self.gray, clip_limit=ARUCO_PREPROCESS_CLIP_LIMIT)
+        second = preprocess_frame(self.gray, clip_limit=ARUCO_PREPROCESS_CLIP_LIMIT)
+        expected = cv2.createCLAHE(
+            clipLimit=ARUCO_PREPROCESS_CLIP_LIMIT, tileGridSize=(8, 8)
+        ).apply(self.gray)
+        np.testing.assert_array_equal(first, expected)
+        np.testing.assert_array_equal(second, expected)
 
 
 if __name__ == "__main__":

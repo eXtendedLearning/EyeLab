@@ -97,6 +97,12 @@ APP_TITLE = f"{VERSION_STRING} — Phase 1 Webcam MVP"
 WINDOW_SIZE = "1400x860"
 PREVIEW_W, PREVIEW_H = 640, 480
 
+# Floor on the gap between AR frames. A frame that overruns its target period
+# schedules the next one almost immediately; this keeps a slice of the Tk event
+# loop for button presses and window resizes so a slow pipeline degrades into a
+# low frame rate rather than an unresponsive window.
+AR_LOOP_MIN_IDLE_MS = 5
+
 CONTROL_PANEL_SECTIONS = (
     ("camera", "Camera"),
     ("calibration", "Calibration"),
@@ -1730,6 +1736,7 @@ class EyeLabApp:
         if not self.ar_running or self.pipeline is None:
             return
 
+        loop_started = time.perf_counter()
         try:
             self._ar_frame()
         except Exception as e:
@@ -1748,7 +1755,16 @@ class EyeLabApp:
             messagebox.showerror("Camera Error", error)
             return
 
-        self._ar_after_id = self.root.after(self._ar_loop_delay_ms(), self._ar_loop)
+        # "Loop ms" is the target frame *period*, not an idle gap bolted onto
+        # the work. Scheduling a fixed 33 ms after a frame that already cost
+        # 30 ms capped the loop at 1000/(33 + work) fps; subtracting the work
+        # already done makes the setting mean what its label says.
+        elapsed_ms = (time.perf_counter() - loop_started) * 1000.0
+        delay_ms = max(
+            AR_LOOP_MIN_IDLE_MS,
+            int(round(self._ar_loop_delay_ms() - elapsed_ms)),
+        )
+        self._ar_after_id = self.root.after(delay_ms, self._ar_loop)
 
     def _ar_frame(self) -> None:
         """Render one AR frame.
@@ -1814,6 +1830,7 @@ class EyeLabApp:
         )
         self.watchdog.frame(
             capture_fps=round(result.fps, 1),
+            stage_ms={k: round(v, 1) for k, v in result.timings_ms.items()},
             markers=len(result.markers),
             structure=structure_seen,
             pose_markers=pose_seen,
@@ -1917,11 +1934,16 @@ class EyeLabApp:
 
     def _update_ar_display(self, vis: np.ndarray) -> None:
         rgb = cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
-        max_w = max(PREVIEW_W, self.ar_canvas_label.winfo_width())
-        max_h = max(PREVIEW_H, self.ar_canvas_label.winfo_height())
-        display_rgb = self._resize_rgb_for_box(rgb, max_w, max_h)
-        self._ar_photo = ImageTk.PhotoImage(Image.fromarray(display_rgb))
-        self.ar_canvas_label.configure(image=self._ar_photo, text="")
+        # The windowed canvas earns its resize + PIL->Tk conversion only when
+        # its tab is on screen. With the fullscreen overlay open on the glasses
+        # and the notebook on another tab, this ran the whole conversion twice
+        # per frame to produce one visible image.
+        if self._is_workspace_tab_selected(self.ar_tab):
+            max_w = max(PREVIEW_W, self.ar_canvas_label.winfo_width())
+            max_h = max(PREVIEW_H, self.ar_canvas_label.winfo_height())
+            display_rgb = self._resize_rgb_for_box(rgb, max_w, max_h)
+            self._ar_photo = ImageTk.PhotoImage(Image.fromarray(display_rgb))
+            self.ar_canvas_label.configure(image=self._ar_photo, text="")
         self._update_fullscreen_display(rgb)
 
     def _fullscreen_is_open(self) -> bool:

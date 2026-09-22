@@ -25,6 +25,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and two files, no runtime behaviour change.
 - `python/test_ar_watchdog.py` (8 tests) and `ThreadedCaptureStatsTests` in
   `python/test_pose_estimator.py`.
+- **Per-stage pipeline timings.** `FrameResult.timings_ms` reports
+  `preprocess` / `detect` / `recover` / `pose` / `total` for each frame, and the
+  GUI forwards them to the watchdog as `stage_ms`. `frame.process` was a single
+  opaque number in `.logs/ar_debug_*.jsonl` that ranged from 3 ms to 56 ms
+  depending on what was in view; the split says which stage moved.
+- `TestRefineDutyCycle` and `TestClaheCache` in
+  `python/test_pose_estimator.py`.
+
+### Changed
+
+- **AR loop latency, tier 1** (measured against
+  `.logs/ar_debug_20260919_115730.jsonl` and `..._120509.jsonl`: `ui_fps`
+  20-24 with no markers in view, 10.5-15 with two or three).
+  - **`Loop ms` now means the frame period, not an idle gap.** `_ar_loop`
+    scheduled the next frame a fixed `after(33)` *after* the work finished, so
+    the period was `33 ms + work` and the loop could not exceed ~30 fps even
+    with an instantaneous pipeline; at 30 ms of work it halved to ~15 fps. The
+    delay is now `target - elapsed`, floored at `AR_LOOP_MIN_IDLE_MS = 5` so a
+    pipeline slower than the target degrades into a low frame rate instead of
+    an unresponsive window.
+  - **The windowed AR canvas is only painted when its tab is on screen.**
+    `_update_ar_display` ran a resize plus a PIL -> `ImageTk.PhotoImage`
+    conversion for the notebook canvas and then did it again at screen size for
+    the fullscreen overlay. With the overlay on the glasses and the notebook on
+    another tab, half of that work (~5 ms/frame in the logs, more on the
+    Surface where the second conversion upscales to 1920x1080) produced nothing
+    visible.
+  - **`refineDetectedMarkers` is duty-cycled.** It ran on every frame that had
+    a board and any rejected candidate, re-examining each candidate against the
+    board geometry. It now runs every frame while it is recovering markers,
+    drops to one frame in `REFINE_DUTY_CYCLE` after `REFINE_IDLE_LIMIT`
+    consecutive frames that recover nothing, returns to every frame as soon as
+    it recovers one again, and is skipped outright above
+    `REFINE_MAX_REJECTED` candidates.
+  - **The CLAHE object is cached per clip limit** rather than constructed per
+    frame. Hygiene, not a win: measured at 0.04 ms/frame of the ~1 ms CLAHE
+    cost at 1280x720. The `.apply()` call itself is what costs, and reducing it
+    belongs to the tier 2 work.
 
 ### Fixed
 

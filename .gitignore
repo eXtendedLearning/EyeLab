@@ -1,5 +1,5 @@
 # --- EyeLab .gitignore ---
-# Last revised: 2026-05-09
+# Last revised: 2026-09-21
 
 # Documents with sensitive information or not relevant for the public repo
 .docs
@@ -64,6 +64,14 @@ python/.logs/
 # file granting redistribution of modified SDK binaries. Keep the SDK local
 # and apply any local compatibility fixes via tools/patch_xreal_sdk.ps1.
 eyelab_xreal/Packages/com.xreal.xr/
+
+# XREAL Windows runtime (Nebula for Windows beta, private Discord distribution).
+# No redistribution licence exists for these binaries and there is no public
+# Windows XREAL SDK. Never commit them. See docs/NEBULA-WINDOWS-AUDIT-2026-09-21.md.
+Nebula_Windows_*/
+vendor/**
+!vendor/README.md
+XREALPRONEBULA.md
 
 # IDE / editor scratch
 .vscode/
