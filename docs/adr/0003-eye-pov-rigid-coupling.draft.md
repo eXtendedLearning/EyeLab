@@ -156,7 +156,7 @@ this ADR does not dress it up as one.
 |---|---|---|---|
 | **S0** | Identity, firmware version, HID topology | Tier A, read-only | **done 2026-09-22** — DLL loads standalone, 25/25 exports, `3318:0436`, 2 HID interfaces (`MI_00` vendor, `MI_08` keys). See audit §7a |
 | **S1** | Display smoke test — black transmissivity, wireframe legibility, stereo comfort | glasses as DP monitor, static pattern | **passed 2026-09-22** on the Surface — all pages, lines and colours legible. One finding: see "Electrochromic floor" below |
-| **S2** | Tier B "hello world": initialise the C API standalone, read `NRGetVersion` | Tier B staged, signatures recovered | **built 2026-09-22** — Tier B staged, S2 signatures recovered statically (audit §9), `python/xreal_native_probe.py` (`load` → `version` → `start`), awaiting a run |
+| **S2** | Tier B "hello world": initialise the C API standalone, read `NRGetVersion` | Tier B staged, signatures recovered | **passed 2026-09-23** on the desktop — all three levels of `python/xreal_native_probe.py`, NR **3.1.1**, standalone, no graphics context. See "S2 result" |
 | **S3** | Head pose at high rate — IMU stream, then `NRHeadTracking` if it initialises | S2 | not started |
 | **S4** | Factory calibration — per-component intrinsics, extrinsics, distortion | S2 | not started |
 | **S5** | Eye/SLAM camera as a frame source (`read()` / `stats()` / `stop()` / `source_id`) | S2, plus the UVC or NCM route from the audit | not started |
@@ -204,6 +204,15 @@ against **powered on at level 1**:
 - *Powered-off is clearer* → the film still carries drive at level 1, and
   `NRGlassesSetEcValue` has headroom worth chasing.
 
+**Result (2026-09-23): powered-off is clearer** — slightly darker when on, by
+eye, no measurement. The electrochromic film is the only powered attenuator
+in the stack, so the likely reading is that level 1 still drives it and the
+raw `NRGlassesSetEcValue` path may go lighter than the UI allows. That is an
+inference, not a demonstration: it needs the setter's signature (Tier B,
+not yet recovered) and a before/after comparison. Lux-meter numbers through
+the lens (off / level 1 / level 3) would turn "slightly" into a figure the
+lab protocol can use.
+
 ### Consequence either way
 
 For overlay *legibility* the tint is a benefit — attenuating the real world
@@ -213,6 +222,31 @@ hammer strikes on a specimen is doing precise, physical work while seeing the
 scene through attenuated optics. That belongs in the lab protocol — task
 lighting on the specimen, and a check that the operator can see the hammer,
 the structure and their own hands comfortably — not only in the software.
+
+---
+
+## S2 result (2026-09-23)
+
+Run on the desktop (`lagann-0526`), glasses on USB, no Nebula, no Unity, entry
+`libnr_loader.dll`. All three levels passed; every call returned 0.
+
+```
+load      preflight ok, 15/15 exports resolved
+version   NRAPICreate 2.3 s -> NRGetVersion -> NRAPIDestroy     NR 3.1.1
+start     Create -> InitSetNetworkType(0) -> NRAPIStart 16 ms -> NRGetVersion -> Stop -> Destroy
+```
+
+The vendor log (kept in `python/.logs/xreal_native_probe.jsonl`) shows
+`Loader init success!`, `Load from local`, and on `start` the device
+definitions for glasses config, vsync, three IMUs, the grayscale and RGB
+cameras, each `connect type 1`. **The C API initialises standalone without a
+graphics context**, which was the largest unknown in the plan.
+
+Two cautions for S3. `NRAPIStart` took 16 ms and `NRAPIStop` 1 µs: Start
+registers components rather than streaming, so "started" does not yet mean
+data flows — S3 has to create the IMU/head-tracking objects and observe
+samples. And no video appears on the desktop by design: S2 renders nothing,
+and this machine cannot drive the glasses as a display at all (open question 6).
 
 ---
 
@@ -227,8 +261,9 @@ the structure and their own hands comfortably — not only in the software.
 4. Does the overlay need per-user eye calibration beyond `NRHMDUpdateIPD`?
    Optical see-through systems usually do (SPAAM or similar); how much residual
    error remains without it is unmeasured.
-5. Is the electrochromic floor a UI limit or a hardware limit? See the S1
-   result above; the powered-off comparison settles it for free.
+5. Is the electrochromic floor a UI limit or a hardware limit? *Partly
+   answered 2026-09-23:* powered-off is clearer, so the film is still driven at
+   level 1; whether `NRGlassesSetEcValue` can go lower is untested.
 6. **Host machine for S6.** The desktop (`lagann-0526`, TUF B860-PLUS WIFI,
    RTX 5060, F-series CPU with no iGPU) enumerates the glasses over USB but
    cannot drive them as a display: on a desktop board the Type-C DP Alt Mode

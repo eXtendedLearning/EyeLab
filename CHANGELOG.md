@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `xreal_shutdown.bat` (repo root, double-click) + `tools/xreal_shutdown.ps1`:
+  stops EyeLab probe/GUI Python processes and any process with an XREAL DLL
+  loaded (`tasklist /m`), re-checks, then waits for the glasses (USB VID 3318)
+  to be unplugged and reports PASS/FAIL. Sends nothing to the glasses and
+  disables no device.
+- ADR-003: S2 result (passed on the desktop, NR 3.1.1, standalone without a
+  graphics context) and the electrochromic observation (powered-off is
+  clearer than level 1).
 - **XREAL native API bring-up, Stage S2 of ADR-003**
   (`python/xreal_native.py`, `python/xreal_native_probe.py`). Loads the Tier B
   NRSDK from `vendor/xreal/win-x64/` the way the vendor's own Unity plugin
