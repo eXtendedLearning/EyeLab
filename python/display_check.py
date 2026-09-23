@@ -27,7 +27,7 @@ Usage::
     python python/display_check.py --monitor 2 --placement windowed   # debug placement
 
 Keys: ``space``/``right`` next page, ``left`` previous, ``c`` cycle colour,
-``[`` / ``]`` adjust disparity in SBS mode, ``f`` toggle fullscreen,
+``[`` / ``]`` adjust disparity in SBS mode, ``f`` re-assert window placement,
 ``Esc``/``q`` quit.
 
 tkinter only — no OpenCV, no numpy, so it starts instantly and cannot be
@@ -141,18 +141,21 @@ def list_monitors() -> list[Monitor]:
         ]
 
     found: list[Monitor] = []
+    # BOOL CALLBACK MonitorEnumProc(HMONITOR, HDC, LPRECT, LPARAM). Handles are
+    # pointer-sized and LPARAM is a pointer-sized integer: declaring the last
+    # one as a double moves it to an XMM register on x64 and reads garbage.
     MONITORENUMPROC = ctypes.WINFUNCTYPE(
         ctypes.c_int,
-        ctypes.c_ulonglong,
-        ctypes.c_ulonglong,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
         ctypes.POINTER(RECT),
-        ctypes.c_double,
+        ctypes.c_ssize_t,
     )
 
     def _callback(hmonitor, _hdc, _rect, _data):
         info = MONITORINFO()
         info.cbSize = ctypes.sizeof(MONITORINFO)
-        if user32.GetMonitorInfoW(ctypes.c_ulonglong(hmonitor), ctypes.byref(info)):
+        if user32.GetMonitorInfoW(ctypes.c_void_p(hmonitor), ctypes.byref(info)):
             r = info.rcMonitor
             found.append(
                 Monitor(
@@ -553,8 +556,8 @@ def run_gui(monitor: Monitor, args: argparse.Namespace) -> int:  # pragma: no co
     root.bind("<Right>", lambda e: step_page(1))
     root.bind("<Left>", lambda e: step_page(-1))
     root.bind("c", cycle_colour)
-    root.bind("bracketleft", lambda e: nudge(-4))
-    root.bind("bracketright", lambda e: nudge(4))
+    # A bare "bracketleft" (no angle brackets) would bind the 11-keystroke
+    # sequence b-r-a-c-k-e-t-l-e-f-t, not the key; the literal characters do.
     root.bind("[", lambda e: nudge(-4))
     root.bind("]", lambda e: nudge(4))
     root.bind("f", reassert_placement)

@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **XREAL native API bring-up, Stage S2 of ADR-003**
+  (`python/xreal_native.py`, `python/xreal_native_probe.py`). Loads the Tier B
+  NRSDK from `vendor/xreal/win-x64/` the way the vendor's own Unity plugin
+  does (`SetDllDirectory` + `libnr_loader.dll`) and runs one of three
+  cumulative levels in an isolated child process: `load` (preflight + resolve,
+  no NR call), `version` (`NRAPICreate` -> `NRGetVersion` -> `NRAPIDestroy`),
+  `start` (the host's `InitSetNetworkType(0)` -> `NRAPIStart` -> version ->
+  `Stop` -> `Destroy`). Only six functions are ever called; every signature
+  was recovered statically and the evidence is in
+  `docs/NEBULA-WINDOWS-AUDIT-2026-09-21.md` §9. Preflight names missing staged
+  files and the two system DLLs `libnr_api` needs (`vulkan-1.dll`,
+  `D3DCOMPILER_47.dll`) instead of failing with error 126. Runs append to
+  `python/.logs/xreal_native_probe.jsonl`, including the vendor library's own
+  console output.
+- `python/native_isolation.py`: the child-process runner shared by the S0 and
+  S2 probes. Payloads are framed with a sentinel line so vendor logging on
+  stdout cannot corrupt them; Windows crash codes (`0xC0000005`, `0xC0000135`,
+  ...) are named in the failure message.
+- `python/test_xreal_native.py` (30 tests): call order per level, cleanup on
+  every failure path, and that no resolve-only export is ever called.
+- **XREAL Stage 0 and S1** (committed 2026-09-22 without a changelog entry):
+  `python/xreal_glasses.py` + `python/xreal_probe.py`, the read-only Tier A
+  HID probe; `python/display_check.py`, the S1 display smoke test;
+  `docs/adr/0003-eye-pov-rigid-coupling.draft.md`;
+  `docs/NEBULA-WINDOWS-AUDIT-2026-09-21.md`; `vendor/README.md`.
+
 - **AR freeze diagnostics** (`python/ar_watchdog.py`,
   [`docs/ar-freeze-diagnostics.md`](docs/ar-freeze-diagnostics.md)). `Start AR`
   can render a couple of frames and then leave the GUI black and unresponsive
@@ -35,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `xreal_probe.py` delegates to `native_isolation` (same behaviour, now framed
+  output); `xreal_glasses.vendor_dir()` is the single definition of the staging
+  directory for Tier A and Tier B.
+- ADR-003: the S2 bring-up no longer lists `NRAPIInitSetStandalone`; the
+  vendor host never calls it (audit §9).
 - **AR loop latency, tier 1** (measured against
   `.logs/ar_debug_20260919_115730.jsonl` and `..._120509.jsonl`: `ui_fps`
   20-24 with no markers in view, 10.5-15 with two or three).
@@ -66,6 +97,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `display_check.py`: the `EnumDisplayMonitors` callback declared its `LPARAM`
+  as a `double` (read from an XMM register on x64) and handles as fixed
+  64-bit integers; now `c_ssize_t` / `c_void_p`. Two bindings
+  (`"bracketleft"`, `"bracketright"`) lacked angle brackets and bound an
+  11-keystroke sequence instead of a key; removed, the literal `[` / `]`
+  bindings remain. The docstring described `f` as "toggle fullscreen"; it
+  re-asserts placement.
 - **Opening a camera froze the GUI, and a silent camera was read in a tight
   loop.** Diagnosed from `.logs/ar_debug_20260919_113447.jsonl`; details and
   the raw numbers in
@@ -135,6 +173,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scale - verified: identical fx/fy/cx/cy for declared sizes from 0.4x to 2.0x),
   but it is the only way an operator can confirm their printed board against the
   GUI's ruler check.
+
+### Removed
+
+- `Claude outputs/`: tracked byte-identical duplicates of
+  `output/pdf/charuco_5x7_{25,35}mm_A4.pdf`.
 
 ### Added
 

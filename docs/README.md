@@ -13,8 +13,15 @@ This folder holds the **committed, public-safe** engineering documentation for E
 ```
 docs/
 ├── README.md                                    # this file
+├── AUDIT-2026-09-18.md                          # code/doc audit (findings S1-S8, D1-D9)
+├── NEBULA-WINDOWS-AUDIT-2026-09-21.md           # XREAL Windows runtime: tiers, S0 result, S2 signatures (§9)
+├── ar-freeze-diagnostics.md                     # AR loop freeze investigation
+├── aruco_marker_best_practices.pdf
+├── audit_verify.py                              # reproduces the 2026-09-18 findings
 ├── adr/
-│   └── 0001-opencv-bridging-staircase.md        # ADR-001
+│   ├── 0001-opencv-bridging-staircase.md        # ADR-001 (accepted)
+│   ├── 0002-registration-strategy.draft.md      # ADR-002 (proposed)
+│   └── 0003-eye-pov-rigid-coupling.draft.md     # ADR-003 (proposed) — S0-S6 stage ladder
 └── tasks/
     └── T2.6-implementation-checklist.md         # T2.6 v0 plan
 ```

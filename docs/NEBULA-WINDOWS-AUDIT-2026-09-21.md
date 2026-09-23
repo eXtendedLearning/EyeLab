@@ -455,3 +455,70 @@ now the gating task, not library access.
    display,** or does the DP path require a Windows display device to exist?
 
 Questions 1–3 are all answered by one read-only Python session against Tier A.
+
+---
+
+## 9. Tier B — S2 signatures recovered statically (2026-09-22)
+
+Method: disassembly (capstone) of the export thunks in `libnr_api.dll` and of
+the vendor's own caller, `XREALXRPlugin.dll`, from the same build. The plugin
+logs every wrapper call (`[NativeAPI] Start`, `[NativeAPI] GetVersion: %d.%d.%d`,
+…), which labels its call sites. Nothing was executed. Consumer:
+`python/xreal_native.py`.
+
+### How the vendor host brings the API up
+
+1. `SetDllDirectoryA(<Plugins/x86_64>)`, then `LoadLibrary("libnr_loader.dll")`
+   and `GetProcAddress` for 15 `NRAPI*`/`NRGetVersion*` names into a function
+   table. **The entry point is the loader, not `libnr_api.dll`.** The loader
+   exports 631 of `libnr_api`'s 657 symbols (a strict subset) and loads
+   `libnr_api` by bare name, which is why the host sets the DLL directory.
+2. `NRAPICreate(&handle)`, then, from settings: `NRAPIInitSetRenderMode(h, 1)`
+   (conditional), `NRAPIInitSetLicenseData(h, data, len)` (only if configured),
+   `NRAPIInitSetGlassesControl(h, 1, config_str)` (only if configured),
+   `NRAPIInitSetGraphicContextType(h, type)`.
+3. `[NativeAPI] Start`: `NRAPIInitSetNetworkType(h, 0)` → `NRAPIStart(h)` →
+   `NRGetVersion(h, &v)`. A failed `InitSetNetworkType` is logged and Start
+   proceeds anyway.
+4. Shutdown: `NRAPIStop(h)` → `NRAPIDestroy(h)`.
+
+**`NRAPIInitSetStandalone` is never called by the host.** ADR-003 listed it as
+part of the standalone bring-up; that was an inference from the name, and the
+binary does not support it. S2 resolves it and reports it, but does not call it.
+
+### Signatures used by S2
+
+| Function | Signature | Evidence |
+|---|---|---|
+| `NRAPICreate` | `int32 (uint64* out_handle)` | thunk forwards `rcx` as the out-pointer; host passes `&wrapper->handle` |
+| `NRGetVersion` | `int32 (uint64 handle, NRVersion* out)` | returns 1 if `out` is NULL; writes dwords at +0/+4/+8 |
+| `NRAPIInitSetNetworkType` | `int32 (uint64 handle, int32 value)` | `edx` 32-bit; host passes 0 |
+| `NRAPIStart` / `Stop` / `Destroy` | `int32 (uint64 handle)` | `rcx` only |
+
+`NRVersion` is three `int32` (12 bytes), logged by the host as `%d.%d.%d`.
+Return value 0 is success — the only value the host tests. Other codes are
+reported raw; their names are not recovered.
+
+### Recovered but not called
+
+| Function | Shape | Why not called |
+|---|---|---|
+| `NRAPIInitSetGraphicContextType` | `(h, int32)` | enum values not recovered; S2 is headless |
+| `NRAPIInitSetRenderMode` | `(h, int32)` | host passes 1 only conditionally |
+| `NRAPIInitSetGlassesControl` | `(h, bool, const char*)` | config string format unknown |
+| `NRAPIInitSetLicenseData` | `(h, const char*, int32)` | §3: not enforced |
+| `NRGetVersionExt` | — | a stub in this build: `mov eax, 4; ret` |
+
+### Load-time dependencies not in the staging list
+
+`libnr_api.dll` statically imports **`vulkan-1.dll`** (installed by the GPU
+driver, not Windows) and `D3DCOMPILER_47.dll` (Windows). A machine without a
+Vulkan-capable driver fails the load with error 126 before any NR code runs.
+`xreal_native.preflight()` checks for both.
+
+### What S2 cannot tell from static analysis
+
+Whether `NRAPIStart` succeeds without a graphics context type set, what it
+does to the glasses' display mode, and whether it expects the 6DoF plugin
+(`libnr_plugin_6dof.dll`, loopback `127.0.0.1:53004`) to come up. Those are
+the questions the `start` level exists to answer.

@@ -132,8 +132,11 @@ this ADR does not dress it up as one.
 - Staging Tier B (`libnr_api.dll` + 11 dependencies, 97.5 MB — see
   `vendor/README.md`).
 - Establishing whether the Tier B C API can be initialised standalone
-  (`NRAPICreate` / `NRAPIInitSetStandalone` / `NRAPIStart`) without Nebula and
+  (`NRAPICreate` / `NRAPIInitSetNetworkType` / `NRAPIStart`) without Nebula and
   without a Unity graphics context. This is the largest unknown in the plan.
+  *(Corrected 2026-09-22: this line originally listed
+  `NRAPIInitSetStandalone`. The vendor's own host never calls it — see audit
+  §9 — so S2 does not either.)*
 - Recovering function signatures for the Tier B calls. Unlike hidapi, these are
   undocumented; Stage 0 deliberately calls none of them.
 
@@ -152,8 +155,8 @@ this ADR does not dress it up as one.
 | Stage | Goal | Needs | Status |
 |---|---|---|---|
 | **S0** | Identity, firmware version, HID topology | Tier A, read-only | **done 2026-09-22** — DLL loads standalone, 25/25 exports, `3318:0436`, 2 HID interfaces (`MI_00` vendor, `MI_08` keys). See audit §7a |
-| **S1** | Display smoke test — black transmissivity, wireframe legibility, stereo comfort | glasses as DP monitor, static pattern | **built 2026-09-22** — `python/display_check.py`, awaiting a run |
-| **S2** | Tier B "hello world": initialise the C API standalone, read `NRGetVersion` | Tier B staged, signatures recovered | not started; largest unknown |
+| **S1** | Display smoke test — black transmissivity, wireframe legibility, stereo comfort | glasses as DP monitor, static pattern | **passed 2026-09-22** on the Surface — all pages, lines and colours legible. One finding: see "Electrochromic floor" below |
+| **S2** | Tier B "hello world": initialise the C API standalone, read `NRGetVersion` | Tier B staged, signatures recovered | **built 2026-09-22** — Tier B staged, S2 signatures recovered statically (audit §9), `python/xreal_native_probe.py` (`load` → `version` → `start`), awaiting a run |
 | **S3** | Head pose at high rate — IMU stream, then `NRHeadTracking` if it initialises | S2 | not started |
 | **S4** | Factory calibration — per-component intrinsics, extrinsics, distortion | S2 | not started |
 | **S5** | Eye/SLAM camera as a frame source (`read()` / `stats()` / `stop()` / `source_id`) | S2, plus the UVC or NCM route from the audit | not started |
@@ -161,6 +164,57 @@ this ADR does not dress it up as one.
 
 S3 and S4 both precede S5 under this ADR, which is the reordering point: the
 previous plan in `CONTEXT.md` treated the camera feed as the gate.
+
+## S1 result (2026-09-22)
+
+Run on the Surface Pro 7. All four pages rendered; every line width and every
+colour was legible through the optics. The display path is sound, and
+black-on-transparent works as the grid-only architecture assumes.
+
+### Electrochromic floor — new constraint
+
+The lenses keep a visible tint even at the lowest dimming setting: roughly
+"smoke glasses", not clear. **This is the product working as designed, not a
+fault.** XREAL's own user guide documents the electrochromic control as
+*three levels* cycled with the brightness button, and documents **no fully
+transparent setting**. Level 1 of 3 is the floor the UI offers.
+
+Whether that is also the *hardware* floor is an open question with real
+consequences, and the native API hints that it may not be. `libnr_api.dll`
+exposes two distinct families:
+
+```
+discrete   NRGlassesControlSetElectrochromicLevel   NRGlassesSetEcLevel
+           NRGlassesControlGetElectrochromicTotalLevel   NRGlassesGetEcLevelCount
+raw        NRGlassesControlSetElectrochromicValue   NRGlassesSetEcValue
+                                                    NR_GLASSES_CONTROL_PARAMS_EC_VALUE
+```
+
+A *value* setter alongside a *level* setter usually means the value API drives
+the film directly at finer granularity than the levels expose — plausibly
+below the UI's floor. Testable at S3/S4, since these are Tier B calls.
+
+**Free test first, before writing any code.** Electrochromic films are clear
+when unpowered (fail-safe). Compare looking through the glasses **powered off**
+against **powered on at level 1**:
+
+- *Identical* → level 1 already means EC off, and the residual tint is the
+  X-Prism optics themselves. No software will improve it; treat the
+  transmittance as a fixed property of the hardware.
+- *Powered-off is clearer* → the film still carries drive at level 1, and
+  `NRGlassesSetEcValue` has headroom worth chasing.
+
+### Consequence either way
+
+For overlay *legibility* the tint is a benefit — attenuating the real world
+raises overlay contrast, which is why the electrochromic layer exists at all.
+The concern is **operator ergonomics and safety**: an operator placing impact
+hammer strikes on a specimen is doing precise, physical work while seeing the
+scene through attenuated optics. That belongs in the lab protocol — task
+lighting on the specimen, and a check that the operator can see the hammer,
+the structure and their own hands comfortably — not only in the software.
+
+---
 
 ## Open questions
 
@@ -173,3 +227,15 @@ previous plan in `CONTEXT.md` treated the camera feed as the gate.
 4. Does the overlay need per-user eye calibration beyond `NRHMDUpdateIPD`?
    Optical see-through systems usually do (SPAAM or similar); how much residual
    error remains without it is unmeasured.
+5. Is the electrochromic floor a UI limit or a hardware limit? See the S1
+   result above; the powered-off comparison settles it for free.
+6. **Host machine for S6.** The desktop (`lagann-0526`, TUF B860-PLUS WIFI,
+   RTX 5060, F-series CPU with no iGPU) enumerates the glasses over USB but
+   cannot drive them as a display: on a desktop board the Type-C DP Alt Mode
+   is sourced from the integrated GPU, and there isn't one. The board does have
+   a Thunderbolt (USB4) header, so a Thunderbolt add-in card with
+   DisplayPort IN looped from the RTX 5060 would supply video *and* USB data on
+   one connector — the only adapter class that does both. A plain DP-to-USB-C
+   converter gives video only, which is not enough for S6. Deferred: S2-S5 need
+   USB data only, and the Surface already does display. Decide when S6 is close
+   and the Surface's compute has been measured.

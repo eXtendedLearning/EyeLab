@@ -31,9 +31,9 @@ import argparse
 import json
 import subprocess
 import sys
-import time
-from datetime import datetime, timezone
 from pathlib import Path
+
+from native_isolation import append_jsonl, emit, run_json_worker
 
 HERE = Path(__file__).resolve().parent
 LOG_PATH = HERE / ".logs" / "xreal_probe.jsonl"
@@ -47,54 +47,17 @@ def _run_worker() -> int:
     sys.path.insert(0, str(HERE))
     from xreal_glasses import probe
 
-    payload = probe().to_dict()
-    sys.stdout.write(json.dumps(payload))
-    sys.stdout.flush()
+    emit(probe().to_dict())
     return 0
 
 
 def run_probe(timeout_s: float = DEFAULT_TIMEOUT_S) -> dict:
     """Run the probe out-of-process. Always returns a dict, never raises."""
-    started = time.monotonic()
-    try:
-        completed = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve()), _WORKER_FLAG],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-        )
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "fatal": (
-                f"probe did not finish within {timeout_s:.0f}s. A native call "
-                f"is hanging; unplug and replug the glasses and retry."
-            ),
-            "elapsed_s": round(time.monotonic() - started, 3),
-        }
-
-    elapsed = round(time.monotonic() - started, 3)
-    if completed.returncode != 0 or not completed.stdout.strip():
-        detail = (completed.stderr or "").strip().splitlines()
-        tail = detail[-1] if detail else f"exit code {completed.returncode}"
-        return {
-            "ok": False,
-            "fatal": f"probe subprocess failed: {tail}",
-            "stderr": (completed.stderr or "")[-4000:],
-            "elapsed_s": elapsed,
-        }
-
-    try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        return {
-            "ok": False,
-            "fatal": f"probe produced unparseable output: {exc}",
-            "stdout": completed.stdout[:4000],
-            "elapsed_s": elapsed,
-        }
-    payload["elapsed_s"] = elapsed
-    return payload
+    return run_json_worker(
+        [sys.executable, str(Path(__file__).resolve()), _WORKER_FLAG],
+        timeout_s,
+        label="probe",
+    )
 
 
 USB_QUERY = (
@@ -183,14 +146,7 @@ def enumerate_usb_windows(timeout_s: float = 20.0) -> dict:
 
 
 def _log(payload: dict) -> None:
-    try:
-        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        record = dict(payload)
-        record["timestamp"] = datetime.now(timezone.utc).isoformat()
-        with LOG_PATH.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record) + "\n")
-    except OSError:
-        pass  # logging is best-effort; never fail a probe over it
+    append_jsonl(LOG_PATH, payload)  # best-effort; never fails a probe
 
 
 def _render(payload: dict, show_all: bool) -> str:

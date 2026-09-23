@@ -211,13 +211,18 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def vendor_dir() -> Path:
+    """Where staged XREAL DLLs live (Tier A and Tier B). See vendor/README.md."""
+    return repo_root() / "vendor" / "xreal" / "win-x64"
+
+
 def candidate_library_paths() -> list[Path]:
     """Where to look for the DLL, in priority order."""
     paths: list[Path] = []
     override = os.environ.get(ENV_OVERRIDE)
     if override:
         paths.append(Path(override))
-    paths.append(repo_root() / "vendor" / "xreal" / "win-x64" / LIBRARY_FILENAME)
+    paths.append(vendor_dir() / LIBRARY_FILENAME)
     return paths
 
 

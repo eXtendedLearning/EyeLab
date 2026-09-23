@@ -2,7 +2,7 @@
 
 > Living glossary and shared-mental-model notes. Captures terms, decisions, and open issues surfaced during grilling. Authoritative scope/plan lives in `.docs/PROJECT.md`, theory in `.docs/THEORY.md`, task plan in `.docs/TASKS.md`, decisions in `.docs/adr/`. This file holds **deltas the project plan does not capture** plus the live "open question" board.
 >
-> Last updated: 2026-09-19 (tier-1 AR loop latency work + XREAL Eye access survey - see "XREAL Eye access routes" and open issue 6; `Start AR` / calibration GUI freeze traced with `python/ar_watchdog.py` to blocking camera opens and a spinning capture reader, both fixed - see open issue 5 and `docs/ar-freeze-diagnostics.md`; 2026-07-10: single-marker sustain via IPPE planar-ambiguity resolution against the Kalman prior — acquire still needs 3; per-marker axis overlay; Geometry Editor tab + `unv_writer.py` for synthetic .unv authoring; `docs/aruco_marker_best_practices.pdf`; Status section below still reflects the 2026-05-14 snapshot and needs a proper revision).
+> Last updated: 2026-09-22 (XREAL native route: S0 done, S1 passed, S2 built - see "Native route status" under "XREAL Eye access routes"; the Status section remains the 2026-05-14 snapshot, audit D1). Previously 2026-09-19 (tier-1 AR loop latency work + XREAL Eye access survey - see "XREAL Eye access routes" and open issue 6; `Start AR` / calibration GUI freeze traced with `python/ar_watchdog.py` to blocking camera opens and a spinning capture reader, both fixed - see open issue 5 and `docs/ar-freeze-diagnostics.md`; 2026-07-10: single-marker sustain via IPPE planar-ambiguity resolution against the Kalman prior — acquire still needs 3; per-marker axis overlay; Geometry Editor tab + `unv_writer.py` for synthetic .unv authoring; `docs/aruco_marker_best_practices.pdf`; Status section below still reflects the 2026-05-14 snapshot and needs a proper revision).
 
 ## Status
 
@@ -82,6 +82,23 @@ Consequences for the pipeline if we take the Windows NCM route:
   inside Nebula's virtual desktop it adds a compositing stage in front of the
   panel. Determine this before trusting any latency measurement taken with
   Nebula running.
+
+### Native route status (2026-09-22)
+
+Tracked stage by stage in ADR-003 (`docs/adr/0003-eye-pov-rigid-coupling.draft.md`).
+
+- **S0 done** — `libnr_glasses_api.dll` (Tier A) loads standalone on Windows,
+  glasses enumerate as `3318:0436`, the same identity the Android UVC route
+  targets. The "Android only" label on that route above is therefore about
+  where it has been *demonstrated*, not where the library exists; the unlock
+  itself is still untested on Windows. Firmware version unread (signature).
+- **S1 passed** — glasses as a plain DP monitor: all lines and colours legible;
+  the electrochromic tint has a floor at level 1 of 3 (ADR-003).
+- **S2 built, not run** — Tier B staged in `vendor/xreal/win-x64/`; the
+  vendor host's bring-up sequence and the six signatures S2 calls recovered
+  statically (`docs/NEBULA-WINDOWS-AUDIT-2026-09-21.md` §9);
+  `python/xreal_native_probe.py`. Entry point is `libnr_loader.dll`, and
+  `NRAPIInitSetStandalone` is not part of the sequence.
 
 ## Workspace / collaboration constraints
 
