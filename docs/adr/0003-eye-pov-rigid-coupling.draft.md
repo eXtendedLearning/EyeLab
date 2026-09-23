@@ -236,6 +236,14 @@ version   NRAPICreate 2.3 s -> NRGetVersion -> NRAPIDestroy     NR 3.1.1
 start     Create -> InitSetNetworkType(0) -> NRAPIStart 16 ms -> NRGetVersion -> Stop -> Destroy
 ```
 
+**Reproduced on the Surface Pro 7** the same day: all three levels, NR 3.1.1.
+The first `NRAPICreate` there took 15.4 s against 2.1 s on the next run —
+consistent with a cold first load of ~94 MB of unsigned DLLs (on-access
+antivirus scanning is the usual cause; not verified). Keep S3 timeouts
+generous for the first run on any machine. The earlier Surface failures were
+all `preflight: not staged` — `vendor/` is gitignored, so a `git pull` never
+brings the DLLs; each machine stages its own copy.
+
 The vendor log (kept in `python/.logs/xreal_native_probe.jsonl`) shows
 `Loader init success!`, `Load from local`, and on `start` the device
 definitions for glasses config, vsync, three IMUs, the grayscale and RGB

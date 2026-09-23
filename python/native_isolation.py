@@ -32,8 +32,13 @@ from typing import Any, Optional, Sequence
 
 SENTINEL = "@@EYELAB-JSON@@ "
 
-#: How much of the child's own stdout/stderr to keep in a payload.
+#: How much of the child's own stdout/stderr to keep in a failure payload.
 OUTPUT_TAIL_CHARS = 4000
+
+#: How much vendor console output to keep on success. Generous on purpose: the
+#: NRSDK log's *head* (glasses identity, connection) is the informative part,
+#: and a 4000-char tail cut it off in the first S2 runs.
+NATIVE_OUTPUT_CHARS = 200_000
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -118,7 +123,7 @@ def run_json_worker(
     payload["elapsed_s"] = elapsed
     native = "\n".join(p for p in (other, stderr.strip()) if p)
     if native:
-        payload["native_output"] = native[-OUTPUT_TAIL_CHARS:]
+        payload["native_output"] = native[-NATIVE_OUTPUT_CHARS:]
     return payload
 
 
