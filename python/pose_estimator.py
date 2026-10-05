@@ -20,7 +20,7 @@ import socket
 import struct
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
 
@@ -70,6 +70,11 @@ class FrameResult:
     gray: np.ndarray                      # grayscale
     markers: list[DetectedMarker] = field(default_factory=list)
     pose: Optional[PoseResult] = None
+    # The pose as measured this frame (solvePnP + LM), before the pose lock /
+    # Kalman smoothing that produces ``pose``. None when nothing was measured.
+    # ``pose`` is what the overlay draws; this is what validation needs to
+    # separate measurement noise from filtering (python/validation/).
+    measured_pose: Optional[PoseResult] = None
     fps: float = 0.0
     timestamp: float = 0.0
     raw_marker_count: int = 0
@@ -1206,6 +1211,7 @@ class ArucoPipeline:
 
         # Board-level pose estimation (lock-aware)
         pose: Optional[PoseResult] = None
+        measured_pose: Optional[PoseResult] = None
         if self.camera_matrix is not None:
             measured: Optional[PoseResult] = None
             if ids is not None and len(ids) > 0:
@@ -1222,6 +1228,9 @@ class ArucoPipeline:
                         else None
                     ),
                 )
+            # Snapshot before smoothing: the non-board branch below updates
+            # ``measured`` in place with the Kalman output.
+            measured_pose = replace(measured) if measured is not None else None
             if self.uses_structure_board:
                 # Lock owns smoothing, validation gates, and coasting
                 pose = self.pose_lock.process(measured)
@@ -1251,6 +1260,7 @@ class ArucoPipeline:
             gray=enhanced,
             markers=markers,
             pose=pose,
+            measured_pose=measured_pose,
             fps=self._fps,
             timestamp=time.time(),
             raw_marker_count=raw_marker_count,

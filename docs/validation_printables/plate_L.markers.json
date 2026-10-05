@@ -1,0 +1,73 @@
+{
+  "defaultMarkerSizeMm": 20.0,
+  "markers": [
+    {
+      "markerId": 40,
+      "unvPosition": [
+        -0.118,
+        -0.046,
+        0.0
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 20.0,
+      "nodeId": null,
+      "description": "plate_L face H"
+    },
+    {
+      "markerId": 41,
+      "unvPosition": [
+        0.118,
+        -0.046,
+        0.0
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 20.0,
+      "nodeId": null,
+      "description": "plate_L face H"
+    },
+    {
+      "markerId": 42,
+      "unvPosition": [
+        -0.118,
+        2.8166876380389123e-18,
+        0.046
+      ],
+      "normal": [
+        0.0,
+        -1.0,
+        6.123233995736766e-17
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 20.0,
+      "nodeId": null,
+      "description": "plate_L face V"
+    },
+    {
+      "markerId": 43,
+      "unvPosition": [
+        0.118,
+        2.8166876380389123e-18,
+        0.046
+      ],
+      "normal": [
+        0.0,
+        -1.0,
+        6.123233995736766e-17
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 20.0,
+      "nodeId": null,
+      "description": "plate_L face V"
+    }
+  ]
+}

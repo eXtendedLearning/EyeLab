@@ -17,6 +17,9 @@ docs/
 ├── NEBULA-WINDOWS-AUDIT-2026-09-21.md           # XREAL Windows runtime: tiers, S0 result, S2 signatures (§9)
 ├── ar-freeze-diagnostics.md                     # AR loop freeze investigation
 ├── aruco_marker_best_practices.pdf
+├── validation.md                                # baseline validation protocol (python/validation/)
+├── validation-campaign.md                       # step-by-step campaign guide (validation.bat)
+├── validation_printables/                       # plates A/L, ChArUco board, derived target/marker/UNV files
 ├── audit_verify.py                              # reproduces the 2026-09-18 findings
 ├── adr/
 │   ├── 0001-opencv-bridging-staircase.md        # ADR-001 (accepted)

@@ -67,6 +67,25 @@ def run_isolated(level: str, entry: str, directory: Optional[Path],
     )
 
 
+def judge_glasses_link(payload: dict) -> None:
+    """Add ``glasses_link``; a start without glasses is not a pass.
+
+    Every call returns 0 with the glasses unplugged (negative control,
+    2026-09-23), so for ``start`` the verdict also requires the SDK log to
+    show a device. ``version`` stays a library-only check.
+    """
+    from xreal_native import LINK_CONNECTED, glasses_link_from_log
+
+    link = glasses_link_from_log(payload.get("native_output", ""))
+    payload["glasses_link"] = link
+    if payload.get("level") == "start" and payload.get("ok") and link != LINK_CONNECTED:
+        payload["ok"] = False
+        payload["error"] = (
+            f"every call returned 0, but the SDK log shows glasses link '{link}' - "
+            "return codes do not prove the glasses were reached"
+        )
+
+
 def _render(payload: dict) -> str:
     lines = ["XREAL native API - Stage S2", "=" * 28, ""]
     if payload.get("fatal"):
@@ -115,6 +134,8 @@ def _render(payload: dict) -> str:
     if payload.get("level") == "start":
         lines.append(f"started           {'yes' if payload.get('started') else 'no'}")
     lines.append(f"NR version        {payload.get('version') or '-'}")
+    if payload.get("glasses_link"):
+        lines.append(f"glasses link      {payload['glasses_link']}  (from the SDK log: DeviceMode)")
     if payload.get("error"):
         lines.append(f"error             {payload['error']}")
     if payload.get("native_output"):
@@ -145,6 +166,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     payload = run_isolated(args.level, args.entry, args.dir, timeout)
     payload.setdefault("level", args.level)
     payload.setdefault("entry", args.entry)
+    judge_glasses_link(payload)
     append_jsonl(LOG_PATH, payload)
 
     print(json.dumps(payload, indent=2) if args.json else _render(payload))

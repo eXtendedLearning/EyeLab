@@ -522,3 +522,409 @@ Whether `NRAPIStart` succeeds without a graphics context type set, what it
 does to the glasses' display mode, and whether it expects the 6DoF plugin
 (`libnr_plugin_6dof.dll`, loopback `127.0.0.1:53004`) to come up. Those are
 the questions the `start` level exists to answer.
+
+---
+
+## 10. Tier B — S3 IMU signatures recovered statically (2026-09-23)
+
+Same method as §9. The vendor host's `[NativeImu]` wrapper resolves its
+function table in this order (offsets into the table): `+0x00`
+`NRImuDataDestroy`, `+0x08` `…GetHMDTimeNanos`, `+0x10` `…OnDevice`, `+0x18`
+`…GetGyroscope`, `+0x20` `…GetAccelerometer`, `+0x28` `…GetMagnetometer`,
+`+0x30` `NRImuCreate`, `+0x38` `NRImuSetCaptureCallback`, `+0x40`
+`NRImuStart`, then Pause, Resume, Stop, Destroy.
+
+| Function | Signature | Evidence |
+|---|---|---|
+| `NRImuCreate` | `int32 (uint64* out)` | thunk uses `rcx` only; host passes `&wrapper->handle` |
+| `NRImuSetCaptureCallback` | `int32 (uint64 imu, cb, void* user)` | `rcx`/`rdx`/`r8`; host passes its callback and `user = NULL` |
+| `NRImuStart` / `Stop` / `Destroy` | `int32 (uint64 imu)` | `rcx` only (Start reached through a vtable in the host) |
+| callback | `void (uint64 imu, uint64 data, void* user)` | library trampoline: `if (cb) cb(rdx, r8, r9)` |
+| `NRImuDataGet{Gyroscope,Accelerometer,Magnetometer}` | `int32 (uint64 imu, uint64 data, float[3]* out)` | three `movss` stores at +0/+4/+8; 1 if `out` is NULL |
+| `NRImuDataGetHMDTimeNanos[OnDevice]` | `int32 (uint64 imu, uint64 data, uint64* out)` | one qword store |
+| `NRImuDataDestroy` | `int32 (uint64 imu, uint64 data)` | two registers |
+
+**Ownership.** The host's callback (`[NativeImu] GetImuData`) reads time,
+gyro, accel and mag **inside the callback**, packs them into a 48-byte record
+(`u64 t_ns`, three `float3`), then calls `NRImuDataDestroy(imu, data)`. The
+data handle does not outlive the callback. `python/xreal_imu.py` follows the
+same contract.
+
+**Not known statically:** units (rad/s vs deg/s, m/s² vs g), axis
+convention, sample rate, and which of the three IMUs (`imu type 0/1/2` in the
+S2 log) the single `NRImuCreate` handle streams. S3's rest and turn
+recordings measure the first three; the fourth is recorded as open.
+
+---
+
+## 11. Tier B — why S3's IMU run failed: a licence gate (2026-09-23)
+
+Method as in §9 and §10 — `pefile` + `capstone`, nothing executed — plus one
+source not used before: **Nebula is an IL2CPP build**, so its managed enums
+survive verbatim in
+`Nebula for Windows_Data/il2cpp_data/Metadata/global-metadata.dat`.
+
+### What the run did
+
+Three runs of `python/xreal_imu_probe.py` (two `rest`, one `--turn yaw`), all
+identical: `NRAPICreate` → `InitSetNetworkType(0)` → `NRAPIStart` →
+`NRGetVersion` all returned 0, `glasses_link: connected`, then
+
+```
+NRImuCreate  ->  22      in 0.004 ms      samples 0
+```
+
+Two things rule out the obvious suspects. The link is up (`DeviceMode=1`,
+three IMU objects created by `NRAPIStart`). And the call produced **no SDK log
+output at all**: the S3 logs contain exactly the same four
+`ImuInterface::CreateDefinition end` and three `Create imu type:N id:M` lines
+as the §9 `start`-level runs, which never call `NRImuCreate`. 4 µs, no device
+traffic.
+
+### The dispatch is fine; the call is refused on arrival
+
+`libnr_loader!NRImuCreate` (rva `0x21110`) is a table thunk: a global pointer,
+slot `+0x30`, `jmp`. All thirteen `NRImu*` exports dispatch through the same
+table (`+0x00` `DataDestroy` … `+0x60` `Destroy`, matching §10's ordering
+exactly). **If that table were unbound the thunk would return 1, not 22**, so
+the call reached `libnr_api`.
+
+`libnr_api!NRImuCreate` (rva `0x366f0`) builds the string `"imu"` on the stack
+and calls a gate at `0x12eef0(registry, "imu", 1)`. If the gate returns
+non-zero it returns that code and **skips the implementation entirely** — the
+vtable call at `+0x52` is never reached, and the out-pointer is never
+dereferenced. So the argument shape recovered in §10 is not what failed, and
+retrying with other argument shapes cannot help.
+
+Inside the gate (`0x12f6a9`–`0x12f71b`) the module name is looked up by linear
+scan in a global vector of 24-byte entries, `begin = 0x2c5b8e0`,
+`end = 0x2c5b8e8`. **Empty vector → `mov edi, 0x16` (22). Scanned without a
+match → the same branch.** The only other reference to that vector in the
+whole 46 MB DLL is at `0x11e3ac`, inside a function that first calls a
+bool-returning parser (`0x11efd0`) and, on success, fills a set of globals:
+two strings, a 16-byte blob, this vector, a qword and a second vector. Every
+string constant on that path is obfuscated and the function has no direct
+callers (it is reached through a pointer), so *what* populates the list is not
+recovered.
+
+### 22 has a name
+
+`XREALErrorCode` is in Nebula's metadata in declaration order, its constants
+stored as zigzag varints in the field-default blob. The first block decodes
+cleanly and sequentially, which is its own corroboration:
+
+| | | | |
+|---|---|---|---|
+| 0 Success | 7 SdcardPermissionDeny | 14 UnSupportedHandtrackingCalculation | 21 TimeOut |
+| 1 Failure | 8 RGBCameraDeviceNotFind | 15 Busy | **22 LicenseFeatureUnsupported** |
+| 2 InvalidArgument | 9 DPDeviceNotFind | 16 Processing | 23 LicenseDeviceUnsupported |
+| 3 NotEnoughMemory | 10 TrackingNotRunning | 17 NumberLimited | 24 LicenseExpiration |
+| 4 UnSupported | 11 GetDisplayFailure | 18 DisplayNoInStereoMode | |
+| 5 GlassesDisconnect | 12 GetDisplayModeMismatch | 19 InvalidData | |
+| 6 SdkVersionMismatch | 13 InTheCoolDown | 20 NotFindRuntime | |
+
+The enum continues (channel errors, `PermissionDenyError`, `UnSupportDevice`)
+but those constants did not decode unambiguously and are deliberately not
+reproduced. Consumer: `python/xreal_result_codes.py`, which reports an
+unrecovered code as `N (unnamed)` rather than inventing a name.
+
+**22 = `LicenseFeatureUnsupported`.** Two independent lines agree: the native
+gate is a licensed-feature-name lookup, and the managed enum puts 22 on
+"licence does not cover the requested feature". Nebula's UI strings
+corroborate a third time — `InitLicenseData`, `LicenseNotSupportRequestedFeature`,
+`LicenseFeatureUnsupported`, `LicenseExpiredErrorTip`.
+
+### What is gated and what is not
+
+Verified by disassembling each export and looking for the `0x12eef0` call
+before its first real work:
+
+| gated (module tag) | ungated |
+|---|---|
+| all 13 `NRImu*` and 5 `NRImuCalibration*` (`"imu"`) | the whole `NRAPI*` bring-up, `NRGetVersion` |
+| `NRHMDGetIMUAccelerometerBias`, `NRHMDGetIMUGyroscopeBias` (`"imu"`) | `NRHMDCreate`, `NRHMDGetComponentIntrinsic` / `Extrinsic` / `Fov` / `Resolution` |
+| `NRGrayscaleCamera*` (`"grayscale_camera"`) | `NRRgbCameraCreate` |
+| `NRVsync*`, `NRGlasses*`, `NRGlassesControl*` | `NRHeadTrackingCreate` / `Destroy` / `AcquireHeadPose` / `Recenter` |
+| `NRHeadPoseGetBias`, `NRHeadPoseGetVelocity`, `NRHeadTrackingSetCoordinateMode` | `NRHeadPoseGetPose` / `GetHMDTimeNanos` / `GetTrackingReason` / `Destroy` |
+
+S2 passed because **nothing S2 called was gated**; S3's `NRImuCreate` was the
+first gated call EyeLab ever made. Two consequences: §3's "the licence is not
+enforced" is true only of the ungated bring-up and must not be read more
+widely, and **S4's extrinsics lookup is not blocked by this mechanism**.
+
+Raw IMU is licensed. Fused head pose is not — which inverts ADR-003's
+ordering for S3 and is why `python/xreal_headpose.py` exists.
+
+### S3b signatures — head pose
+
+Recovered the §9 way, from the vendor's own caller. `XREALXRPlugin.dll`'s
+`NativePerception` resolves the `NRHead*` exports into a table at `[this+8]`
+and calls them with handles the object holds; the export thunks in
+`libnr_api.dll` confirm the arity by which registers they read. Note the
+resolution loop stores the **previous** `GetProcAddress` result, so a naive
+read of it shifts every slot by one — the slots below are the corrected ones.
+
+| Function | Signature | Evidence |
+|---|---|---|
+| `NRHeadTrackingCreate` | `int32 (uint64 session, uint64* out_tracking)` | slot `+0xe0`; right after `[NativePerception] Start Finish`: `rcx = [this+0x98]`, `rdx = &[this+0xa0]` |
+| `NRHeadTrackingAcquireHeadPose` | `int32 (uint64 session, uint64 tracking, uint64 hmd_time_nanos, uint64* out_pose)` | slot `+0xf0`; four registers in the thunk, four set in `[NativePerception] GetHeadPose: %llu` |
+| `NRHeadPoseGetPose` | `int32 (uint64 session, uint64 pose, float out[16])` | slot `+0x110`; the caller zeroes **64 bytes** at the out-pointer, the thunk copies four xmmwords back and returns early if it is NULL |
+| `NRHeadPoseGetHMDTimeNanos` | `int32 (uint64 session, uint64 pose, uint64* out)` | slot `+0x138`; one qword |
+| `NRHeadPoseGetTrackingReason` | `int32 (uint64 session, uint64 pose, int32* out)` | slot `+0x118`; one dword |
+| `NRHeadPoseDestroy` | `int32 (uint64 session, uint64 pose)` | slot `+0x120`; two registers |
+| `NRHeadTrackingDestroy` | `int32 (uint64 session, uint64 tracking)` | slot `+0xe8`; two registers |
+
+There is **no `NRHeadTrackingStart`**: create, then acquire. The vendor
+acquires, reads and destroys a pose handle inside one iteration;
+`python/xreal_headpose.py` does the same.
+
+**Not known statically:** (1) which handle the vendor keeps at `[this+0x98]` —
+it is assigned outside the disassembled region, and S3b passes the
+`NRAPICreate` handle, which the run will confirm or refute with a return code.
+*Refuted 2026-09-24: it is a perception handle, not the API handle — see §12;*
+(2) what `hmd_time_nanos` wants, so the probe takes a list of candidates and
+starts with 0; (3) whether the 64 bytes are a 4x4 transform and in which
+convention — `python/headpose_analysis.py` tests the candidate layouts against
+the recording instead of assuming one; (4) what populates the licensed-feature
+list.
+
+---
+
+## 12. S3b run 1, and the perception layer it uncovered (2026-09-24)
+
+Two runs on the desktop (`lagann-0526`), glasses on USB, no Nebula.
+
+### The gate discriminator answered its question
+
+```
+NRImuCreate              -> 22  (LicenseFeatureUnsupported)   0.004 ms
+NRGrayscaleCameraCreate  -> 22  (LicenseFeatureUnsupported)   0.003 ms
+NRHMDCreate              ->  0  (Success)                     0.006 ms
+```
+
+Both gated families refused, the ungated control fine, glasses connected, NR
+3.1.1. **The licensed-feature list is empty** — this is not "raw IMU
+specifically is withheld", it is "no licence is in force at all", which also
+rules out `grayscale_camera` (and so the S5 SLAM-camera route through this API,
+had we planned to take it). §11's branch between "empty list" and "per-feature"
+is closed on the first branch.
+
+### The pose run failed, and the SDK said why
+
+`NRHeadTrackingCreate` returned **2** `InvalidArgument` in 0.628 ms — real work,
+not a gate refusal — and the vendor log carried the reason verbatim:
+
+```
+[ERROR] [NRSDK] NRHeadTracking Session Invalid Argument!
+```
+
+S3b had passed the `NRAPICreate` handle, on §11's stated assumption about
+`[this+0x98]`. Wrong handle. What goes there is a **perception** handle, from a
+family ADR-003 never mentioned and §§9–11 never looked at.
+
+### The perception layer
+
+`XREALXRPlugin.dll` resolves 76 exports into one table; the slots below are the
+corrected map. **The resolver stores the previous `GetProcAddress` result**, so
+pairing each name with the store that follows it shifts every slot by one; the
+map here is anchored on four independent call sites (`+0xe0` used with an
+out-pointer straight after `[NativePerception] Start Finish` = Create, `+0xf0`
+in `GetHeadPose` with four arguments = AcquireHeadPose, `+0x110` with a 64-byte
+out-buffer = GetPose, `+0x118` with a dword = GetTrackingReason).
+
+| slot | export | slot | export |
+|---|---|---|---|
+| +0x18 | `NRPerceptionGroupCreate` | +0x68 | `NRPerceptionResume` |
+| +0x20 | `NRPerceptionGroupGetPerceptionId` | +0x70 | `NRPerceptionGetHMDTimeNanos` |
+| +0x28 | `NRPerceptionGroupGetDescription` | +0xe0 | `NRHeadTrackingCreate` |
+| +0x30 | `NRPerceptionGroupGetSupportedFeatures` | +0xe8 | `NRHeadTrackingDestroy` |
+| +0x38 | `NRPerceptionGroupDestroy` | +0xf0 | `NRHeadTrackingAcquireHeadPose` |
+| +0x40 | `NRPerceptionCreate` | +0x110 | `NRHeadPoseGetPose` |
+| +0x48 | `NRPerceptionStart` | +0x118 | `NRHeadPoseGetTrackingReason` |
+| +0x50 | `NRPerceptionStop` | +0x120 | `NRHeadPoseDestroy` |
+| +0x58 | `NRPerceptionDestroy` | +0x138 | `NRHeadPoseGetHMDTimeNanos` |
+| +0x60 | `NRPerceptionPause` | +0x148 | `NRConfigCreate` |
+
+The bring-up the vendor performs between `NRAPIStart` and `NRHeadTrackingCreate`:
+
+1. `NRPerceptionGroupCreate(&group)`
+2. `NRPerceptionGroupGetCount(group, &count)`
+3. per index: `NRPerceptionGroupGetPerceptionId(group, i, &id)` and
+   `NRPerceptionGroupGetSupportedFeatures(group, i, &mask)`
+4. `NRPerceptionCreate(id, &perception)`
+5. `NRPerceptionStart(perception)`
+
+then `NRHeadTrackingCreate(perception, &tracking)`, and teardown in reverse.
+
+| Function | Signature | Evidence |
+|---|---|---|
+| `NRPerceptionGroupCreate` | `int32 (uint64* out_group)` | thunk forwards `rcx` only |
+| `NRPerceptionGroupGetCount` | `int32 (uint64 group, int32* out)` | `rcx`, `rdx` |
+| `NRPerceptionGroupGetPerceptionId` | `int32 (uint64 group, int32 index, uint32* out)` | `rcx`, **`edx` 32-bit** (`mov dword [rsp+0x3c], edx`), `r8` |
+| `NRPerceptionGroupGetSupportedFeatures` | `int32 (uint64 group, int32 index, uint64* out)` | `rcx`→`rbx`, `edx`→`edi` 32-bit, `r8`→`rsi` |
+| `NRPerceptionGroupDestroy` | `int32 (uint64 group)` | `rcx` only |
+| `NRPerceptionCreate` | `int32 (int32 perception_id, uint64* out)` | **`mov edx, ecx`** — the id is 32-bit — then `mov r8, rdx` |
+| `NRPerceptionStart` / `Stop` / `Pause` / `Resume` / `Destroy` | `int32 (uint64 perception)` | `rcx` only |
+| `NRPerceptionGetHMDTimeNanos` | `int32 (uint64 perception, uint64* out)` | `rcx`, `rdx` |
+
+**The whole family is ungated** — no `0x12eef0` call in any of the 35
+`NRPerception*` / `NRConfig*` exports — and all 35 are re-exported by
+`libnr_loader.dll`. So is `NRConfigCreate` and the plane/anchor/mesh/hand
+toggles hanging off it, which matters for later stages.
+
+`NRPerceptionGroupGetDescription` would name each perception, but its
+buffer-length argument is not pinned down, so `python/xreal_perception.py`
+resolves and reports it without calling it: a vendor DLL writing into a buffer
+on a guessed length is not a risk worth taking for a label.
+
+**Still open:** what `hmd_time_nanos` wants in `AcquireHeadPose` (the probe
+takes a candidate list, starting at 0); whether the 64-byte pose payload is a
+4x4 transform and in which convention (`python/headpose_analysis.py` tests the
+candidates against the recording); what populates the licensed-feature list;
+and what the feature-mask bits from step 3 mean — the enumeration prints them,
+which is the first look anyone has had at what these glasses actually offer.
+
+---
+
+## 13. S3b run 2: the plumbing works, the tracker does not (2026-09-25)
+
+### Perception enumeration
+
+`NRPerceptionGroupCreate` → `GetCount` → 20 entries, ids **1..20**, and
+`NRPerceptionGroupGetSupportedFeatures` returned **0 for every one of them**.
+Sequential ids and a uniformly zero mask mean this is very likely a fixed table
+of perception *types* rather than a report of what these glasses can do; the
+group-level feature call may also simply not populate without a licence.
+`NRPerceptionGetSupportedFeatures` on a *started* perception is a different call
+on a different handle and has not been tried — run 3 does.
+
+### Head pose: every call succeeded, no data came out
+
+20 s at a 96 Hz poll, perception id 1 (the first the group offered), every call
+returning 0 with no failures of any kind:
+
+```
+samples 1925    acquire 0    getter 0    destroy 0
+NRPerceptionStart  79.99 ms      NRPerceptionStop  49.04 ms
+```
+
+and yet, across all 1925 samples:
+
+| field | value | distinct values |
+|---|---|---|
+| `hmd_ns` | `0` | 1 |
+| `tracking_reason` | `1` | 1 |
+| pose (16 floats) | exact 4x4 **identity** | 1 |
+
+The subject moved his head through yaw, pitch and roll throughout. The host
+clock advanced normally (10.39 ms median), so the loop really ran; the device
+returned the same default pose every time.
+
+### `tracking_reason = 1` decoded
+
+`NotTrackingReason`, from Nebula's `Unity.XR.XREAL` metadata, same method as
+`XREALErrorCode` in §11, and the block decodes sequentially:
+
+```
+0 None   1 Initializing   2 Relocalizing   3 InsufficientLight
+4 InsufficientFeatures   5 ExcessiveMotion   6 Unsupported
+7 CameraUnavailable      8 Scanning
+```
+
+So the head tracker sat in **`Initializing`** for 20 s and never left it.
+Consumer: `xreal_result_codes.NOT_TRACKING_REASONS`. Note that
+`CameraUnavailable` is a *distinct* reason that the SDK did **not** report — it
+is not complaining about the cameras, it simply never finished starting.
+
+### What this rules in and out
+
+The call sequence, the signatures, the handle chain and the ownership contract
+are all confirmed correct: nothing returns an error, the pose object is created
+and destroyed cleanly, the feature is not licence-gated. What is missing is
+data. Four candidates, in the order run 3 tests them:
+
+1. **The timestamp.** `hmd_time_nanos = 0` was a documented guess (§11), and the
+   returned pose was stamped 0. `NRPerceptionGetHMDTimeNanos(perception, &ns)`
+   exists for exactly this value. If asking for "the pose at time 0" yields a
+   default pose, this is the whole story.
+2. **The perception.** Id 1 was taken because it was first, out of 20 with
+   indistinguishable metadata. `--sweep` now tries all of them in one session.
+3. **A missing start step** — the 6DoF plugin (`libnr_plugin_6dof.dll`,
+   loopback `127.0.0.1:53004`, §9) may need to be up, or a render/display
+   session may be a precondition.
+4. **The licence.** 6DoF SLAM needs the grayscale cameras and 3DoF needs the
+   IMU, and both are refused with 22 (§12). If tracking has no sensor it can
+   legitimately initialise forever. This is the least testable of the four and
+   the most expensive if true, which is why it is last.
+
+### External confirmation of the licence mechanism
+
+XREAL's own NRSDK FAQ states it plainly: *"For the **Enterprise** version, it is
+possible to access glasses raw data(grayscale camera & IMU) through its APIs"*,
+with access by request through their contact page. That is the same split the
+gate implements — the two module names we saw refused are `imu` and
+`grayscale_camera` — so §§11–12 are not an artefact of our bring-up. The current
+docs (NRSDK 3.1.0, matching our 3.1.1 binaries) do not document the mechanics.
+
+---
+
+## 14. S3b run 3: the timestamp is not the problem (2026-09-25)
+
+### The device clock works, and changes nothing
+
+`NRPerceptionGetHMDTimeNanos(perception, &ns)` returns a real, advancing device
+clock (`529777489910600` ns). Passing it as `hmd_time_nanos` — the §13 candidate
+1 — produced 1930 samples, acquire 0 throughout, and **exactly the same result as
+passing 0**: `hmd_ns` 0 in every sample, one distinct 16-float pose across the
+whole recording, that pose the exact identity, reason 1 `Initializing` for
+1929 of 1930. Candidate 1 is refuted. `--clock zero` still reproduces run 2 for
+comparison.
+
+Also read on the live perception: `NRPerceptionGetSupportedFeatures` → **0**,
+matching the group-level mask. A started perception reports no features.
+
+### Only one perception id is real
+
+The sweep tried all 20 ids the group enumerated. `NRPerceptionCreate` succeeded
+for **id 1 only**; the other 19 returned 2 `InvalidArgument`. So
+`NRPerceptionGroupGetCount` = 20 with `GetPerceptionId(i)` = `i+1` and a zero
+mask is not an enumeration of anything real — it looks like a fixed id space
+rather than a list of what this device offers, and the group's own
+`GetDescription` (not called, buffer length unknown) is probably the call that
+would name them.
+
+The SDK log names the one that exists:
+
+```
+get device config failed
+PerceptionBase Init failed
+Initialize failed, invalid handle = 2808774442768
+Plugin Initialize failed: retcode=1, id=nr_perception_id_remote
+NRSDK LeopardClient remove connection(0) status=0x30000, disconnect
+```
+
+So perception ids map to **named, plugin-backed perceptions**, and id 1 —
+the only creatable one, the one every pose run has used — is
+`nr_perception_id_remote`. A "remote" perception is unlikely to be the
+head-tracking one, which reframes candidate 2 from "try the other ids" to "find
+the id/name map, because the group is not telling us". `nr_perception_id_*` is
+not a plain ASCII string in `libnr_api.dll`, `libnr_loader.dll`,
+`libnr_plugin_6dof.dll`, `ov_utils.dll` or `libnr_glasses_api.dll`, so it is
+assembled at runtime or obfuscated like the licence-path strings.
+`nr_imu_tracking` and `nr_imu_calibration` *are* present in `libnr_api.dll` and
+look like sibling plugin names — and the first of those would be IMU-backed,
+hence licence-gated.
+
+### Two caveats that limit this run
+
+`NRPerceptionStart` **failed with 1 in the sweep** and **succeeded 35 s later**
+in the pose run, on the same perception id. The SDK errors above (device config,
+`LeopardClient ... disconnect`) point at a transient device-state problem rather
+than an argument problem. Nebula was launched around this time and **updated the
+glasses' firmware**, which would explain it and also means every measurement in
+§§11–14 is pre-update. The sweep must be re-run on a clean machine state before
+its result is used for anything, and S0 should be re-run to record the new
+firmware version.
+
+Handover with the ranked candidates and the next steps:
+`docs/S3-HANDOVER-2026-09-25.md`.

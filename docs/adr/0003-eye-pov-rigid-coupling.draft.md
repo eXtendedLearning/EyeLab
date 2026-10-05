@@ -157,10 +157,11 @@ this ADR does not dress it up as one.
 | **S0** | Identity, firmware version, HID topology | Tier A, read-only | **done 2026-09-22** — DLL loads standalone, 25/25 exports, `3318:0436`, 2 HID interfaces (`MI_00` vendor, `MI_08` keys). See audit §7a |
 | **S1** | Display smoke test — black transmissivity, wireframe legibility, stereo comfort | glasses as DP monitor, static pattern | **passed 2026-09-22** on the Surface — all pages, lines and colours legible. One finding: see "Electrochromic floor" below |
 | **S2** | Tier B "hello world": initialise the C API standalone, read `NRGetVersion` | Tier B staged, signatures recovered | **passed 2026-09-23** on the desktop — all three levels of `python/xreal_native_probe.py`, NR **3.1.1**, standalone, no graphics context. See "S2 result" |
-| **S3** | Head pose at high rate — IMU stream, then `NRHeadTracking` if it initialises | S2 | not started |
+| **S3** | Head pose at high rate from the **raw IMU** | S2 + an NRSDK licence | **blocked 2026-09-23** — `NRImuCreate` returns 22 `LicenseFeatureUnsupported`. Every `NRImu*` export is behind a licensed-feature gate and `"imu"` is not in the list (audit §11). The code is written and correct; it stays until a licence exists. **Confirmed 2026-09-24**: the licensed-feature list is *empty*, not merely missing `imu` (audit §12) |
+| **S3b** | Head pose at high rate from the **fused pose** — `NRHeadTracking` / `NRHeadPose` | S2 | **built 2026-09-23, awaiting a run** — this family is *not* gated. **runs 2–3 on 2026-09-25**: the chain returns 0 end to end (1930 poses, no failures) but every pose is the 4x4 identity with tracking reason 1 `Initializing`. Passing the real device clock changed nothing, so the timestamp candidate is **refuted**. Only perception id 1 is creatable and the SDK names it `nr_perception_id_remote`. Open: the perception id/name map, the 6DoF plugin, the licence. Handover: `docs/S3-HANDOVER-2026-09-25.md`, audit §§11–14 |
 | **S4** | Factory calibration — per-component intrinsics, extrinsics, distortion | S2 | not started |
-| **S5** | Eye/SLAM camera as a frame source (`read()` / `stats()` / `stop()` / `source_id`) | S2, plus the UVC or NCM route from the audit | not started |
-| **S6** | Wireframe rendered from the eye's viewpoint, IMU-stabilised | S3 + S4 + S5 | the first full test |
+| **S5** | Eye/SLAM camera as a frame source (`read()` / `stats()` / `stop()` / `source_id`) | UVC or NCM route from the audit | not started. **2026-09-24**: the NRSDK route is closed for now — `NRGrayscaleCameraCreate` is licence-gated and returned 22 in the same run as `NRImuCreate`, so UVC/NCM is the only open route |
+| **S6** | Wireframe rendered from the eye's viewpoint, pose-stabilised | S3b (or S3) + S4 + S5 | the first full test |
 
 S3 and S4 both precede S5 under this ADR, which is the reordering point: the
 previous plan in `CONTEXT.md` treated the camera feed as the gate.
@@ -250,6 +251,22 @@ definitions for glasses config, vsync, three IMUs, the grayscale and RGB
 cameras, each `connect type 1`. **The C API initialises standalone without a
 graphics context**, which was the largest unknown in the plan.
 
+**Negative control (2026-09-23, desktop).** Level `start` run twice, glasses
+plugged and then unplugged. **Every call returned 0 both times.** Only the SDK
+log differs:
+
+| | plugged | unplugged |
+|---|---|---|
+| `NRSDK Configure ...` | `DeviceMode=1` | `DeviceMode=0` |
+| component lines | `connect type 1` | `connect type 0` |
+| device callbacks (key, proximity, display, DP, temperature, IMU, cameras, ...) | registered | none |
+| IMU objects | 3 (`type 0/2/1`, ids 2-4) | 1 (`id 1`) |
+
+So S2 did reach the glasses, and **return codes are not evidence of a device
+link**. `xreal_native_probe.py` now reads `DeviceMode` from the log
+(`glasses_link`) and fails a `start` run that shows no glasses. The full log
+also gives the exact SDK build: `NRSDK Version: 3.1.1.20260202112855`.
+
 Two cautions for S3. `NRAPIStart` took 16 ms and `NRAPIStop` 1 µs: Start
 registers components rather than streaming, so "started" does not yet mean
 data flows — S3 has to create the IMU/head-tracking objects and observe
@@ -257,6 +274,134 @@ samples. And no video appears on the desktop by design: S2 renders nothing,
 and this machine cannot drive the glasses as a display at all (open question 6).
 
 ---
+
+## S3 result (2026-09-23) — blocked by a licence gate, and the way round it
+
+The first S3 run failed three times identically: `NRImuCreate` → **22** in
+4 µs, no samples, with the glasses connected (`DeviceMode=1`) and every
+preceding call returning 0. It is not a signature error and not a device
+problem. Audit §11 has the disassembly; the short version:
+
+* every `NRImu*` export calls a licensed-feature gate before doing any work,
+  looking up the module name `"imu"` in a list; missing name → return 22 and
+  skip the implementation, which is why the SDK log shows nothing;
+* 22 is `LicenseFeatureUnsupported`, recovered from `XREALErrorCode` in
+  Nebula's own IL2CPP metadata, not guessed;
+* what populates that list is not recovered — the one writer's strings are
+  obfuscated and it is called through a pointer.
+
+**Raw IMU is a licensed feature. Fused head pose is not.** `NRHeadTrackingCreate`,
+`NRHeadTrackingAcquireHeadPose`, `NRHeadPoseGetPose`, `GetHMDTimeNanos`,
+`GetTrackingReason` and `NRHeadPoseDestroy` are all ungated, and so are the S4
+calls (`NRHMDGetComponentIntrinsic` / `Extrinsic`). So this ADR's S3 is split:
+**S3b takes the fused pose and is the new critical path**, S3 waits for a
+licence. For stabilising a wireframe from the eye's viewpoint the fused pose is
+the better input anyway — the raw IMU only buys the right to write our own
+fusion.
+
+Two runs settle it, in this order:
+
+1. `python python/xreal_headpose_probe.py --gate` — seconds, no motion. One
+   create in each of `imu` (gated), `grayscale_camera` (gated) and
+   `NRHMDCreate` (ungated control), in one session. If both gated families
+   return 22 the licensed-feature list is empty; if `grayscale_camera`
+   returns 0 the list exists and excludes `imu`. One code alone cannot tell
+   these apart, which is why the first S3 run could not.
+2. `python python/xreal_headpose_probe.py` — 20 s of pose. Whether pose is
+   delivered at all is the question; rate, jitter, the tracking reason and
+   the payload's layout come free if it is.
+
+If S3b delivers pose, the licence question drops to a nice-to-have and S6 is
+unblocked on this axis. If it does not, the remaining routes are an NRSDK
+licence from XREAL (calendar time, not engineering time — worth opening early)
+or the 6DoF plugin on `127.0.0.1:53004`.
+
+
+### Run 1 (2026-09-24): the gate answered, and a missing layer appeared
+
+`--gate` returned `imu` 22, `grayscale_camera` 22, `NRHMDCreate` 0. The
+licensed-feature list is **empty**: no licence is in force at all. That closes
+the branch the discriminator existed to split, and it widens the consequence —
+the SLOT camera through `NRGrayscaleCamera*` is shut for the same reason, so S5
+depends on UVC/NCM rather than on this API.
+
+The pose level failed at `NRHeadTrackingCreate` with 2 `InvalidArgument`, and the
+SDK log named it: `NRHeadTracking Session Invalid Argument!`. The handle these
+calls want is a **perception** handle. Between `NRAPIStart` and head tracking the
+vendor host creates a perception group, enumerates it, creates one perception by
+id and starts it — five calls, none of them gated, none of them in this ADR's
+plan. `python/xreal_perception.py` now implements that layer and the probe grew a
+third level, `--perception`, which enumerates the group and stops.
+
+That enumeration is worth a run on its own: it is the SDK listing which tracking
+modes this pair of glasses offers and which feature bits each one carries, which
+is the first direct answer to "what can these actually do" — and it costs seconds
+with nothing started.
+
+Run 2, in order:
+
+1. `python python/xreal_headpose_probe.py --perception` — expect a non-empty
+   group; the printed ids and feature masks decide whether the pose run has
+   anything to attach to.
+2. `python python/xreal_headpose_probe.py` — same as before, now through the
+   perception layer. `--perception-id N` pins one if the default choice (first
+   that starts) picks a mode that does not deliver pose.
+
+
+### Run 2 (2026-09-25): a correct call chain that carries nothing
+
+The perception layer works. `--perception` listed 20 entries (ids 1..20, feature
+mask 0 for all of them) and the pose run went through every call cleanly:
+`NRPerceptionCreate` → `NRPerceptionStart` (80 ms of real work) →
+`NRHeadTrackingCreate` → 1925 × (`AcquireHeadPose` → three getters →
+`NRHeadPoseDestroy`) → teardown, zero failures anywhere.
+
+And the data is empty: `hmd_ns` is 0 in every sample, the pose is the exact
+identity matrix in every sample, and `tracking_reason` is 1 — `Initializing`,
+decoded from Nebula's `NotTrackingReason` enum — for the full 20 s while the
+glasses were being moved through all three axes.
+
+This is a clean negative result rather than a bug: the signatures, the handle
+chain and the ownership contract are confirmed, and the feature is not
+licence-gated. The tracker simply never starts producing. Audit §13 lists the
+four candidates; run 3 tests the two cheap ones:
+
+1. `python python/xreal_headpose_probe.py --sweep` — one pose through each of
+   the 20 perceptions, side by side, with the device clock. If any of them
+   returns a non-identity pose or a reason other than `Initializing`, that is
+   the one to use and the question is answered.
+2. `python python/xreal_headpose_probe.py` — the pose run again, now reading
+   `NRPerceptionGetHMDTimeNanos` before each acquire instead of passing 0
+   (`--clock hmd` is the new default; `--clock zero` reproduces run 2, and
+   `--offset-ms` predicts ahead).
+
+### Run 3 (2026-09-25): the timestamp candidate is dead
+
+Both were run. The device clock is real and advancing, and passing it as
+`hmd_time_nanos` produced the identical result — 1930 identity poses stamped 0,
+reason `Initializing`. Candidate 1 is refuted.
+
+The sweep found that **only perception id 1 is creatable** (the other 19 return
+`InvalidArgument`), so the group's 20 sequential ids with zero feature masks are
+not an enumeration of this device's capabilities. The SDK log names the one that
+exists: `nr_perception_id_remote` — plugin-backed, and unlikely to be the
+head-tracking perception. Candidate 2 therefore changes shape: the job is to find
+the perception id/name map, not to try more ids blindly.
+
+Two caveats: `NRPerceptionStart` failed in the sweep and succeeded 35 s later on
+the same id, with SDK errors pointing at device config and a dropped connection;
+and **Nebula was run and updated the glasses' firmware** immediately afterwards,
+so everything measured in §§11–14 is pre-update. The sweep needs a clean re-run.
+
+Remaining candidates: the perception id/name map, the unstarted 6DoF plugin
+(`127.0.0.1:53004`), and the licence — 6DoF needs the grayscale cameras and 3DoF
+needs the IMU, both refused with 22, which would explain a tracker that
+initialises forever. If the first two fail, Enterprise access becomes a hard
+dependency for S3b as well as S3, and the request to XREAL stops being optional.
+
+Continuation, with the ranked candidates and the exact command order:
+`docs/S3-HANDOVER-2026-09-25.md`.
+
 
 ## Open questions
 

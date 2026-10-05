@@ -9,6 +9,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Validation campaign runner**: `validation.bat` (repo root) opens a menu
+  (`python -m validation campaign`) that walks the whole campaign - self-test,
+  camera focus lock, calibration, plate measurements, the 63-session plan
+  (B1, B1b, B2-L, B3; repetitions as the outer loop), analysis and the B3
+  step table - and keeps its state in `python/validation_runs/campaign.json`.
+  Redone sessions are moved aside, never deleted. Guide:
+  `docs/validation-campaign.md`. Sessions now record the git commit, the
+  calibration file digest and the camera's focus read-back.
+- `camera_utils.lock_focus`, `calibrate.py --focus` and `validation capture
+  --focus`: autofocus off at one fixed focus, so calibration and measurement
+  share the same intrinsics.
+
+- **S3b verdict is honest about empty recordings.** `HeadPoseReport.ok` required
+  only `samples > 0`, so runs 2 and 3 printed `OK` over 1930 identity poses. It
+  now requires `delivered_data` (at least one non-identity pose), counts
+  `identity_samples`, and sets an explicit error when every pose is the identity.
+
+- `docs/S3-HANDOVER-2026-09-25.md` - the state of S3/S3b at the end of the
+  2026-09-23..25 sessions: what is confirmed and will not need redoing, the five
+  runs and what each showed, the candidate causes with the timestamp one struck
+  out, the two uncontrolled variables (Nebula updated the glasses' firmware; the
+  sweep's `NRPerceptionStart` failure looks transient), the command order for the
+  next session, and a file-by-file code map.
+
+- **Validation package** (`python/validation/`, protocol `docs/validation.md`,
+  printables `docs/validation_printables/`). Replaces the untracked first draft
+  in `docs/validation_tmp/`, which worked in millimetres against the units
+  invariant, took ground truth from caliper measurements relative to separately
+  glued markers, logged only the Kalman-filtered pose, and seeded reference-point
+  detection with EyeLab's own projection - beyond a 20 px search radius it
+  latched onto checker-square corners and reported a 15 mm error as 0.1 mm with
+  100 % detection. Now: one plate layout generates the PDF, ground truth, marker
+  config and UNV; printer scale comes from caliper-measured scale bars
+  (`apply-measurements`); the analysis finds the printed points independently
+  (own ArUco detection, face homography grown over X-junction-verified saddles,
+  PnP seeding for a face without visible markers) and reports px and on-face mm
+  error, raw vs filtered pose, coasted frames, per-node bias and between-session
+  statistics. `capture` records EyeLab's own `ArucoPipeline` headlessly.
+  Synthetic tests recover injected errors 0-30 mm; an end-to-end test runs the
+  real pipeline on rendered frames (three markers: 0.04 mm median on-face
+  error; single-marker sustain: ~1 mm).
+- `FrameResult.measured_pose`: the frame's raw solve before the pose lock /
+  Kalman filter, for validation.
+
+- **S3b run 3: device clock, perception sweep, decoded tracking reasons.** Run 2
+  returned 1925 identity poses stamped 0 with tracking reason 1, so the probe
+  now reads `NRPerceptionGetHMDTimeNanos` before each acquire instead of passing
+  0 (`--clock hmd`, the new default; `--clock zero` reproduces run 2;
+  `--offset-ms` predicts ahead), and `--sweep` takes one pose through every
+  perception in the group in a single session and prints them side by side with
+  clock, feature mask, acquire code, reason and whether the pose is the
+  identity. `xreal_result_codes.NOT_TRACKING_REASONS` decodes
+  `NRHeadPoseGetTrackingReason` (0 None .. 8 Scanning) from Nebula's
+  `NotTrackingReason` enum, so reasons print by name.
+  `xreal_perception.hmd_time_ns()` / `supported_features()` read the live
+  perception rather than a group entry. Evidence:
+  `docs/NEBULA-WINDOWS-AUDIT-2026-09-21.md` §13.
+
+- **S3b perception layer** (`python/xreal_perception.py`), after run 1 showed the
+  head-pose calls want a *perception* handle rather than the `NRAPICreate`
+  handle - `NRHeadTrackingCreate` returned 2 `InvalidArgument` and the SDK log
+  said `NRHeadTracking Session Invalid Argument!`. The module implements the
+  bring-up the vendor host performs between `NRAPIStart` and head tracking:
+  `NRPerceptionGroupCreate` -> `GetCount` -> per index `GetPerceptionId` +
+  `GetSupportedFeatures` -> `NRPerceptionCreate(id)` -> `NRPerceptionStart`,
+  with teardown in reverse, as context managers that always clean up. The whole
+  `NRPerception*` / `NRConfig*` family (35 exports) is ungated.
+  `NRPerceptionGroupGetDescription` is resolved and reported but never called:
+  its buffer-length argument is not pinned down. `xreal_headpose` grew a
+  `--perception` level that enumerates the group and stops - the SDK's own list
+  of the tracking modes these glasses offer, with feature bits. Signatures and
+  the corrected vendor slot map (the resolver stores the *previous*
+  `GetProcAddress` result, which shifts every slot by one):
+  `docs/NEBULA-WINDOWS-AUDIT-2026-09-21.md` §12.
+
+- **S3b, head pose without the IMU** (`python/xreal_headpose.py`,
+  `python/headpose_analysis.py`, `python/xreal_headpose_probe.py`,
+  `python/xreal_result_codes.py`). S3's first run failed at `NRImuCreate` with
+  result 22: every `NRImu*` export sits behind a licensed-feature gate in
+  `libnr_api.dll` and `"imu"` is not in the licence's feature list. The
+  head-pose family is not gated, so S3b takes the fused pose instead:
+  `NRHeadTrackingCreate` -> `AcquireHeadPose` -> `GetPose` / `GetHMDTimeNanos`
+  / `GetTrackingReason` -> `NRHeadPoseDestroy`, with the pose handle acquired,
+  read and destroyed inside one iteration as the vendor host does. Signatures
+  recovered from `XREALXRPlugin.dll`'s own `NativePerception` call sites, not
+  guessed. `--gate` runs a three-family discriminator (`imu`,
+  `grayscale_camera`, and `NRHMDCreate` as an ungated control) whose three
+  codes say whether the licensed-feature list is empty or merely lacks `imu`.
+  Samples go to `python/.logs/headpose_<ts>.csv`, summaries to
+  `python/.logs/xreal_headpose_probe.jsonl`; `--analyse CSV` re-runs offline.
+  `headpose_analysis` does not assume a pose convention - it tests row-major
+  4x4, column-major 4x4 and quaternion against the recording and reports which
+  one the numbers support. Evidence:
+  `docs/NEBULA-WINDOWS-AUDIT-2026-09-21.md` §11.
+- **NRSDK result codes have names** (`python/xreal_result_codes.py`). Nebula is
+  an IL2CPP build, so `XREALErrorCode` survives in its `global-metadata.dat`
+  with its constants; codes 0-24 are reproduced verbatim and the rest are
+  reported as `N (unnamed)` rather than invented. 22 is
+  `LicenseFeatureUnsupported`.
+- `python/test_xreal_headpose.py` (23 tests): the gate verdict as a pure
+  function of all three codes, one pose destroy per sample, cleanup on every
+  failure path, the loop not writing a call record per iteration, and the
+  layout maths on matrices whose convention is known.
+
+- **S3, IMU stream** (`python/xreal_imu.py`, `python/imu_analysis.py`,
+  `python/xreal_imu_probe.py`). Records the glasses' IMU through
+  `NRImuCreate` -> `NRImuSetCaptureCallback` -> `NRImuStart`, on top of the S2
+  start sequence (now a shared `xreal_native.started_api` context manager).
+  The callback reads time, on-device time, gyro, accel and mag and destroys
+  the data handle inside the callback, as the vendor host does; faults inside
+  it are contained and counted. Two protocols: `rest` (rate, interval jitter,
+  gaps, delivery jitter, gyro bias/noise, accelerometer unit from |a|,
+  gravity axis) and `--turn yaw|pitch|roll` (gyro unit and axis from the
+  integral of one 90 deg turn). Beeps mark the recording window. Samples go
+  to `python/.logs/imu_<ts>_<mode>.csv` (pruned like session logs; pin in
+  `keep.txt`), summaries to `python/.logs/xreal_imu_probe.jsonl`;
+  `--analyse CSV` re-analyses offline. Signatures and evidence:
+  `docs/NEBULA-WINDOWS-AUDIT-2026-09-21.md` §10.
+- `python/test_xreal_imu.py` (22 tests): call order, one destroy per data
+  handle, cleanup on each failure path, contained callback faults, and the
+  analysis on synthetic signals with known answers.
+
+- **S2 negative control and `glasses_link`.** With the glasses unplugged every
+  NR call still returns 0; only the SDK log differs (`DeviceMode=0`,
+  `connect type 0`). `xreal_native.glasses_link_from_log()` reads it, and
+  `xreal_native_probe.py --level start` now fails when the log shows no
+  glasses instead of reporting OK. Full vendor log kept on success
+  (`native_isolation.NATIVE_OUTPUT_CHARS`), where the head carries the device
+  information.
+- **Log retention** (`eyelab_logger.prune_logs`, run at every GUI session
+  start): keeps the newest 5 files per family (`eyelab_*`, `ar_debug_*`,
+  `ar_stacks_*`) in `python/.logs/`; files named in `python/.logs/keep.txt`
+  are never pruned - pin a log there when a document cites it. Append-only
+  probe logs (`xreal_probe.jsonl`, `xreal_native_probe.jsonl`) are untouched.
+  `python/test_eyelab_logger.py` (4 tests).
 - `xreal_shutdown.bat` (repo root, double-click) + `tools/xreal_shutdown.ps1`:
   stops EyeLab probe/GUI Python processes and any process with an XREAL DLL
   loaded (`tasklist /m`), re-checks, then waits for the glasses (USB VID 3318)
@@ -69,6 +204,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `xreal_native`: `bind()` takes a signature table, `open_library()` and
+  `Recorder` are public, `NativeReport.required` is per stage - so S3 binds
+  and reports through the same code as S2.
 - `xreal_probe.py` delegates to `native_isolation` (same behaviour, now framed
   output); `xreal_glasses.vendor_dir()` is the single definition of the staging
   directory for Tier A and Tier B.

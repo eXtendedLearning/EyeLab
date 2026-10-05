@@ -45,12 +45,14 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import sys
 import time
 from ctypes import POINTER, Structure, c_int32, c_uint64
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 
 from xreal_glasses import vendor_dir
 
@@ -132,6 +134,30 @@ RESOLVE_ONLY_EXPORTS = (
 )
 
 
+#: Values of :func:`glasses_link_from_log`.
+LINK_CONNECTED, LINK_ABSENT, LINK_UNKNOWN = "connected", "absent", "unknown"
+
+_DEVICE_MODE = re.compile(r"DeviceMode=(\d+)")
+
+
+def glasses_link_from_log(native_output: str) -> str:
+    """Whether the SDK saw the glasses, read from its own console log.
+
+    **Return codes cannot tell.** The 2026-09-23 negative control ran level
+    ``start`` with the glasses unplugged: every call still returned 0. The
+    difference is only in the log: ``NRSDK Configure ... DeviceMode=1`` and
+    ``connect type 1`` with glasses, ``DeviceMode=0`` / ``connect type 0``
+    without, and no device callbacks registered. The line is printed during
+    ``NRAPICreate``'s internal init, so ``version`` and ``start`` both carry
+    it; ``load`` never does. Parsing a vendor log is a heuristic, which is why
+    the result is a separate field and not folded into the call records.
+    """
+    modes = _DEVICE_MODE.findall(native_output or "")
+    if not modes:
+        return LINK_UNKNOWN
+    return LINK_ABSENT if modes[-1] == "0" else LINK_CONNECTED
+
+
 class NativeLibraryError(RuntimeError):
     """The Tier B library could not be found or loaded."""
 
@@ -179,9 +205,13 @@ class NativeReport:
     version: Optional[str] = None
     error: Optional[str] = None
 
+    #: Exports that must resolve before anything is called. Later stages
+    #: widen it to their own signature table.
+    required: list[str] = field(default_factory=lambda: list(SIGNATURES))
+
     @property
     def missing_required(self) -> list[str]:
-        return [n for n in SIGNATURES if not self.resolved.get(n, False)]
+        return [n for n in self.required if not self.resolved.get(n, False)]
 
     @property
     def ok(self) -> bool:
@@ -267,22 +297,54 @@ def load(directory: Path, entry: str = DEFAULT_ENTRY) -> tuple[Any, Path]:
         raise NativeLibraryError(f"failed to load {path}: {exc}") from exc
 
 
-def bind(lib: Any) -> tuple[dict[str, Any], dict[str, bool]]:
-    """Resolve exports; apply signatures to the ones this module calls."""
+def bind(lib: Any, signatures: Optional[dict[str, Signature]] = None,
+         resolve_only: Optional[tuple[str, ...]] = None,
+         ) -> tuple[dict[str, Any], dict[str, bool]]:
+    """Resolve exports; apply signatures to the ones that will be called.
+
+    Defaults to this module's S2 tables; later stages pass their own (a
+    superset), so every call site binds through the same code path.
+    """
+    signatures = SIGNATURES if signatures is None else signatures
+    resolve_only = RESOLVE_ONLY_EXPORTS if resolve_only is None else resolve_only
     functions: dict[str, Any] = {}
     resolved: dict[str, bool] = {}
-    for name in tuple(SIGNATURES) + RESOLVE_ONLY_EXPORTS:
+    for name in tuple(signatures) + tuple(resolve_only):
         try:
             fn = getattr(lib, name)
         except AttributeError:
             resolved[name] = False
             continue
         resolved[name] = True
-        if name in SIGNATURES:
-            fn.restype = SIGNATURES[name].restype
-            fn.argtypes = list(SIGNATURES[name].argtypes)
+        if name in signatures:
+            fn.restype = signatures[name].restype
+            fn.argtypes = list(signatures[name].argtypes)
             functions[name] = fn
     return functions, resolved
+
+
+def open_library(report: NativeReport, entry: str, directory: Optional[Path],
+                 lib: Any = None) -> Any:
+    """Preflight and load, recording into ``report``. ``None`` on failure.
+
+    ``lib`` injects an already-loaded library (tests); preflight and loading
+    are then skipped.
+    """
+    if lib is None:
+        directory = directory or find_directory()
+        report.directory = str(directory)
+        report.preflight = preflight(directory)
+        if not report.preflight.ok:
+            report.error = "preflight failed; nothing was loaded"
+            return None
+        try:
+            lib, path = load(directory, entry)
+        except NativeLibraryError as exc:
+            report.error = str(exc)
+            return None
+        report.library_path = str(path)
+    report.loaded = True
+    return lib
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +352,7 @@ def bind(lib: Any) -> tuple[dict[str, Any], dict[str, bool]]:
 # ---------------------------------------------------------------------------
 
 
-class _Recorder:
+class Recorder:
     """Calls a bound function and records what happened, never raising.
 
     On Windows, ctypes turns a structured exception inside the callee (an
@@ -314,18 +376,49 @@ class _Recorder:
         return record
 
 
-def _read_version(call: _Recorder, handle: NRHandle, report: NativeReport) -> None:
+def _read_version(call: Recorder, handle: NRHandle, report: NativeReport) -> None:
     out = NRVersion()
     rec = call("NRGetVersion", handle, ctypes.pointer(out), shown=["handle", "&version"])
     if rec.succeeded:
         report.version = f"{out.major}.{out.minor}.{out.patch}"
 
 
+@contextmanager
+def started_api(call: Recorder, report: NativeReport) -> Iterator[Optional[NRHandle]]:
+    """The host's start sequence around a block; always stops and destroys.
+
+    Yields the API handle once ``NRAPIStart`` succeeded, else ``None`` (the
+    block should then do nothing). Order, from the vendor host: Create ->
+    InitSetNetworkType(0) -> Start -> GetVersion ... Stop -> Destroy.
+    """
+    handle = NRHandle(0)
+    created = call("NRAPICreate", ctypes.pointer(handle), shown=["&handle"])
+    if not created.succeeded:
+        report.error = "NRAPICreate failed; nothing else was called"
+        yield None
+        return
+    report.handle = f"{handle.value:#x}"
+    try:
+        call("NRAPIInitSetNetworkType", handle, 0, shown=["handle", 0])
+        report.started = call("NRAPIStart", handle, shown=["handle"]).succeeded
+        if report.started:
+            _read_version(call, handle, report)
+        yield handle if report.started else None
+    finally:
+        if report.started:
+            call("NRAPIStop", handle, shown=["handle"])
+        call("NRAPIDestroy", handle, shown=["handle"])
+
+
 def execute(level: str, functions: dict[str, Any], report: NativeReport) -> None:
     """Run the calls for ``level`` against already-bound functions."""
     if level == "load":
         return
-    call = _Recorder(functions, report)
+    call = Recorder(functions, report)
+    if level == "start":
+        with started_api(call, report):
+            pass
+        return
     handle = NRHandle(0)
     created = call("NRAPICreate", ctypes.pointer(handle), shown=["&handle"])
     if not created.succeeded:
@@ -333,45 +426,20 @@ def execute(level: str, functions: dict[str, Any], report: NativeReport) -> None
         return
     report.handle = f"{handle.value:#x}"
     try:
-        if level == "version":
-            _read_version(call, handle, report)
-            return
-        # level == "start": the host's exact order (see module docstring).
-        call("NRAPIInitSetNetworkType", handle, 0, shown=["handle", 0])
-        report.started = call("NRAPIStart", handle, shown=["handle"]).succeeded
-        if report.started:
-            _read_version(call, handle, report)
-            call("NRAPIStop", handle, shown=["handle"])
+        _read_version(call, handle, report)
     finally:
         call("NRAPIDestroy", handle, shown=["handle"])
 
 
 def run(level: str = "version", entry: str = DEFAULT_ENTRY,
         directory: Optional[Path] = None, lib: Any = None) -> NativeReport:
-    """Whole S2 probe. Never raises for expected failures.
-
-    ``lib`` injects an already-loaded library (tests); preflight and loading
-    are then skipped.
-    """
+    """Whole S2 probe. Never raises for expected failures."""
     if level not in LEVELS:
         raise ValueError(f"unknown level {level!r}; use one of {LEVELS}")
     report = NativeReport(level=level, entry=entry, platform=sys.platform)
-
+    lib = open_library(report, entry, directory, lib)
     if lib is None:
-        directory = directory or find_directory()
-        report.directory = str(directory)
-        report.preflight = preflight(directory)
-        if not report.preflight.ok:
-            report.error = "preflight failed; nothing was loaded"
-            return report
-        try:
-            lib, path = load(directory, entry)
-        except NativeLibraryError as exc:
-            report.error = str(exc)
-            return report
-        report.library_path = str(path)
-
-    report.loaded = True
+        return report
     functions, report.resolved = bind(lib)
     if report.missing_required:
         report.error = "required exports missing: " + ", ".join(report.missing_required)

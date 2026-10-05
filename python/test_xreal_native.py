@@ -289,5 +289,41 @@ class ProbeCliTests(unittest.TestCase):
         self.assertIn("incomplete", text)
 
 
+_LOG_WITH_GLASSES = (
+    "[INFO] [NRSDK] NRSDK Configure Mode=0, WorkingMode=0, DeviceMode=1!\n"
+    "[INFO] [NRSDK] leopard_imu, 0, connect type 1\n")
+_LOG_WITHOUT_GLASSES = (
+    "[INFO] [NRSDK] NRSDK Configure Mode=0, WorkingMode=0, DeviceMode=0!\n"
+    "[INFO] [NRSDK] leopard_imu, 0, connect type 0\n")
+
+
+class GlassesLinkTests(unittest.TestCase):
+    """Pinned to the 2026-09-23 negative control (glasses plugged vs unplugged)."""
+
+    def test_link_read_from_device_mode(self):
+        self.assertEqual(xreal_native.glasses_link_from_log(_LOG_WITH_GLASSES), "connected")
+        self.assertEqual(xreal_native.glasses_link_from_log(_LOG_WITHOUT_GLASSES), "absent")
+        self.assertEqual(xreal_native.glasses_link_from_log("Loader init success!"), "unknown")
+        self.assertEqual(xreal_native.glasses_link_from_log(None), "unknown")
+
+    def test_start_without_glasses_is_not_a_pass(self):
+        payload = {"level": "start", "ok": True, "native_output": _LOG_WITHOUT_GLASSES}
+        xreal_native_probe.judge_glasses_link(payload)
+        self.assertFalse(payload["ok"])
+        self.assertIn("return codes do not prove", payload["error"])
+
+    def test_start_with_glasses_passes(self):
+        payload = {"level": "start", "ok": True, "native_output": _LOG_WITH_GLASSES}
+        xreal_native_probe.judge_glasses_link(payload)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["glasses_link"], "connected")
+
+    def test_version_level_stays_library_only(self):
+        payload = {"level": "version", "ok": True, "native_output": _LOG_WITHOUT_GLASSES}
+        xreal_native_probe.judge_glasses_link(payload)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["glasses_link"], "absent")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

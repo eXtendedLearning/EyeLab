@@ -78,6 +78,50 @@ class _StreamTee:
         return self._original.fileno()
 
 
+# ── Retention ─────────────────────────────────────────────────────────────
+#: Per-session files in .logs/, one family per pattern. File names embed a
+#: YYYYMMDD_HHMMSS stamp, so name order is chronological order.
+SESSION_LOG_PATTERNS = ("eyelab_*.jsonl", "ar_debug_*.jsonl", "ar_stacks_*.log",
+                        "imu_*.csv")
+
+#: Newest files kept per family. Older ones are deleted at session start.
+DEFAULT_KEEP_PER_FAMILY = 5
+
+#: Files named in ``.logs/keep.txt`` (one name per line, ``#`` comments) are
+#: never pruned. Pin a log there when a document cites it as evidence.
+KEEP_FILE = "keep.txt"
+
+
+def pinned_logs(log_dir: Path) -> set[str]:
+    try:
+        lines = (log_dir / KEEP_FILE).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return set()
+    return {ln.split("#", 1)[0].strip() for ln in lines} - {""}
+
+
+def prune_logs(log_dir: Path, keep: int = DEFAULT_KEEP_PER_FAMILY) -> list[Path]:
+    """Delete all but the newest ``keep`` files of each session-log family.
+
+    Pinned files are neither deleted nor counted towards ``keep``. Single
+    append-only logs (``xreal_probe.jsonl`` and the like) match no pattern
+    and are never touched. Best-effort: a file that cannot be deleted is
+    skipped, and nothing here raises.
+    """
+    pinned = pinned_logs(log_dir)
+    removed: list[Path] = []
+    for pattern in SESSION_LOG_PATTERNS:
+        candidates = sorted(p for p in log_dir.glob(pattern) if p.name not in pinned)
+        stale = candidates[:-keep] if keep > 0 else candidates
+        for path in stale:
+            try:
+                path.unlink()
+                removed.append(path)
+            except OSError:
+                pass
+    return removed
+
+
 class SessionLogger:
     """Singleton-style logger for one EyeLab session."""
 
@@ -85,6 +129,7 @@ class SessionLogger:
 
     def __init__(self, log_dir: Path):
         log_dir.mkdir(parents=True, exist_ok=True)
+        pruned = prune_logs(log_dir)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_path = log_dir / f"eyelab_{ts}.jsonl"
         self._fh = open(self.log_path, "a", encoding="utf-8", buffering=1)
@@ -100,6 +145,9 @@ class SessionLogger:
         sys.excepthook = self._excepthook
 
         self._write("INFO", "system", f"Session log started: {self.log_path.name}")
+        if pruned:
+            self._write("INFO", "system",
+                        f"Pruned {len(pruned)} old log file(s); pin evidence in .logs/{KEEP_FILE}")
 
     # ── Public ────────────────────────────────────────────────────────────
     @classmethod

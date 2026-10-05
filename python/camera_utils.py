@@ -194,6 +194,25 @@ def open_camera(
     return result.cap if result.cap is not None else cv2.VideoCapture()
 
 
+def lock_focus(cap: cv2.VideoCapture, focus: float | None = None) -> dict:
+    """Turn autofocus off and, if given, set a fixed focus position.
+
+    Intrinsics change with focus, so a calibration holds only at the focus it
+    was taken at: calibration and every measurement must share one fixed value.
+    Drivers honour these UVC properties unevenly, so the read-back is returned
+    for the caller to record and check (``autofocus`` still 1, or ``focus`` -1,
+    means the camera ignored the request).
+    """
+    cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+    if focus is not None:
+        cap.set(cv2.CAP_PROP_FOCUS, float(focus))
+    return {
+        "requested_focus": None if focus is None else float(focus),
+        "autofocus": float(cap.get(cv2.CAP_PROP_AUTOFOCUS)),
+        "focus": float(cap.get(cv2.CAP_PROP_FOCUS)),
+    }
+
+
 def list_cameras(max_test: int = 8, budget_s: float = PROBE_BUDGET_S) -> list[int]:
     """Probe camera indices and return those that open.
 

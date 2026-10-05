@@ -1,0 +1,56 @@
+{
+  "defaultMarkerSizeMm": 20.0,
+  "markers": [
+    {
+      "markerId": 30,
+      "unvPosition": [
+        -0.118,
+        0.07,
+        0.0
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 20.0,
+      "nodeId": null,
+      "description": "plate_A face F"
+    },
+    {
+      "markerId": 31,
+      "unvPosition": [
+        0.118,
+        0.07,
+        0.0
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 20.0,
+      "nodeId": null,
+      "description": "plate_A face F"
+    },
+    {
+      "markerId": 32,
+      "unvPosition": [
+        -0.118,
+        -0.07,
+        0.0
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 20.0,
+      "nodeId": null,
+      "description": "plate_A face F"
+    }
+  ]
+}

@@ -76,7 +76,7 @@ from typing import Optional
 
 import numpy as np
 
-from camera_utils import open_camera
+from camera_utils import lock_focus, open_camera
 
 
 # ── Board defaults ────────────────────────────────────────────────────────────
@@ -247,10 +247,15 @@ def collect_from_webcam(
     detector: cv2.aruco.CharucoDetector,
     board: cv2.aruco.CharucoBoard,
     target_frames: int = MIN_FRAMES,
+    focus: Optional[float] = None,
 ) -> tuple[list, list, tuple[int, int]]:
     cap = open_camera(camera_index, fps=None)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open camera index {camera_index}.")
+    if focus is not None:
+        state = lock_focus(cap, focus)
+        print(f"Focus locked: requested {focus:g}, camera reports "
+              f"autofocus={state['autofocus']:g} focus={state['focus']:g}")
 
     all_corners, all_ids = [], []
     image_size = None
@@ -473,6 +478,9 @@ def main() -> int:
                         help="DPI for generated board image (default: 300)")
     parser.add_argument("--min-frames", type=int, default=MIN_FRAMES,
                         help=f"Minimum captured frames (default: {MIN_FRAMES})")
+    parser.add_argument("--focus", type=float, default=None,
+                        help="Live mode: disable autofocus and fix this focus value. "
+                             "Use the same value wherever this calibration is used.")
 
     args = parser.parse_args()
 
@@ -499,7 +507,8 @@ def main() -> int:
         all_corners, all_ids, image_size = collect_from_images(paths, detector)
     else:  # --live
         all_corners, all_ids, image_size = collect_from_webcam(
-            args.camera, detector, board, target_frames=args.min_frames
+            args.camera, detector, board, target_frames=args.min_frames,
+            focus=args.focus,
         )
 
     if len(all_corners) < args.min_frames:
