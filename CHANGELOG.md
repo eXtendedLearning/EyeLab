@@ -7,7 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One configuration tree for the GUI, `calibrate.py` and the validation**
+  (`python/eyelab_paths.py`): `python/config/cameras/<profile>.yaml` (one
+  calibration per camera profile, replaced ones kept in `cameras/history/`),
+  `config/markers/`, `config/geometry/`, `config/targets/`, and a local
+  `config/active.json` remembering the active profile, marker config and
+  geometry. The GUI has a camera-profile selector, restores the last geometry,
+  and loading a marker config makes it the active one instead of copying it
+  over `marker_config.json`. Old layouts migrate on first start
+  (`config/camera_params.yaml` -> `cameras/<host>_cam0.yaml`,
+  `validation_runs/calibration_backups/` -> `cameras/history/`, campaign paths).
+  `test_assets/` geometries and the plate target/marker/UNV files moved into
+  the tree; `docs/validation_printables/` keeps only the plate PDFs.
+- Validation uses EyeLab's ChArUco board; the duplicate
+  `charuco_calibration_A4.pdf` is removed. The "check the 100 mm ruler" gate
+  is dropped: a uniform print scale does not change the intrinsics.
+- **Instrument-aware ground-truth uncertainty** (`validation/uncertainty.py`):
+  ±a taken as rectangular (a/√3); uniform print scale no longer counted (it
+  cancels in on-face metrics), X/Y anisotropy, print placement, flatness and
+  plate L's fold angle are; U (k = 2) and TUR against the 1 mm goal are
+  printed by the menu and stored in `summary.json`. B3 warns when the
+  instrument cannot resolve the steps.
+
 ### Added
+
+- **Setup assistant in the capture preview** (`validation/setup_assist.py`):
+  distance, angle / elevation and centring read from the plate pose, against
+  the planned condition, green when in band. The achieved geometry is logged
+  per frame (`extra.setup`) and reported (`achieved_*` in `sessions.csv`).
+- **Device IMU** (`python/surface_imu.py`, optional `winrt` packages on
+  Windows): gravity-referenced tilt, roll and stillness of a camera built into
+  a Surface, shown in the setup panel and logged (`capture --imu rear|front`,
+  menu 2). `python surface_imu.py` checks the sensor signs.
+- **Plate L fold angle from images** (`validation/fold.py`, `python -m
+  validation fold-angle`, menu 4 → E): pose and interior angle fitted jointly
+  to the detected saddles of both faces; ~0.1° instead of a protractor.
+
+- `docs/HARDWARE.md`: the machines and glasses in hand and what each can do
+  (desktop: USB data, no display path; Surface Pro 7: display path), linked
+  from AGENTS.md as required reading before XREAL work.
+- Pose lock: `PoseLockConfig.trusted_min_markers` (default 3),
+  `acquire_confirm_frames`, ambiguity gate (`min_ambiguity_ratio`,
+  `ambiguity_min_separation_deg`) and `POSE_LOCK_PRESETS`
+  (`standard`, `single`, `legacy3`). `PoseResult` carries
+  `ambiguity_ratio` / `ambiguity_separation_deg` for planar solves.
 
 - **Validation campaign runner**: `validation.bat` (repo root) opens a menu
   (`python -m validation campaign`) that walks the whole campaign - self-test,
@@ -203,6 +248,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `python/test_pose_estimator.py`.
 
 ### Changed
+
+- **Pose lock acquires from 2 markers** (was 3). Below the trusted count (3)
+  a lock starts only after the pose repeats over 5 consecutive frames and the
+  planar two-fold ambiguity is resolvable; 3+ markers still lock at once. A
+  1-marker start is opt-in (`POSE_LOCK_PRESETS["single"]`). The RMS/jump
+  gates and ROI re-detection now key on `trusted_min_markers` instead of the
+  acquire count, so lowering the acquire count no longer disables them.
 
 - `xreal_native`: `bind()` takes a signature table, `open_library()` and
   `Recorder` are public, `NativeReport.required` is per stage - so S3 binds

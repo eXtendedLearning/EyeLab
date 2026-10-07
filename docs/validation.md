@@ -6,8 +6,10 @@ registration error in pixels and in millimetres on the part, and step error.
 The XREAL port reuses the same targets, recorder and analysis once a camera
 feed exists (ADR-003).
 
-Code: `python/validation/` (`python -m validation --help`). Printables:
-`docs/validation_printables/`. Replaces the first draft that lived in
+Code: `python/validation/` (`python -m validation --help`). Printable PDFs:
+`docs/validation_printables/`; targets, marker configs, geometries and camera
+calibrations: the shared tree under `python/config/` (`eyelab_paths.py`),
+the same files the GUI uses. Replaces the first draft that lived in
 `docs/validation_tmp/` (review: units in mm against the repo invariant, ground
 truth tied to separately glued markers, and a detector seeded by EyeLab's own
 projection that reported a 15 mm error as 0.1 mm).
@@ -19,8 +21,8 @@ projection that reported a 15 mm error as 0.1 mm).
    UNV geometry. Markers and reference points are printed together, so their
    relative positions are known from the print, not from caliper work on
    marker centres (which are not physical features) or on marker roll (ADR-002).
-2. **Calipers only check the printer.** Each plate carries an X and a Y scale
-   bar. Their measured lengths rescale the layout per axis
+2. **The instrument only checks the printer.** Each plate carries an X and a
+   Y scale bar. Their measured lengths rescale the layout per axis
    (`apply-measurements`).
 3. **Ground truth is found independently of EyeLab.** The analysis detects the
    plate's markers itself, fits a face-plane homography, and grows it over the
@@ -51,31 +53,54 @@ registration RMS ≤ 5 mm (static), working aim < 1 mm per node.
 
 ## Ground-truth uncertainty
 
-Enter the standard uncertainty of a reference-point position as
-`--uncertainty-mm`. It combines the scale-bar reading (caliper uncertainty
-divided by the bar length, times the distance of a point from the plate
-centre, ≤ ~130 mm), print placement (~0.02 mm at 600 dpi) and flatness of the
-mounted paper. For plate A on glass or aluminium, 0.05–0.1 mm is realistic.
+`validation/uncertainty.py`, printed by the campaign menu (step 4). An
+instrument quoted as ±a is a rectangular distribution, u = a/√3 (JCGM
+100:2008, GUM §4.3.7); a scale-bar reading combines it with the scatter of
+the repeated readings. What enters a reference point's uncertainty:
+
+- **Uniform print scale: nothing.** Markers and points come from one print;
+  a uniformly scaled plate gives the same image with the pose at a scaled
+  depth, so on-face errors are unchanged (they change by the scale error *of
+  themselves*, ~0.5 % of the error). It matters only for absolute lengths
+  (B3).
+- **Anisotropy** (X and Y scale differ): a point at distance R from the face
+  anchor moves by up to R·|s_x − s_y|/2 relative to the markers. R ≤ 137 mm
+  (marker centres of plate A).
+- Print placement (~0.02 mm at 600 dpi) and flatness of the mounted paper
+  (~0.05 mm).
+- **Plate L fold angle**: the per-face ground truth comes from the print
+  alone, but the model EyeLab registers to includes the fold; an error dφ
+  moves face-V points up to 64 mm·dφ. Measure it from images
+  (`fold-angle`, `validation/fold.py`, ~0.1°) rather than with a protractor.
+
 For a pass/fail claim at a tolerance T the ground truth should be at least 4×
-better (test-uncertainty ratio ≥ 4:1, ANSI/NCSL Z540.3-2006; uncertainty per
-JCGM 100:2008, GUM): 0.1 mm supports statements down to ~0.4 mm.
+better: TUR = T / U ≥ 4 with U = 2u (ANSI/NCSL Z540.3-2006; GUM). The goal
+here is 1 mm, so u ≤ 0.125 mm.
 
-For plate L the per-face ground truth comes from the print alone, so it does
-not depend on the fold. The model EyeLab registers to does: enter the measured
-interior angle (`--fold-deg`). An error in that angle appears as a real
-registration error, as it would on a mis-modelled structure.
+| Instrument | plate A u (TUR) | plate L u (TUR), fold from images | B3 step u (TUR) |
+|---|---|---|---|
+| ruler ±1 mm | 0.33 mm (1.5) | 0.53 mm (0.9) | 0.82 mm (0.6) |
+| digital caliper ±0.03 mm | 0.055 mm (9.1) | 0.13 mm (4.0) | 0.024 mm (20) |
 
-## Printables (`docs/validation_printables/`)
+With a ±1 mm instrument the results stay valid as measurements but cannot
+show sub-mm accuracy; report them with their U. `summary.json` carries
+`ground_truth_U_mm` and `ground_truth_tur_1mm`.
+
+## Printables (`docs/validation_printables/`) and derived files (`python/config/`)
 
 | File | Use |
 |---|---|
 | `plate_A.pdf` | planar plate: 20 saddles (5×4, 40 mm), markers 30/31/32 (20 mm, DICT_4X4_50). Tests B1, B1b, B2, B3. |
 | `plate_L.pdf` | folded plate: 2×(5×2) saddles, markers 40/41 on the flat face, 42/43 on the upright one. Non-coplanar markers, grazing face. Test B2-L. |
-| `charuco_calibration_A4.pdf` | ChArUco 5×7, 25/19 mm, from `calibrate.py --generate` (A4 portrait). Step 0. |
-| `plate_*.target.json` | nominal ground truth, input to `apply-measurements` |
-| `plate_*.markers.json`, `plate_*.unv` | nominal marker config and geometry for the GUI (visual check only) |
+| `config/targets/plate_*.target.json` | nominal ground truth, input to `apply-measurements` |
+| `config/markers/plate_*.markers.json`, `config/geometry/plate_*.unv` | nominal marker config and geometry for the GUI (visual check only) |
 
-Regenerate with `python -m validation make-plates --out ../docs/validation_printables`
+Camera calibration uses EyeLab's own ChArUco board (5×7, 25 mm squares,
+19 mm markers, DICT_4X4_50; `calibrate.py --generate`), not a separate
+validation board.
+
+Regenerate with `python -m validation make-plates` (PDFs to
+`docs/validation_printables`, the rest to `python/config/`)
 (`--marker-size-mm 40` for the 512×378 XREAL Eye feed).
 
 Printing: A4 landscape, **100 % / actual size**, no fit or shrink, best quality,
@@ -94,32 +119,45 @@ Run everything from `python/` in the project venv (the repo's `venv/`, with
 beyond it).
 Session data go under `python/validation_runs/` (gitignored).
 
-**0. Calibration.** Print the ChArUco board, measure its 100 mm ruler, and
-calibrate at the resolution you will test (`calibrate.py --live ...`, RMS
-target < 0.5 px, THEORY §9.3). Fix focus and zoom; autofocus changes the
+**0. Calibration.** EyeLab's ChArUco board, flat (print scale does not
+affect the intrinsics). Calibrate the camera profile at the resolution you
+will test (`calibrate.py --live --profile <name>`, written to
+`config/cameras/<name>.yaml`, RMS target < 0.5 px, THEORY §9.3). Fix focus and zoom; autofocus changes the
 intrinsics. Validation results hold only for this calibration.
 
-**1. Plates.** Print, mount, then measure each scale bar with calipers from
-one edge of the first tick to the same edge of the last, three times, and
-average:
+**1. Plates.** Print, mount, then measure each scale bar from one edge of the
+first tick to the same edge of the last, three times, and average. Plate L's
+fold angle: record a short session moving the camera around and run
+`python -m validation fold-angle <session> --target config/targets/plate_L.target.json`.
 
 ```
-python -m validation apply-measurements --target ../docs/validation_printables/plate_A.target.json --bar-x-mm 199.86 --bar-y-mm 149.93 --uncertainty-mm 0.08
-python -m validation apply-measurements --target ../docs/validation_printables/plate_L.target.json --bar-x-mm ... --bar-y-mm ... --fold-deg 90.3 --uncertainty-mm 0.1
+python -m validation apply-measurements --target config/targets/plate_A.target.json --bar-x-mm 199.86 --bar-y-mm 149.93 --uncertainty-mm 0.06
+python -m validation apply-measurements --target config/targets/plate_L.target.json --bar-x-mm ... --bar-y-mm ... --fold-deg 90.3 --uncertainty-mm 0.13
 ```
 
-This writes `plate_A.measured.target.json` (+ `.markers.json`, `.unv`). Use
+This writes `plate_A.measured.target.json` into `config/targets` (+
+`.markers.json` into `config/markers`, `.unv` into `config/geometry`). Use
 the measured files from here on. One measured file per physical plate; a
 reprint is a new plate.
 
-**2. Visual check (optional).** Load `plate_A.measured.markers.json` and
-`plate_A.measured.unv` in the GUI: the wireframe must sit on the saddles.
+**2. Visual check (optional).** Load `config/markers/plate_A.measured.markers.json`
+and `config/geometry/plate_A.measured.unv` in the GUI: the wireframe must sit
+on the saddles.
 
 **3. Capture.** Camera on a tripod, plate static, lighting constant, no
 autofocus. Each run opens a preview; SPACE starts recording, Q aborts.
 
 ```
-python -m validation capture --target ../docs/validation_printables/plate_A.measured.target.json --calibration config/camera_params.yaml --out validation_runs/sessions/B1_A_d600_a30_r1 --frames 300 --condition test=B1 plate=A distance_mm=600 angle_deg=30 rep=1
+python -m validation capture --target config/targets/plate_A.measured.target.json --out validation_runs/sessions/B1_A_d600_a30_r1 --frames 300 --condition test=B1 plate=A distance_mm=600 angle_deg=30 rep=1
+```
+
+`--calibration` defaults to the active camera profile. The preview shows a
+setup panel (distance, angle/elevation, centring against the `--condition`
+values, read from the plate pose); every frame logs that geometry under
+`extra.setup`, and with `--imu rear|front` (camera built into a Surface) the
+gravity-referenced tilt under `extra.imu`.
+
+```
 ```
 
 The pipeline is EyeLab's (`ArucoPipeline`, same board, pose lock, ROI
@@ -138,7 +176,7 @@ frame (default 3, ~100 images and a few tens of MB per 300-frame session).
 **4. Analysis.**
 
 ```
-python -m validation analyze validation_runs/sessions/B1_* --target ../docs/validation_printables/plate_A.measured.target.json --out validation_runs/reports/B1
+python -m validation analyze validation_runs/sessions/B1_* --target config/targets/plate_A.measured.target.json --out validation_runs/reports/B1
 python -m validation step validation_runs/sessions/B3_s10_r1_a validation_runs/sessions/B3_s10_r1_b --known-mm 10
 ```
 

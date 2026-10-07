@@ -21,6 +21,8 @@ dist/
 # Generated files (per-user / per-run)
 python/markers/
 python/config/camera_params.yaml
+python/config/active.json
+python/config/cameras/history/
 python/screenshot_*.png
 *.mp4
 

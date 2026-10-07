@@ -61,6 +61,11 @@ class PoseResult:
     timestamp: float = 0.0
     rms_reproj_px: Optional[float] = None
     coasted: bool = False
+    # Planar solves only: 2nd-best / best IPPE reprojection error (>= 1) and
+    # the rotation between the two IPPE solutions. A ratio close to 1 with a
+    # large separation means the mirror pose is equally plausible and far off.
+    ambiguity_ratio: Optional[float] = None
+    ambiguity_separation_deg: Optional[float] = None
 
 
 @dataclass
@@ -835,7 +840,11 @@ class LStructureDetector:
         camera_matrix: np.ndarray,
         dist_coeffs: Optional[np.ndarray],
         prior: Optional[tuple[np.ndarray, np.ndarray]] = None,
-    ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    ) -> tuple[
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[tuple[float, float]],
+    ]:
         """
         Solve the board pose, handling the planar two-fold ambiguity.
 
@@ -844,10 +853,15 @@ class LStructureDetector:
         to the wrong one. For planar sets, both IPPE solutions are computed and
         the one closest to `prior` (Kalman prediction) is kept — or the one
         with lower reprojection error when no prior is available.
+
+        Returns (rvec, tvec, ambiguity). For planar sets ``ambiguity`` is
+        (ratio, separation_deg): the 2nd-best over the best IPPE reprojection
+        error, and the rotation between the two solutions. None otherwise.
         """
         obj = np.asarray(obj_pts, dtype=np.float64).reshape(-1, 3)
         img = np.asarray(img_pts, dtype=np.float64).reshape(-1, 2)
         rvec, tvec = None, None
+        ambiguity: Optional[tuple[float, float]] = None
 
         if self._points_are_planar(obj):
             try:
@@ -858,6 +872,12 @@ class LStructureDetector:
             except cv2.error:
                 n_sol = 0
             if n_sol:
+                if n_sol > 1:
+                    errs = np.asarray(_errs, dtype=np.float64).reshape(-1)
+                    ambiguity = (
+                        float(errs[1] / max(errs[0], 1e-9)),
+                        rotation_angle_between(rvecs[0], rvecs[1]),
+                    )
                 idx = 0  # solutions are sorted by reprojection error
                 if prior is not None and n_sol > 1:
                     idx = min(
@@ -872,7 +892,7 @@ class LStructureDetector:
                 flags=cv2.SOLVEPNP_ITERATIVE,
             )
             if not ok:
-                return None, None
+                return None, None, None
 
         try:
             rvec, tvec = cv2.solvePnPRefineLM(
@@ -880,7 +900,7 @@ class LStructureDetector:
             )
         except cv2.error:
             pass
-        return rvec, tvec
+        return rvec, tvec, ambiguity
 
     def estimate_pose(
         self,
@@ -905,6 +925,7 @@ class LStructureDetector:
         min_board = self.min_board_markers if min_markers is None else max(1, int(min_markers))
         rvec, tvec = None, None
         rms_reproj_px: Optional[float] = None
+        ambiguity: Optional[tuple[float, float]] = None
         ids_flat = ids.flatten().tolist()
 
         # Board mode
@@ -930,7 +951,7 @@ class LStructureDetector:
             except cv2.error:
                 obj_pts, img_pts = None, None
             if obj_pts is not None and len(obj_pts) >= min_board * 4:
-                rvec, tvec = self._solve_board_pose(
+                rvec, tvec, ambiguity = self._solve_board_pose(
                     obj_pts, img_pts, camera_matrix, dist_coeffs, prior=prior,
                 )
                 if rvec is not None:
@@ -962,6 +983,8 @@ class LStructureDetector:
             marker_count=len(ids_flat),
             timestamp=time.time(),
             rms_reproj_px=rms_reproj_px,
+            ambiguity_ratio=ambiguity[0] if ambiguity else None,
+            ambiguity_separation_deg=ambiguity[1] if ambiguity else None,
         )
 
 
@@ -1302,7 +1325,7 @@ class ArucoPipeline:
             {int(i) for i in ids.flatten()} if ids is not None and len(ids) else set()
         )
         present_board = present & board_ids
-        if len(present_board) >= self.lock_config.acquire_min_markers:
+        if len(present_board) >= self.lock_config.trusted_min_markers:
             return corners, ids, 0
 
         prediction = self.pose_lock.predicted_pose()

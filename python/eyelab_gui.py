@@ -59,16 +59,17 @@ from eyelab_logger import SessionLogger
 from eyelab_version import VERSION_STRING
 from generate_markers import generate_markers, MARKER_SIZE_MM
 from gui_calibration import ArucoCalibrationWizard, CalibrationWindow, InfoCenterWindow
+import eyelab_paths
+from eyelab_paths import active_calibration_file, active_marker_config
 from gui_common import (
-    CALIBRATION_FILE,
+    CAMERAS_DIR,
     CHARUCO_MARKER_M,
     CHARUCO_SQUARE_M,
     CONFIG_DIR,
+    GEOMETRY_DIR,
     HAMMER_MARKER_CONFIG_FILE,
     LOG_DIR,
-    MARKER_CONFIG_FILE,
     MARKERS_DIR,
-    TEST_ASSETS_DIR,
 )
 from gui_geometry_editor import GeometryEditorTab
 from gui_markers import CorrespondenceEditor, MarkerGenWindow, MarkerLoaderWindow
@@ -144,6 +145,7 @@ class EyeLabApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        self._config_migrated = eyelab_paths.migrate_legacy_layout()
         MARKERS_DIR.mkdir(parents=True, exist_ok=True)
         LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -404,6 +406,15 @@ class EyeLabApp:
         cal_frame = ttk.LabelFrame(left, text="Calibration")
         cal_frame.pack(fill=tk.X, padx=4, pady=2)
         self._register_control_section("calibration", cal_frame)
+        prof_row = ttk.Frame(cal_frame)
+        prof_row.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Label(prof_row, text="Camera profile:").pack(side=tk.LEFT)
+        self.camera_profile_var = tk.StringVar(value=eyelab_paths.active_camera())
+        self.camera_profile_combo = ttk.Combobox(prof_row, textvariable=self.camera_profile_var, width=18)
+        self.camera_profile_combo.pack(side=tk.LEFT, padx=2)
+        self.camera_profile_combo.bind("<<ComboboxSelected>>", lambda _e: self._select_camera_profile())
+        self.camera_profile_combo.bind("<Return>", lambda _e: self._select_camera_profile())
+        self._refresh_camera_profiles()
         self.cal_status_var = tk.StringVar(value="Not loaded")
         ttk.Label(cal_frame, textvariable=self.cal_status_var, wraplength=300).pack(anchor="w", padx=4, pady=2)
         ttk.Button(cal_frame, text="Calibrate (ChArUco)...", command=self._start_calibration).pack(anchor="w", padx=4, pady=2)
@@ -629,8 +640,8 @@ class EyeLabApp:
 
     def _read_calibration_metadata(self) -> dict[str, object]:
         data: dict[str, object] = {
-            "exists": CALIBRATION_FILE.exists(),
-            "path": str(CALIBRATION_FILE),
+            "exists": active_calibration_file().exists(),
+            "path": str(active_calibration_file()),
             "board_cols": BOARD_COLS,
             "board_rows": BOARD_ROWS,
             "square_length_m": CHARUCO_SQUARE_M,
@@ -640,10 +651,10 @@ class EyeLabApp:
             "rms_error": None,
             "error": None,
         }
-        if not CALIBRATION_FILE.exists():
+        if not active_calibration_file().exists():
             return data
 
-        fs = cv2.FileStorage(str(CALIBRATION_FILE), cv2.FILE_STORAGE_READ)
+        fs = cv2.FileStorage(str(active_calibration_file()), cv2.FILE_STORAGE_READ)
         if not fs.isOpened():
             data["error"] = "Cannot open calibration file"
             return data
@@ -693,7 +704,7 @@ class EyeLabApp:
         if meta.get("exists"):
             rms_text = f"{float(rms):.3f} px" if isinstance(rms, (float, int)) else "not stored"
             size_text = f"{image_w}x{image_h}" if image_w and image_h else "unknown image size"
-            calibration_line = f"Calibration file: {CALIBRATION_FILE.name}, RMS {rms_text}, {size_text}."
+            calibration_line = f"Calibration file: {active_calibration_file().name}, RMS {rms_text}, {size_text}."
         if meta.get("error"):
             calibration_line += f"\nWarning: {meta['error']}"
 
@@ -928,18 +939,23 @@ class EyeLabApp:
 
     def _load_persistent_state(self) -> None:
         """Load calibration and marker config from disk if they exist."""
-        if CALIBRATION_FILE.exists():
+        if active_calibration_file().exists():
             try:
-                self.camera_matrix, self.dist_coeffs = load_calibration(str(CALIBRATION_FILE))
+                self.camera_matrix, self.dist_coeffs = load_calibration(str(active_calibration_file()))
                 self.calibration_loaded = True
-                self.cal_status_var.set(f"Loaded: {CALIBRATION_FILE.name}")
-                self.log(f"Calibration loaded from {CALIBRATION_FILE}")
+                self.cal_status_var.set(f"Loaded: {active_calibration_file().name}")
+                self.log(f"Calibration loaded from {active_calibration_file()}")
             except Exception as e:
                 self.log(f"Failed to load calibration: {e}")
 
-        if MARKER_CONFIG_FILE.exists():
+        for line in getattr(self, "_config_migrated", []):
+            self.log(f"Config migrated: {line}")
+        if not active_calibration_file().exists():
+            self.cal_status_var.set(f"Profile '{eyelab_paths.active_camera()}' not calibrated yet")
+        marker_path = active_marker_config()
+        if marker_path.exists():
             try:
-                marker_config = read_marker_config(str(MARKER_CONFIG_FILE))
+                marker_config = read_marker_config(str(marker_path))
                 self.correspondences = marker_config.markers
                 self.registration.set_correspondences(self.correspondences)
                 self.corr_status_var.set(f"{len(self.correspondences)} correspondences")
@@ -951,17 +967,55 @@ class EyeLabApp:
                         f"Marker size for this structure: "
                         f"{marker_config.default_marker_size_mm:g} mm (from marker config)"
                     )
-                self.log(f"Marker config loaded: {len(self.correspondences)} correspondences")
+                self.log(f"Marker config loaded: {marker_path.name}, "
+                         f"{len(self.correspondences)} correspondences")
             except Exception as e:
                 self.log(f"Failed to load marker config: {e}")
 
+        geometry = eyelab_paths.active_geometry()
+        if geometry is not None and geometry.exists():
+            self._load_unv_path(geometry, remember=False)
+
         self._load_hammer_marker_config()
+        self._refresh_calibration_diagnostics()
+
+    def _refresh_camera_profiles(self) -> None:
+        names = eyelab_paths.list_cameras()
+        active = eyelab_paths.active_camera()
+        if active not in names:
+            names.append(active)
+        self.camera_profile_combo["values"] = sorted(names)
+        self.camera_profile_var.set(active)
+
+    def _select_camera_profile(self) -> None:
+        """Switch to (or create) a camera profile and load its calibration."""
+        try:
+            name = eyelab_paths.slug(self.camera_profile_var.get())
+        except ValueError as e:
+            messagebox.showerror("Camera profile", str(e))
+            return
+        path = eyelab_paths.set_active_camera(name)
+        self._refresh_camera_profiles()
+        if path.exists():
+            try:
+                self.camera_matrix, self.dist_coeffs = load_calibration(str(path))
+                self.calibration_loaded = True
+                self.cal_status_var.set(f"Loaded: {path.name}")
+                self.log(f"Camera profile '{name}': calibration loaded from {path}")
+            except Exception as e:
+                self.calibration_loaded = False
+                self.log(f"Failed to load calibration of '{name}': {e}", level="ERROR")
+        else:
+            self.camera_matrix, self.dist_coeffs = None, None
+            self.calibration_loaded = False
+            self.cal_status_var.set(f"Profile '{name}' not calibrated yet")
+            self.log(f"Camera profile '{name}' selected: no calibration yet")
         self._refresh_calibration_diagnostics()
 
     def _load_calibration_file(self) -> None:
         path = filedialog.askopenfilename(
             title="Select calibration YAML",
-            initialdir=str(CONFIG_DIR),
+            initialdir=str(CAMERAS_DIR),
             filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
         )
         if not path:
@@ -969,9 +1023,15 @@ class EyeLabApp:
         try:
             self.camera_matrix, self.dist_coeffs = load_calibration(path)
             self.calibration_loaded = True
-            # Copy to config dir for persistence
+            # The chosen file becomes the active profile's calibration.
             import shutil
-            shutil.copy2(path, str(CALIBRATION_FILE))
+            target = active_calibration_file()
+            if Path(path).resolve() != target.resolve():
+                backup = eyelab_paths.backup_calibration(target)
+                if backup:
+                    self.log(f"Previous calibration of '{target.stem}' backed up to {backup}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, str(target))
             self._refresh_calibration_diagnostics()
             self.cal_status_var.set(f"Loaded: {Path(path).name}")
             self.log(f"Calibration loaded from {path}")
@@ -994,13 +1054,17 @@ class EyeLabApp:
         self.dist_coeffs = dist_coeffs
         self.calibration_loaded = True
         image_size = image_size or (1280, 720)
+        backup = eyelab_paths.backup_calibration(active_calibration_file())
+        if backup:
+            self.log(f"Previous calibration backed up to {backup}")
+        active_calibration_file().parent.mkdir(parents=True, exist_ok=True)
         save_calibration(
-            str(CALIBRATION_FILE), cam_matrix, dist_coeffs,
+            str(active_calibration_file()), cam_matrix, dist_coeffs,
             image_size, rms, BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_M, CHARUCO_MARKER_M,
         )
         self.cal_status_var.set(f"Calibrated — RMS: {rms:.3f} px")
         self._refresh_calibration_diagnostics()
-        self.log(f"Calibration complete. RMS: {rms:.4f} px. Saved to {CALIBRATION_FILE}")
+        self.log(f"Calibration complete. RMS: {rms:.4f} px. Saved to {active_calibration_file()}")
 
     # ══════════════════════════════════════════════════════════════════════
     #  Geometry loading
@@ -1009,11 +1073,15 @@ class EyeLabApp:
     def _load_unv(self) -> None:
         path = filedialog.askopenfilename(
             title="Select UNV file",
-            initialdir=str(TEST_ASSETS_DIR),
+            initialdir=str(GEOMETRY_DIR),
             filetypes=[("UNV files", "*.unv *.uff"), ("All files", "*.*")],
         )
         if not path:
             return
+        self._load_unv_path(Path(path))
+
+    def _load_unv_path(self, path: Path, remember: bool = True) -> None:
+        """Load a UNV geometry; ``remember`` makes it the active geometry."""
         try:
             parser = UNVParser(Path(path), validate_cs=False, verbose=False)
             self.geometry_data = parser.parse()
@@ -1022,6 +1090,8 @@ class EyeLabApp:
             e = self.geometry_data["metadata"]["lineCount"]
             self.geo_status_var.set(f"{Path(path).name}: {n} nodes, {e} edges")
             self.log(f"Loaded UNV: {Path(path).name} ({n} nodes, {e} edges)")
+            if remember:
+                eyelab_paths.save_active(geometry=path)
             self._update_3d_preview()
         except Exception as e:
             messagebox.showerror("UNV Parse Error", str(e))
@@ -1548,11 +1618,15 @@ class EyeLabApp:
         CorrespondenceEditor(self.root, self)
 
     def _save_correspondences(self) -> None:
+        """Write the correspondences to the active marker config and apply them."""
         save_marker_config(
-            str(MARKER_CONFIG_FILE),
+            str(active_marker_config()),
             self.correspondences,
             default_marker_size_mm=self._structure_marker_size_mm(),
         )
+        self._apply_correspondences()
+
+    def _apply_correspondences(self) -> None:
         self.registration.set_correspondences(self.correspondences)
         self.corr_status_var.set(f"{len(self.correspondences)} correspondences")
         self._update_3d_preview()
@@ -1675,7 +1749,7 @@ class EyeLabApp:
             with self.watchdog.phase("start.pipeline_init"):
                 self.pipeline = ArucoPipeline(
                     camera_index=cam_idx,
-                    calibration_path=str(CALIBRATION_FILE),
+                    calibration_path=str(active_calibration_file()),
                     board_correspondences=self.correspondences,
                     marker_size_mm=self.marker_size_var.get(),
                     marker_size_by_id_mm=self._marker_size_by_id_mm(),

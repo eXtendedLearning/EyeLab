@@ -81,9 +81,10 @@ class SessionRecorder:
                pose: Optional[dict] = None, measured: Optional[dict] = None,
                lock_state: Optional[str] = None, lock_reject: Optional[str] = None,
                markers_seen: Iterable[int] = (), projected=None, projected_raw=None, drawn=None,
-               timings_ms: Optional[dict] = None) -> int:
+               timings_ms: Optional[dict] = None, extra: Optional[dict] = None) -> int:
         """Log one frame. ``pose``/``measured``: dicts with rvec, tvec, marker_ids
-        (+ coasted / rms_reproj_px), or None."""
+        (+ coasted / rms_reproj_px), or None. ``extra``: JSON-safe per-frame
+        side data (setup geometry, IMU), stored under ``"extra"``."""
         if self._error is not None:
             raise self._error
         idx = self._idx
@@ -97,6 +98,8 @@ class SessionRecorder:
                  "markers_seen": [int(m) for m in markers_seen],
                  "projected": _pts(projected), "projected_raw": _pts(projected_raw),
                  "drawn": _pts(drawn), "timings_ms": timings_ms or {}}
+        if extra:
+            entry["extra"] = extra
         self._log.write(json.dumps(entry) + "\n")
         self._idx += 1
         return idx

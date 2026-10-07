@@ -61,7 +61,9 @@ HELP_TOPICS = {
     ),
     "Camera calibration": (
         "Camera calibration estimates the camera matrix and lens distortion. EyeLab stores the "
-        "result in python/config/camera_params.yaml and uses it for marker pose and wireframe "
+        "result per camera profile in python/config/cameras/<profile>.yaml (select the profile "
+        "in the Calibration panel; the validation scripts use the same files) and uses it for "
+        "marker pose and wireframe "
         "projection.\n\n"
         "This step uses the printed ChArUco calibration board held in front of the camera. It is "
         "not the same thing as placing the ArUco markers on the physical structure.\n\n"
@@ -108,7 +110,8 @@ ARUCO_CALIBRATION_STEPS = [
     ),
     (
         "5. Use the saved calibration",
-        "EyeLab saves python/config/camera_params.yaml. After calibration, load UNV geometry, assign "
+        "EyeLab saves python/config/cameras/<profile>.yaml for the selected camera profile (the "
+        "previous one goes to cameras/history). After calibration, load UNV geometry, assign "
         "structure marker poses in Edit correspondences, and start AR. For each ArUco on the "
         "structure, set centre position, face normal, roll, and physical marker size. If the overlay "
         "is unstable, redo calibration with sharper and more varied frames."

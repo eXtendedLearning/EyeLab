@@ -10,15 +10,15 @@ Runs in real-time on a standard webcam:
 
 Usage:
     # Minimal — single-marker pose estimation (no board config required)
-    python webcam_pipeline.py --calibration camera_params.yaml
+    python webcam_pipeline.py --calibration config/cameras/<profile>.yaml
 
     # With custom board + wireframe
-    python webcam_pipeline.py --calibration camera_params.yaml \\
+    python webcam_pipeline.py --calibration config/cameras/<profile>.yaml \\
                               --board board_config.yaml \\
                               --wireframe wireframe.json
 
     # Save output video
-    python webcam_pipeline.py --calibration camera_params.yaml --save output.mp4
+    python webcam_pipeline.py --calibration config/cameras/<profile>.yaml --save output.mp4
 
 Controls (window must be focused):
     Q / ESC  — quit
@@ -276,6 +276,9 @@ def estimate_pose_single(
 
 def run_pipeline(args: argparse.Namespace) -> int:
     # Load calibration
+    if args.calibration is None:
+        from eyelab_paths import active_calibration_file
+        args.calibration = str(active_calibration_file())
     print(f"Loading calibration: {args.calibration}")
     calibration = read_calibration(args.calibration)
     camera_matrix, dist_coeffs = calibration.camera_matrix, calibration.dist_coeffs
@@ -462,8 +465,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--calibration", "-c",
-        required=True,
-        help="Path to camera_params.yaml produced by calibrate.py",
+        default=None,
+        help="Calibration YAML from calibrate.py (default: the active camera profile, "
+             "python/config/cameras/<profile>.yaml)",
     )
     parser.add_argument(
         "--board", "-b",

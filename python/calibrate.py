@@ -20,7 +20,8 @@ Workflow
    --square  physical size of one checkerboard square (metres)
    --marker  physical size of the ArUco marker inside the square (metres)
 
-3. Results are written to camera_params.yaml in OpenCV YAML format,
+3. Results are written to the active camera profile,
+   python/config/cameras/<profile>.yaml (see eyelab_paths), in OpenCV YAML format,
    portable to Phase 2 (Unity / XREAL).
 
 Board spec (default):
@@ -50,7 +51,7 @@ EyeLab ChArUco calibration wizard
    different, pass the measured values with --square and --marker.
 
 3. Capture live frames
-   python calibrate.py --live --camera 0 --output config/camera_params.yaml
+   python calibrate.py --live --camera 0 --profile desktop_c920
    Hold the ChArUco board in front of the camera, not on the structure.
    Press SPACE only when corners are detected. Capture at least 15 frames:
    center, corners, near, far, and tilted views.
@@ -60,7 +61,7 @@ EyeLab ChArUco calibration wizard
    If RMS is high, repeat with sharper, more varied board views.
 
 5. Use the result in EyeLab
-   Load the generated camera_params.yaml in the GUI, then run marker
+   The GUI and the validation pick the profile's file up automatically; then run marker
    correspondences and AR overlay. Structure ArUco markers are configured
    separately: centre position, face normal, roll, and physical size.
 """.strip()
@@ -469,8 +470,12 @@ def main() -> int:
                         help=f"Board columns (default: {BOARD_COLS})")
     parser.add_argument("--rows", type=int, default=BOARD_ROWS,
                         help=f"Board rows (default: {BOARD_ROWS})")
-    parser.add_argument("--output", "-o", default="camera_params.yaml",
-                        help="Output calibration YAML file (default: camera_params.yaml)")
+    parser.add_argument("--output", "-o", default=None,
+                        help="Output calibration YAML file (default: the camera profile's file, "
+                             "python/config/cameras/<profile>.yaml; a previous one is backed up "
+                             "to cameras/history)")
+    parser.add_argument("--profile", default=None,
+                        help="camera profile name (default: the active profile); it becomes active")
     parser.add_argument("--board-image", default="charuco_board.pdf",
                         help="Output board path for --generate; .pdf or .png "
                              "(default: charuco_board.pdf)")
@@ -533,6 +538,15 @@ def main() -> int:
         print(f"\n  WARNING: RMS error {rms:.3f} px is above the 1.0 px threshold.")
         print("  Consider recollecting calibration images.")
 
+    if args.output is None:
+        import eyelab_paths
+        name = args.profile or eyelab_paths.active_camera()
+        out = eyelab_paths.set_active_camera(name)
+        backup = eyelab_paths.backup_calibration(out)
+        if backup:
+            print(f"Previous calibration of '{out.stem}' backed up to {backup}")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        args.output = str(out)
     save_calibration(
         args.output,
         camera_matrix,

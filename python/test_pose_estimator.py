@@ -114,7 +114,7 @@ class PlanarPoseSolveTests(unittest.TestCase):
         true_tvec = np.array([[0.01], [0.02], [0.30]], dtype=np.float64)
         img, _ = cv2.projectPoints(self.obj, true_rvec, true_tvec, self.cam, self.dist)
 
-        rvec, tvec = self.detector._solve_board_pose(
+        rvec, tvec, _ratio = self.detector._solve_board_pose(
             self.obj, img.reshape(-1, 2), self.cam, self.dist,
             prior=(true_rvec, true_tvec),
         )
@@ -123,6 +123,40 @@ class PlanarPoseSolveTests(unittest.TestCase):
         from pose_lock import rotation_angle_between
         self.assertLess(rotation_angle_between(rvec, true_rvec), 2.0)
         np.testing.assert_allclose(tvec.flatten(), true_tvec.flatten(), atol=2e-3)
+
+    def _noisy_solve(self, obj, rvec, tvec, sigma_px, rng):
+        img, _ = cv2.projectPoints(obj, rvec, tvec, self.cam, self.dist)
+        img = img.reshape(-1, 2) + rng.normal(0.0, sigma_px, (len(obj), 2))
+        return self.detector._solve_board_pose(obj, img, self.cam, self.dist)
+
+    def test_planar_solve_reports_ambiguity(self):
+        rvec = np.array([[0.5], [0.0], [0.0]])
+        tvec = np.array([[0.0], [0.0], [0.30]])
+        _, _, amb = self._noisy_solve(self.obj, rvec, tvec, 0.3, np.random.default_rng(0))
+        self.assertIsNotNone(amb)
+        ratio, separation = amb
+        self.assertGreaterEqual(ratio, 1.0)
+        self.assertGreater(separation, 0.0)
+
+    def test_nonplanar_solve_reports_no_ambiguity(self):
+        obj = np.vstack([self.obj, self.obj + [0.0, 0.0, 0.05]])
+        rvec = np.array([[0.3], [0.2], [0.0]])
+        tvec = np.array([[0.0], [0.0], [0.30]])
+        _, _, amb = self._noisy_solve(obj, rvec, tvec, 0.3, np.random.default_rng(0))
+        self.assertIsNone(amb)
+
+    def test_ambiguity_ratio_grows_with_marker_spread(self):
+        # Same view, same noise: two markers 150 mm apart disambiguate the
+        # planar pose far better than one 12 mm marker.
+        rvec = np.array([[np.radians(30.0)], [0.0], [0.0]])
+        tvec = np.array([[0.0], [0.0], [0.45]])
+        pair = np.vstack([self.obj + [-0.075, 0, 0], self.obj + [0.075, 0, 0]])
+        r_single, r_pair = [], []
+        rng = np.random.default_rng(1)
+        for _ in range(40):
+            r_single.append(self._noisy_solve(self.obj, rvec, tvec, 0.3, rng)[2][0])
+            r_pair.append(self._noisy_solve(pair, rvec, tvec, 0.3, rng)[2][0])
+        self.assertGreater(np.median(r_pair), 2.0 * np.median(r_single))
 
 
 class DetectorParameterTests(unittest.TestCase):

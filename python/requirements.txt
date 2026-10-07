@@ -23,3 +23,8 @@ pyyaml>=5.4.0
 
 # GUI — image display in tkinter
 Pillow>=9.0.0
+
+# Optional, Windows only: device IMU (Surface built-in camera tilt) for the
+# validation setup assistant, see python/surface_imu.py. Skipped elsewhere.
+winrt-runtime>=2.2; sys_platform == "win32"
+winrt-Windows.Devices.Sensors>=2.2; sys_platform == "win32"

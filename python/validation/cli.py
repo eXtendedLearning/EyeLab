@@ -25,7 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     m = sub.add_parser("make-plates", help="printable PDFs + nominal target/markers/UNV")
-    m.add_argument("--out", default="validation_plates")
+    m.add_argument("--out", default=None,
+                   help="PDF folder (default docs/validation_printables); target/markers/UNV go "
+                        "to python/config/{targets,markers,geometry}")
+    m.add_argument("--flat", action="store_true",
+                   help="write every file into --out instead (experiments, nothing in config/)")
     m.add_argument("--layout", nargs="+", default=["A", "L"], choices=["A", "L"])
     m.add_argument("--marker-size-mm", type=float, default=20.0)
     m.add_argument("--dpi", type=int, default=600)
@@ -39,10 +43,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="measured interior angle between the faces (plate L)")
     a.add_argument("--uncertainty-mm", type=float, required=True,
                    help="standard uncertainty of a reference-point position, mm")
+    a.add_argument("--out", default=None,
+                   help="write the measured files into this folder instead of python/config/")
 
     c = sub.add_parser("capture", help="record a session with EyeLab's pipeline (headless)")
     c.add_argument("--target", required=True)
-    c.add_argument("--calibration", default="config/camera_params.yaml")
+    c.add_argument("--calibration", default=None,
+                   help="camera calibration YAML (default: the active camera profile, "
+                        "python/config/cameras/<profile>.yaml)")
     c.add_argument("--out", required=True, help="new session directory")
     c.add_argument("--camera", type=int, default=0)
     c.add_argument("--frames", type=int, default=300)
@@ -56,6 +64,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="disable autofocus and fix this focus value (same as at calibration)")
     c.add_argument("--no-preview", action="store_true")
     c.add_argument("--no-wait", action="store_true", help="start recording immediately")
+    c.add_argument("--imu", default="off", choices=["off", "rear", "front"],
+                   help="read the device IMU (camera built into a Surface: rear/front camera)")
+
+    f = sub.add_parser("fold-angle", help="plate L: interior fold angle from recorded images")
+    f.add_argument("sessions", nargs="+")
+    f.add_argument("--target", required=True, help="plate L target (nominal or measured)")
+    f.add_argument("--every", type=int, default=1)
 
     z = sub.add_parser("analyze", help="analyse recorded sessions")
     z.add_argument("sessions", nargs="+")
@@ -92,10 +107,12 @@ def main(argv=None) -> int:
     from .target import load_target
 
     if args.cmd == "make-plates":
+        import eyelab_paths
         from .printable import write_plate_bundle
+        pdf_dir = Path(args.out) if args.out else eyelab_paths.PRINTABLES_DIR
         for name in args.layout:
             paths = write_plate_bundle(LAYOUTS[name](marker_size_mm=args.marker_size_mm),
-                                       args.out, args.dpi)
+                                       pdf_dir, args.dpi, flat=args.flat)
             print("\n".join(f"{k:8s} {v}" for k, v in paths.items()))
 
     elif args.cmd == "apply-measurements":
@@ -105,7 +122,7 @@ def main(argv=None) -> int:
         bars = {b.name: b.length_mm for b in layout.bars}
         sx, sy = args.bar_x_mm / bars["x"], args.bar_y_mm / bars["y"]
         t = build_target(layout, sx, sy, args.fold_deg, args.uncertainty_mm, measured=True)
-        paths = export_derived(t, Path(args.target).parent, f"plate_{layout.name}.measured")
+        paths = export_derived(t, f"plate_{layout.name}.measured", out_dir=args.out)
         print(f"scale x {sx:.5f}, y {sy:.5f} (deviation {1e3 * (sx - 1):+.2f} / "
               f"{1e3 * (sy - 1):+.2f} per mille)")
         print("\n".join(f"{k:8s} {v}" for k, v in paths.items()))
@@ -113,7 +130,14 @@ def main(argv=None) -> int:
     elif args.cmd == "capture":
         from . import capture
         from .recorder import SessionRecorder
+        import eyelab_paths
+        from surface_imu import DeviceImu
         t = load_target(args.target)
+        if args.calibration is None:
+            args.calibration = str(eyelab_paths.active_calibration_file())
+        imu = DeviceImu.open(args.imu) if args.imu != "off" else None
+        if args.imu != "off" and imu is None:
+            print("IMU requested but not available: continuing without it")
         pipe = capture.build_pipeline(t, args.calibration, args.camera, args.tuning)
         cap, cam = capture.open_camera_locked(args.camera, args.focus)
         print(f"camera {args.camera} via {cam['backend']}: autofocus={cam['autofocus']:g} "
@@ -121,12 +145,13 @@ def main(argv=None) -> int:
         pipe.start(cap=cap)
         try:
             meta = capture.session_meta(pipe, t, args.target, args.calibration, args.tuning, cam)
+            meta["imu"] = {"camera": args.imu} if imu is not None else None
             cond = _condition(args.condition)
             n = capture.run(
                 pipe, lambda size: SessionRecorder(args.out, pipe.camera_matrix, pipe.dist_coeffs,
                                                    size, args.platform, cond, meta),
                 t, args.frames, args.save_every, preview=not args.no_preview,
-                wait=not args.no_wait and not args.no_preview)
+                wait=not args.no_wait and not args.no_preview, condition=cond, imu=imu)
         finally:
             pipe.stop()
         print(f"{n} frames -> {args.out}")
@@ -145,6 +170,19 @@ def main(argv=None) -> int:
                   f"{r['err_mm'].get('rmse', float('nan')):.3f} p95 {r['err_mm'].get('p95', float('nan')):.3f}"
                   f" | overlay jitter p95 {r['overlay_jitter_mm'].get('p95', float('nan')):.3f} mm")
         aggregate(sums, out)
+
+    elif args.cmd == "fold-angle":
+        from .fold import estimate_session
+        from .session import load_session
+        t = load_target(args.target)
+        if "V" not in t.faces:
+            raise SystemExit("fold-angle needs the folded plate L target")
+        res = [estimate_session(load_session(sp), t, args.every) for sp in args.sessions]
+        print(json.dumps(res, indent=2))
+        good = [r for r in res if r["n_frames"]]
+        if good:
+            print(f"interior angle {np.mean([r['interior_deg'] for r in good]):.3f} deg "
+                  f"(u {max(r['u_deg'] for r in good):.3f} deg) -> apply-measurements --fold-deg")
 
     elif args.cmd == "step":
         from .metrics import step_error

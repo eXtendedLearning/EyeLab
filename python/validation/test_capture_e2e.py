@@ -1,6 +1,7 @@
 """End to end on synthetic frames: EyeLab's real ArucoPipeline -> capture ->
 recorder -> analysis. Checks units, frames, marker geometry and corner order
 agree between EyeLab and the validation package."""
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -66,9 +67,17 @@ class TestCaptureEndToEnd(unittest.TestCase):
             n = capture.run(pipe, lambda size: SessionRecorder(d / "s", pipe.camera_matrix,
                                                                pipe.dist_coeffs, size, "synthetic",
                                                                {"test": "e2e"}, meta),
-                            t, n_frames=30, idle_timeout_s=0.5)
+                            t, n_frames=30, idle_timeout_s=0.5,
+                            condition={"test": "B1", "distance_mm": 550, "angle_deg": 25})
             self.assertEqual(n, 30)
+            first = json.loads((d / "s" / "log.jsonl").read_text(encoding="utf-8").splitlines()[0])
             sm = analyze_session(d / "s", d / "t.json", d / "report", plots=False)
+
+        # setup assistant: the logged geometry is the one the scene was rendered with
+        setup = first["extra"]["setup"]
+        self.assertAlmostEqual(setup["distance_mm"], 550.0, delta=2.0)
+        self.assertAlmostEqual(setup["angle_deg"], 25.0, delta=0.3)
+        self.assertLess(setup["centre_offset"], 0.02)
 
         det = sm["detection"]
         self.assertEqual(det["measured_rate"], 1.0)

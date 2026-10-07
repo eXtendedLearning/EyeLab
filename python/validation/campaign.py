@@ -4,14 +4,20 @@
 
     {"schema": "eyelab-validation-campaign/1", "created": ...,
      "camera_index": 0, "focus": null | float,
-     "calibration": {"path", "digest", "rms_px", "image_size", "recorded"} | null,
+     "camera": "<profile>",               # config/cameras/<profile>.yaml
+     "imu": "off" | "rear" | "front",     # device IMU coupled to the camera
+     "instrument": {"name", "accuracy_mm"} | null,   # +-a of the length instrument
+     "calibration": {"path", "camera", "digest", "rms_px", "image_size", "recorded"} | null,
      "plates": {"A": {"nominal", "measured", "readings"}, "L": {...}},
      "plan": [...],                       # see plan.py; editable by hand
      "sessions": {"<id>": {"status": "done" | "skipped", "path", "when",
                            "calibration_digest", "attempts", "note", ...}}}
 
-Paths are relative to ``python/`` (the runner's working directory). No file
-is ever deleted: a redone session's folder moves to ``sessions/_rejected/``.
+Calibration and plate files live in the shared config tree (``eyelab_paths``)
+and are stored relative to ``python/config``; session folders are relative to
+``python/`` (the runner's working directory). Campaign files written before
+the config tree existed are migrated on open. No file is ever deleted: a
+redone session's folder moves to ``sessions/_rejected/``.
 """
 from __future__ import annotations
 
@@ -20,11 +26,11 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import eyelab_paths as paths
+
 from .plan import STEP_POSITIONS_MM, default_plan
 
 SCHEMA = "eyelab-validation-campaign/1"
-PRINTABLES = Path("..") / "docs" / "validation_printables"
-CALIBRATION = Path("config") / "camera_params.yaml"
 
 
 def now() -> str:
@@ -45,16 +51,42 @@ class Campaign:
             state = json.loads(f.read_text(encoding="utf-8"))
             if state.get("schema") != SCHEMA:
                 raise ValueError(f"{f}: unknown schema {state.get('schema')!r}")
-            return cls(root, state)
+            c = cls(root, state)
+            if c._migrate():
+                c.save()
+            return c
         root.mkdir(parents=True, exist_ok=True)
         state = {"schema": SCHEMA, "created": now(), "camera_index": 0, "focus": None,
+                 "camera": paths.active_camera(), "imu": "off", "instrument": None,
                  "calibration": None,
-                 "plates": {k: {"nominal": str(PRINTABLES / f"plate_{k}.target.json"),
+                 "plates": {k: {"nominal": f"targets/plate_{k}.target.json",
                                 "measured": None, "readings": None} for k in ("A", "L")},
                  "plan": default_plan(reps), "sessions": {}}
         c = cls(root, state)
         c.save()
         return c
+
+    def _migrate(self) -> bool:
+        """Bring a campaign written before the shared config tree up to date."""
+        s, changed = self.state, False
+        for k, v in (("camera", paths.active_camera()), ("imu", "off"), ("instrument", None)):
+            if k not in s:
+                s[k], changed = v, True
+        for plate in s.get("plates", {}).values():
+            for key in ("nominal", "measured"):
+                v = plate.get(key)
+                if v and not paths.from_stored(v).exists() and "validation_printables" in v.replace("\\", "/"):
+                    name = Path(v.replace("\\", "/")).name
+                    if (paths.TARGETS_DIR / name).exists():
+                        plate[key], changed = f"targets/{name}", True
+        cal = s.get("calibration")
+        if cal and not paths.from_stored(cal["path"]).exists():
+            from .target import file_digest
+            cand = paths.camera_file(s["camera"])
+            if cand.exists() and file_digest(cand) == cal.get("digest"):
+                cal.update(path=paths.to_stored(cand), camera=cand.stem)
+                changed = True
+        return changed
 
     def save(self) -> None:
         f = self.root / "campaign.json"
@@ -97,15 +129,33 @@ class Campaign:
         return out
 
     def target_for(self, plate: str) -> Optional[str]:
-        return self.state["plates"][plate]["measured"]
+        """Absolute path of the measured target of ``plate`` (None until measured)."""
+        p = paths.from_stored(self.state["plates"][plate]["measured"])
+        return str(p) if p else None
+
+    def nominal_for(self, plate: str) -> str:
+        return str(paths.from_stored(self.state["plates"][plate]["nominal"]))
+
+    def calibration_path(self) -> Optional[Path]:
+        cal = self.state.get("calibration")
+        return paths.from_stored(cal["path"]) if cal else None
+
+    @property
+    def camera_file(self) -> Path:
+        return paths.camera_file(self.state.get("camera") or paths.active_camera())
+
+    @property
+    def instrument_mm(self) -> Optional[float]:
+        inst = self.state.get("instrument")
+        return float(inst["accuracy_mm"]) if inst else None
 
     def ready_problems(self, spec: dict) -> List[str]:
         """Why a session cannot be captured yet (empty when it can)."""
         problems = []
         if not self.state.get("calibration"):
             problems.append("no calibration recorded for this campaign (menu: calibrate)")
-        elif not Path(self.state["calibration"]["path"]).exists():
-            problems.append(f"calibration file missing: {self.state['calibration']['path']}")
+        elif not self.calibration_path().exists():
+            problems.append(f"calibration file missing: {self.calibration_path()}")
         if not self.target_for(spec["plate"]):
             problems.append(f"plate {spec['plate']} not measured yet (menu: plate measurements)")
         return problems
@@ -114,14 +164,15 @@ class Campaign:
         """True when the calibration file no longer matches the one recorded."""
         from .target import file_digest
         cal = self.state.get("calibration")
-        return bool(cal) and Path(cal["path"]).exists() and file_digest(cal["path"]) != cal["digest"]
+        p = self.calibration_path()
+        return bool(cal) and p.exists() and file_digest(p) != cal["digest"]
 
     # ── updates ──
     def record_calibration(self, path: str) -> dict:
         import cv2
         from .target import file_digest
         fs = cv2.FileStorage(str(path), cv2.FILE_STORAGE_READ)
-        info = {"path": str(path), "digest": file_digest(path),
+        info = {"path": paths.to_stored(path), "camera": Path(path).stem, "digest": file_digest(path),
                 "rms_px": float(fs.getNode("rms_error").real()),
                 "image_size": [int(fs.getNode("image_width").real()),
                                int(fs.getNode("image_height").real())],

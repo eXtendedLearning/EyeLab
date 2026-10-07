@@ -18,8 +18,9 @@ import cv2
 import numpy as np
 
 from generate_markers import generate_markers, GRID_SPACING_MM
+import eyelab_paths
 from gui_common import (
-    CONFIG_DIR,
+    MARKER_CONFIGS_DIR,
     MARKERS_DIR,
     POSITION_UI_UNIT,
     format_position_ui,
@@ -408,7 +409,7 @@ class CorrespondenceEditor:
     def _load_from_file(self) -> None:
         path = filedialog.askopenfilename(
             title="Load marker correspondences",
-            initialdir=str(CONFIG_DIR),
+            initialdir=str(MARKER_CONFIGS_DIR),
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
         )
         if not path:
@@ -418,9 +419,12 @@ class CorrespondenceEditor:
             self.app.correspondences = marker_config.markers
             if marker_config.default_marker_size_mm is not None:
                 self.app.marker_size_var.set(marker_config.default_marker_size_mm)
-            self.app._save_correspondences()
+            # The loaded file becomes the active marker config (edits are saved
+            # to it); it is not copied over another config.
+            eyelab_paths.save_active(markers=path)
+            self.app._apply_correspondences()
             self.refresh()
-            self.app.log(f"Loaded {len(self.app.correspondences)} correspondences from {path}")
+            self.app.log(f"Loaded {len(self.app.correspondences)} correspondences from {path} (now active)")
         except Exception as e:
             messagebox.showerror("Load Correspondences", str(e))
 
@@ -428,8 +432,8 @@ class CorrespondenceEditor:
         self.apply_tree_to_app()
         path = filedialog.asksaveasfilename(
             title="Save marker correspondences",
-            initialdir=str(CONFIG_DIR),
-            initialfile="marker_config.json",
+            initialdir=str(MARKER_CONFIGS_DIR),
+            initialfile=eyelab_paths.active_marker_config().name,
             defaultextension=".json",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
         )
@@ -441,7 +445,8 @@ class CorrespondenceEditor:
                 self.app.correspondences,
                 default_marker_size_mm=self.app._structure_marker_size_mm(),
             )
-            self.app.log(f"Saved {len(self.app.correspondences)} correspondences to {path}")
+            eyelab_paths.save_active(markers=path)
+            self.app.log(f"Saved {len(self.app.correspondences)} correspondences to {path} (now active)")
         except Exception as e:
             messagebox.showerror("Save Correspondences", str(e))
 

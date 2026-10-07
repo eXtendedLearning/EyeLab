@@ -8,6 +8,7 @@ from pose_lock import (
     LOCK_COASTING,
     LOCK_LOCKED,
     LOCK_SEARCHING,
+    POSE_LOCK_PRESETS,
     MarkerCarryover,
     PoseLock,
     PoseLockConfig,
@@ -17,7 +18,8 @@ from pose_lock import (
 )
 
 
-def _pose(n_markers, tvec=(0.0, 0.0, 0.3), rvec=(0.0, 0.0, 0.0), rms=0.5):
+def _pose(n_markers, tvec=(0.0, 0.0, 0.3), rvec=(0.0, 0.0, 0.0), rms=0.5,
+          ambiguity_ratio=None, ambiguity_separation_deg=None):
     return PoseResult(
         rvec=np.array(rvec, dtype=np.float64).reshape(3, 1),
         tvec=np.array(tvec, dtype=np.float64).reshape(3, 1),
@@ -25,6 +27,8 @@ def _pose(n_markers, tvec=(0.0, 0.0, 0.3), rvec=(0.0, 0.0, 0.0), rms=0.5):
         marker_count=n_markers,
         timestamp=0.0,
         rms_reproj_px=rms,
+        ambiguity_ratio=ambiguity_ratio,
+        ambiguity_separation_deg=ambiguity_separation_deg,
     )
 
 
@@ -115,12 +119,13 @@ class PoseLockStateMachineTests(unittest.TestCase):
         out = self.lock.process(None, now=1.0)
         self.assertIsNone(out)
         self.assertEqual(self.lock.state, LOCK_SEARCHING)
-        # After expiry, 2 markers are not enough to reacquire
+        # After expiry, one 2-marker frame is not enough: it must be confirmed
         self.assertIsNone(self.lock.process(_pose(2), now=1.033))
+        self.assertEqual(self.lock.last_reject_reason, "confirming")
         self.assertEqual(self.lock.state, LOCK_SEARCHING)
 
     def test_min_markers_property_tracks_state(self):
-        self.assertEqual(self.lock.min_markers, 3)
+        self.assertEqual(self.lock.min_markers, 2)
         self._acquire(t=0.0)
         self.assertEqual(self.lock.min_markers, 1)
 
@@ -141,6 +146,114 @@ class PoseLockStateMachineTests(unittest.TestCase):
         self.assertEqual(self.lock.state, LOCK_COASTING)
         self.assertTrue(out.coasted)
         self.assertEqual(self.lock.last_reject_reason, "jump")
+
+
+class AcquisitionConfirmationTests(unittest.TestCase):
+    """Locks started from fewer than the trusted marker count (default 3)."""
+
+    def _lock(self, **cfg):
+        return PoseLock(PoseKalmanFilter(), PoseLockConfig(**cfg))
+
+    def _feed(self, lock, poses, t0=0.0):
+        outs = []
+        for i, p in enumerate(poses):
+            outs.append(lock.process(p, now=t0 + 0.033 * i))
+        return outs
+
+    def test_default_thresholds(self):
+        cfg = PoseLockConfig()
+        self.assertEqual(
+            (cfg.sustain_min_markers, cfg.acquire_min_markers, cfg.trusted_min_markers),
+            (1, 2, 3),
+        )
+
+    def test_two_markers_lock_after_confirmation_frames(self):
+        lock = self._lock()
+        n = lock.config.acquire_confirm_frames
+        outs = self._feed(lock, [_pose(2) for _ in range(n)])
+        self.assertTrue(all(o is None for o in outs[:-1]))
+        self.assertIsNotNone(outs[-1])
+        self.assertEqual(lock.state, LOCK_LOCKED)
+
+    def test_three_markers_lock_at_once(self):
+        lock = self._lock()
+        self.assertIsNotNone(lock.process(_pose(3), now=0.0))
+        self.assertEqual(lock.state, LOCK_LOCKED)
+
+    def test_inconsistent_candidate_restarts_confirmation(self):
+        lock = self._lock(acquire_confirm_frames=3)
+        poses = [
+            _pose(2),
+            _pose(2, rvec=(0.5, 0.0, 0.0)),  # ~29 deg off: a mirror-pose flip
+            _pose(2, rvec=(0.5, 0.0, 0.0)),
+        ]
+        outs = self._feed(lock, poses)
+        self.assertTrue(all(o is None for o in outs))
+        self.assertEqual(lock.state, LOCK_SEARCHING)
+        self.assertIsNotNone(lock.process(_pose(2, rvec=(0.5, 0.0, 0.0)), now=0.2))
+        self.assertEqual(lock.state, LOCK_LOCKED)
+
+    def test_dropout_restarts_confirmation(self):
+        lock = self._lock(acquire_confirm_frames=3)
+        self._feed(lock, [_pose(2), _pose(2), None])
+        self.assertIsNone(lock.process(_pose(2), now=0.2))
+        self.assertEqual(lock.state, LOCK_SEARCHING)
+
+    def test_ambiguous_candidate_cannot_start_lock(self):
+        lock = self._lock(acquire_confirm_frames=1)
+        out = lock.process(
+            _pose(2, ambiguity_ratio=1.2, ambiguity_separation_deg=40.0), now=0.0,
+        )
+        self.assertIsNone(out)
+        self.assertEqual(lock.last_reject_reason, "ambiguous")
+
+    def test_low_ratio_with_close_solutions_is_not_ambiguous(self):
+        # Face-on views: both mirror poses are close, so the choice is cheap.
+        lock = self._lock(acquire_confirm_frames=1)
+        out = lock.process(
+            _pose(2, ambiguity_ratio=1.2, ambiguity_separation_deg=4.0), now=0.0,
+        )
+        self.assertIsNotNone(out)
+
+    def test_ambiguity_does_not_block_trusted_count(self):
+        lock = self._lock()
+        out = lock.process(
+            _pose(3, ambiguity_ratio=1.0, ambiguity_separation_deg=40.0), now=0.0,
+        )
+        self.assertIsNotNone(out)
+
+    def test_two_marker_pose_is_gated_once_locked(self):
+        lock = self._lock()
+        lock.process(_pose(3), now=0.0)
+        out = lock.process(_pose(2, tvec=(0.5, 0.0, 0.3)), now=0.033)
+        self.assertTrue(out.coasted)
+        self.assertEqual(lock.last_reject_reason, "jump")
+
+    def test_single_preset_locks_from_one_marker(self):
+        lock = PoseLock(PoseKalmanFilter(), POSE_LOCK_PRESETS["single"])
+        n = lock.config.acquire_confirm_frames
+        outs = self._feed(lock, [_pose(1) for _ in range(n)])
+        self.assertIsNotNone(outs[-1])
+        self.assertEqual(lock.state, LOCK_LOCKED)
+
+    def test_standard_preset_refuses_one_marker(self):
+        lock = PoseLock(PoseKalmanFilter(), POSE_LOCK_PRESETS["standard"])
+        outs = self._feed(lock, [_pose(1) for _ in range(10)])
+        self.assertTrue(all(o is None for o in outs))
+        self.assertEqual(lock.last_reject_reason, "count")
+
+    def test_legacy3_preset_refuses_two_markers(self):
+        lock = PoseLock(PoseKalmanFilter(), POSE_LOCK_PRESETS["legacy3"])
+        outs = self._feed(lock, [_pose(2) for _ in range(10)])
+        self.assertTrue(all(o is None for o in outs))
+
+    def test_threshold_order_is_validated(self):
+        with self.assertRaises(ValueError):
+            PoseLockConfig(acquire_min_markers=4)
+        with self.assertRaises(ValueError):
+            PoseLockConfig(sustain_min_markers=3, acquire_min_markers=2)
+        with self.assertRaises(ValueError):
+            PoseLockConfig(acquire_confirm_frames=0)
 
 
 class KalmanCoastTests(unittest.TestCase):

@@ -49,7 +49,7 @@ def _project(obj: np.ndarray, ids, p, K, dist) -> dict:
 
 
 def record_result(rec: SessionRecorder, result, target: Target, K, dist,
-                  save_frame: bool = True) -> int:
+                  save_frame: bool = True, extra: Optional[dict] = None) -> int:
     import overlay
     ids = target.ids()
     obj = target.array(ids)
@@ -69,7 +69,8 @@ def record_result(rec: SessionRecorder, result, target: Target, K, dist,
         markers_seen=[m.marker_id for m in result.markers],
         projected=_project(obj, ids, result.pose, K, dist),
         projected_raw=_project(obj, ids, result.measured_pose, K, dist),
-        drawn=drawn, timings_ms={k: round(v, 3) for k, v in result.timings_ms.items()})
+        drawn=drawn, timings_ms={k: round(v, 3) for k, v in result.timings_ms.items()},
+        extra=extra)
 
 
 def open_camera_locked(camera_index: int, focus: Optional[float]):
@@ -114,10 +115,33 @@ def session_meta(pipeline, target: Target, target_path, calibration_path, tuning
                          "board_mode": bool(pipeline.uses_structure_board)}}
 
 
+def setup_state(result, target: Target, K, condition: Optional[dict], imu=None) -> dict:
+    """Setup geometry of this frame (raw solve, else drawn pose) and IMU reading."""
+    from .setup_assist import measure, rows_for
+    out: dict = {}
+    p = result.measured_pose if result.measured_pose is not None else result.pose
+    if p is not None:
+        h, w = result.frame.shape[:2]
+        r = measure(target, p.rvec, p.tvec, K, (w, h))
+        out["setup"] = {"distance_mm": round(r.distance_mm, 2), "angle_deg": round(r.angle_deg, 3),
+                        "elevation_deg": round(r.elevation_deg, 3),
+                        "centre_offset": round(r.centre_offset, 4)}
+        out["_rows"] = rows_for(condition or {}, r)
+    if imu is not None:
+        reading = imu.read()
+        if reading is not None:
+            out["imu"] = {k: (round(v, 4) if isinstance(v, float) else v) for k, v in reading.items()}
+    return out
+
+
 def run(pipeline, rec_factory, target: Target, n_frames: int, save_every: int = 1,
-        preview: bool = False, wait: bool = False, idle_timeout_s: float = 10.0) -> int:
+        preview: bool = False, wait: bool = False, idle_timeout_s: float = 10.0,
+        condition: Optional[dict] = None, imu=None) -> int:
     """Record ``n_frames`` processed frames. ``rec_factory(image_size)`` opens the
-    recorder once the first frame's size is known. Returns frames recorded."""
+    recorder once the first frame's size is known. Returns frames recorded.
+
+    Every frame's setup geometry (and IMU reading, if any) is logged under
+    ``extra``; the preview shows it against ``condition`` (setup assistant)."""
     K, dist = pipeline.camera_matrix, pipeline.dist_coeffs
     if K is None:
         raise RuntimeError("pipeline has no calibration")
@@ -134,14 +158,18 @@ def run(pipeline, rec_factory, target: Target, n_frames: int, save_every: int = 
                 time.sleep(0.005)
                 continue
             last = time.monotonic()
+            state = setup_state(result, target, K, condition, imu)
+            rows = state.pop("_rows", None)
             if recording:
                 if rec is None:
                     h, w = result.frame.shape[:2]
                     rec = rec_factory((w, h))
-                record_result(rec, result, target, K, dist, save_frame=(n % save_every == 0))
+                record_result(rec, result, target, K, dist, save_frame=(n % save_every == 0),
+                              extra=state or None)
                 n += 1
             if preview:
-                key = _show(pipeline, result, target, K, dist, recording, n, n_frames)
+                key = _show(pipeline, result, target, K, dist, recording, n, n_frames, rows,
+                            state.get("imu"), condition)
                 if key in (ord("q"), 27):
                     break
                 if key == ord(" ") and not recording:
@@ -154,14 +182,23 @@ def run(pipeline, rec_factory, target: Target, n_frames: int, save_every: int = 
     return n
 
 
-def _show(pipeline, result, target, K, dist, recording, n, n_frames) -> int:
+def _show(pipeline, result, target, K, dist, recording, n, n_frames, rows=None, imu=None,
+          condition=None) -> int:
+    from .setup_assist import all_ok, draw_panel, imu_key_for
     vis = pipeline.draw_overlay(result, draw_markers=True, draw_axes=True)
     for uv in _project(target.array(target.ids()), target.ids(), result.pose, K, dist).values():
         cv2.circle(vis, (int(round(uv[0])), int(round(uv[1]))), 4, (0, 220, 255), 1, cv2.LINE_AA)
-    state = f"REC {n}/{n_frames}" if recording else "SPACE: start recording  Q: quit"
+    if recording:
+        state = f"REC {n}/{n_frames}"
+    elif rows and all_ok(rows):
+        state = "SETUP IN BAND - SPACE: record  Q: quit"
+    else:
+        state = "SPACE: start recording  Q: quit"
     lock = result.lock_state + (" (coasting)" if result.pose is not None and result.pose.coasted else "")
     cv2.putText(vis, f"{state} | lock {lock} | markers {len(result.markers)}", (10, 25),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255) if recording else (255, 255, 100), 2,
                 cv2.LINE_AA)
+    if rows or imu:
+        draw_panel(vis, rows or [], imu, imu_key_for(condition or {}))
     cv2.imshow("EyeLab validation capture", vis)
     return cv2.waitKey(1) & 0xFF

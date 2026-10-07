@@ -82,8 +82,13 @@ namespace compatibility patch needed by Unity 6000.4.5f1.
 3. In the GUI:
    1. **File → Load UNV…** to import a `.unv` geometry file.
    2. **Markers → Generate…** to print an ArUco sheet (or use existing markers).
-   3. **Camera → Calibrate…** to run a ChArUco calibration (saved to
-      `python/config/camera_params.yaml`).
+   3. **Camera → Calibrate…** to run a ChArUco calibration, saved per camera
+      profile to `python/config/cameras/<profile>.yaml` (choose the profile in
+      the Calibration panel). All configuration (camera profiles, marker
+      configs in `config/markers/`, geometries in `config/geometry/`,
+      validation targets in `config/targets/`) lives under `python/config/`
+      and is shared by the GUI and the validation scripts
+      (`python/eyelab_paths.py`).
    4. **Markers → Edit correspondences…** to assign each marker ID to a UNV node.
    5. Switch to the **AR View** tab and toggle the live overlay.
 
@@ -105,7 +110,7 @@ python python/eyelab_gui.py
 Standalone CLI pipeline (no GUI):
 
 ```bash
-python python/webcam_pipeline.py --camera 0 --calibration python/config/camera_params.yaml
+python python/webcam_pipeline.py --camera 0 --calibration python/config/cameras/<profile>.yaml
 ```
 
 ---

@@ -7,6 +7,10 @@ Read this file first and in full. It is short on purpose; everything else is lin
 
 An XR spatial-localization aid for Experimental Modal Analysis impact-hammer testing. It parses Simcenter Testlab `.unv` geometry, registers it to the physical specimen via ArUco markers, and overlays the measurement wireframe on a live camera feed. Phase 1 (webcam, Python/OpenCV) is feature-complete in `python/`. Phase 2 (Unity + XREAL One Pro + Eye, generic Android APK) is scaffolded in `eyelab_xreal/` and not yet implemented.
 
+## Hardware in hand — read before any XREAL work
+
+**`docs/HARDWARE.md`** is the single source for the machines and the glasses, and what each can do. In short: XREAL One Pro + Eye; desktop `lagann-0526` (RTX 5060, no iGPU) has USB data to the glasses but **cannot drive them as a display**; the **Surface Pro 7** drives them as a display (USB-C DP Alt Mode) and has a built-in webcam. A Thunderbolt DP-in card for the desktop is an open purchase decision (ADR-003, open question 6). Update that file whenever hardware or a verified capability changes.
+
 ## Document precedence
 
 When two documents disagree, the one higher in this list wins. When a document disagrees with observed runtime behaviour, **the runtime wins** — correct the document in the same change, and say so in the commit message.

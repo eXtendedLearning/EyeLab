@@ -9,17 +9,22 @@ from pathlib import Path
 
 import numpy as np
 
+import eyelab_paths as _paths
 from registration import AXIS_NORMALS, marker_axes_from_normal, normal_label
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
+# Configuration files (camera profiles, marker configs, geometries, validation
+# targets) live in the shared tree defined by eyelab_paths; the active camera
+# calibration and marker config are resolved at call time:
+#   eyelab_paths.active_calibration_file(), eyelab_paths.active_marker_config()
 
-CONFIG_DIR = Path(__file__).parent / "config"
-MARKERS_DIR = Path(__file__).parent / "markers"
+CONFIG_DIR = _paths.CONFIG_DIR
+CAMERAS_DIR = _paths.CAMERAS_DIR
+MARKER_CONFIGS_DIR = _paths.MARKER_CONFIGS_DIR
+GEOMETRY_DIR = _paths.GEOMETRY_DIR
+HAMMER_MARKER_CONFIG_FILE = _paths.HAMMER_MARKER_CONFIG
+MARKERS_DIR = Path(__file__).parent / "markers"     # generated marker images (git-ignored)
 LOG_DIR = Path(__file__).parent / ".logs"
-TEST_ASSETS_DIR = Path(__file__).resolve().parent.parent / "test_assets"
-CALIBRATION_FILE = CONFIG_DIR / "camera_params.yaml"
-MARKER_CONFIG_FILE = CONFIG_DIR / "marker_config.json"
-HAMMER_MARKER_CONFIG_FILE = CONFIG_DIR / "hammer_marker_config.json"
 
 # ── UI units & board geometry ────────────────────────────────────────────────
 

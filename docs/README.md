@@ -19,7 +19,7 @@ docs/
 ├── aruco_marker_best_practices.pdf
 ├── validation.md                                # baseline validation protocol (python/validation/)
 ├── validation-campaign.md                       # step-by-step campaign guide (validation.bat)
-├── validation_printables/                       # plates A/L, ChArUco board, derived target/marker/UNV files
+├── validation_printables/                       # plate A/L PDFs (targets, markers, UNV: python/config/)
 ├── audit_verify.py                              # reproduces the 2026-09-18 findings
 ├── adr/
 │   ├── 0001-opencv-bridging-staircase.md        # ADR-001 (accepted)

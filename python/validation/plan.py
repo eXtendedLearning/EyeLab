@@ -58,9 +58,10 @@ def instructions(spec: dict) -> List[str]:
     if t in ("B1", "B1b"):
         lines = [
             first_rep_note,
-            f"Plate A. Angle between camera axis and plate normal: {c['angle_deg']} deg "
-            "(phone inclinometer on the plate board or on the camera).",
-            f"Distance camera front -> plate centre: {c['distance_mm']} mm (tape, +-10 mm is fine).",
+            f"Plate A. Angle between line of sight and plate normal: {c['angle_deg']} deg (+-2).",
+            f"Distance camera -> plate centre: {c['distance_mm']} mm (+-10).",
+            "Both are shown live in the preview's setup panel (green = in band); no tape or "
+            "inclinometer needed. With a Surface camera the IMU line must agree on a level plate.",
             "Aim the camera at the plate centre. All saddles and markers inside the image.",
             "Even, diffuse light; no glare on the paper. Do not touch camera or plate while recording.",
         ]
@@ -76,9 +77,9 @@ def instructions(spec: dict) -> List[str]:
         return [
             first_rep_note,
             "Plate L on the table: flat face H on the table, upright face V facing the camera.",
-            f"Camera elevation: {c['elevation_deg']} deg below horizontal (45 = looking along "
-            "the bisector of the two faces; inclinometer on the camera).",
-            f"Distance camera front -> centre of the fold line: {c['distance_mm']} mm.",
+            f"Camera elevation: {c['elevation_deg']} deg below face H (45 = looking along "
+            "the bisector of the two faces), +-2 deg: read it in the setup panel.",
+            f"Distance camera -> centre of the fold line: {c['distance_mm']} mm (+-10, setup panel).",
             "Markers 40-43 and all 20 saddles inside the image. Wait for 'lock locked', then SPACE.",
         ]
     if t == "B3":
@@ -94,7 +95,9 @@ def instructions(spec: dict) -> List[str]:
         else:
             lines += [f"Position {p} mm: slide the plate along the straightedge so that the gap "
                       f"between end stop and plate is {p} mm (caliper depth rod or gauge blocks).",
-                      "Write the caliper reading in the note if it is not exactly the nominal value."]
+                      "B3 needs an instrument of about +-0.1 mm or better: with a +-1 mm ruler "
+                      "the step itself is uncertain by ~0.8 mm (skip B3 until a caliper is available).",
+                      "Enter the measured position when asked."]
         lines.append("Wait for 'lock locked', then SPACE.")
         return lines
     return [f"{t}: {c}"]

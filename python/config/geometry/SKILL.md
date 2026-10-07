@@ -1,6 +1,6 @@
 ---
 name: create-unv-geometry
-description: Create EyeLab-compatible Siemens UNV geometry files for webcam or XREAL overlay tests. Use when the user wants to generate, replace, or adapt a geometry.unv file from shape parameters, dimensions, node counts, trace-line topology, or the reference test_assets/geometry.unv file.
+description: Create EyeLab-compatible Siemens UNV geometry files for webcam or XREAL overlay tests. Use when the user wants to generate, replace, or adapt a geometry.unv file from shape parameters, dimensions, node counts, trace-line topology, or the reference python/config/geometry/geometry.unv file.
 ---
 
 # Create UNV Geometry
@@ -11,7 +11,7 @@ Create a new EyeLab-compatible `.unv` geometry file, normally `geometry.unv`, us
 
 1. Read the existing `geometry.unv` in the same directory if the target format is unclear.
 2. Ask only for missing parameters that affect geometry:
-   - Output path, default `test_assets/geometry.unv`.
+   - Output path, default `python/config/geometry/geometry.unv`.
    - Shape: L-flange, plate/grid, box/frame, cylinder/ring, custom nodes, or another simple wireframe.
    - Units and dimensions. Default to metres; convert millimetres to metres before writing.
    - Origin and axes. Default: origin at the lower-left/front reference corner; X right, Y length/depth, Z up.
@@ -204,7 +204,7 @@ EyeLab converts each polyline into consecutive edges, so `[1, 2, 3, 0, 4, 5]` be
 - If using the CLI converter, run:
 
 ```bash
-python python/unv_to_json.py test_assets/geometry.unv --pretty -o test_assets/geometry.json
+python python/unv_to_json.py python/config/geometry/geometry.unv --pretty -o python/config/geometry/geometry.json
 ```
 
 Do not keep generated validation JSON unless the user asks for it.

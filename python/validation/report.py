@@ -14,6 +14,9 @@ from .metrics import (FIELDS, detection_stats, overlay_jitter_mm, per_node, pose
 from .session import load_session
 from .stats import across_units, summarize
 from .target import load_target, target_digest
+from .uncertainty import expanded, tur
+
+NAN = float("nan")
 
 
 def _builtin(o):
@@ -38,6 +41,21 @@ def _jitter(s, which):
             "rot_dev_deg": summarize(j["rot_dev_deg"])}, j
 
 
+def achieved_setup(records) -> dict:
+    """Median setup geometry over the recorded frames (setup assistant log):
+    what the condition actually was, as opposed to its nominal value."""
+    out = {}
+    for k in ("distance_mm", "angle_deg", "elevation_deg", "centre_offset"):
+        v = [r.extra["setup"][k] for r in records if "setup" in r.extra and k in r.extra["setup"]]
+        if v:
+            out[k] = float(np.median(v))
+    imu = [r.extra["imu"] for r in records if "imu" in r.extra]
+    if imu:
+        out["imu_axis_from_down_deg"] = float(np.median([i["axis_from_down_deg"] for i in imu]))
+        out["imu_still_rate"] = float(np.mean([bool(i.get("still")) for i in imu]))
+    return out
+
+
 def analyze_session(session_path, target_path, out_dir, search_radius: float = 5.0,
                     every: int = 1, plots: bool = True) -> dict:
     s = load_session(session_path)
@@ -49,6 +67,9 @@ def analyze_session(session_path, target_path, out_dir, search_radius: float = 5
                "condition": s.meta.get("condition", {}), "target": t.name, "target_digest": digest,
                "target_digest_at_capture": s.meta.get("target_digest"),
                "ground_truth_uncertainty_mm": t.uncertainty_mm,
+               "ground_truth_U_mm": expanded(t.uncertainty_mm),
+               "ground_truth_tur_1mm": tur(t.uncertainty_mm) if t.uncertainty_mm == t.uncertainty_mm else NAN,
+               "achieved_setup": achieved_setup(s.records),
                "target_measured": bool(t.provenance.get("measured")),
                "detection": detection_stats(s.records)}
     jit = {}
@@ -167,7 +188,8 @@ def aggregate(summaries, out_dir) -> None:
     cols = ["session", "platform", "condition", "measured_rate", "coasted_rate",
             "t_radial_dev_mm_median", "rot_dev_deg_median", "err_px_median", "err_mm_rmse",
             "err_mm_median", "err_mm_p95", "err_mm_raw_rmse", "overlay_jitter_mm_p95",
-            "max_node_bias_mm", "homography_residual_px_median"]
+            "max_node_bias_mm", "homography_residual_px_median", "gt_U_mm",
+            "achieved_distance_mm", "achieved_angle_deg", "achieved_elevation_deg"]
 
     def row(s):
         j = s.get("jitter_measured", {})
@@ -178,7 +200,10 @@ def aggregate(summaries, out_dir) -> None:
                 r["err_px"].get("median"), r["err_mm"].get("rmse"), r["err_mm"].get("median"),
                 r["err_mm"].get("p95"), r["err_mm_raw"].get("rmse"),
                 r["overlay_jitter_mm"].get("p95"), r["max_node_bias_mm"],
-                r["qa"]["homography_residual_px"].get("median")]
+                r["qa"]["homography_residual_px"].get("median"), s.get("ground_truth_U_mm"),
+                s.get("achieved_setup", {}).get("distance_mm"),
+                s.get("achieved_setup", {}).get("angle_deg"),
+                s.get("achieved_setup", {}).get("elevation_deg")]
 
     with open(out / "sessions.csv", "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)

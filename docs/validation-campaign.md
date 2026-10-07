@@ -11,13 +11,39 @@ so you can close it at any time and continue later (another day too).
 ```
  Setup                               Measure
   1  Self-test (~15 s)                 6  Next session
-  2  Camera index and focus            7  Pick / redo a session
+  2  Camera, profile, IMU, focus      7  Pick / redo a session
   3  Calibrate camera                Results
   4  Plate measurements                8  Analyse
   5  Visual check in the EyeLab GUI    9  Step-error table (B3)
 ```
 
 ## 0. Before you start
+
+**Where the files are.** The campaign uses the same configuration files as
+the EyeLab GUI, all under `python/config/` (`python/eyelab_paths.py`):
+
+| Folder | Content |
+|---|---|
+| `cameras/<profile>.yaml` | one calibration per camera profile (e.g. `desktop_c920`, `surface_rear`); `cameras/history/` keeps every replaced one |
+| `markers/` | marker configs: structures, `plate_A.markers.json`, `plate_A.measured.markers.json`, … |
+| `geometry/` | UNV geometries: structures, `plate_A.unv`, `plate_A.measured.unv`, … |
+| `targets/` | validation ground truth, nominal and measured |
+| `active.json` | which profile / markers / geometry the GUI opens with (local, git-ignored) |
+
+`docs/validation_printables/` holds only the plate PDFs. The ChArUco
+calibration board is the one EyeLab already uses (5×7, 25 mm squares, 19 mm
+markers, DICT_4X4_50): there is no separate validation board. A calibration
+made in the GUI and one made from this menu are the same file.
+
+**Instrument and the 1 mm goal.** Every ground truth here is only as good as
+the instrument that checks the prints. The menu asks for its accuracy (±a mm)
+and prints the uncertainty budget and the test-uncertainty ratio (TUR) against
+a 1 mm goal; TUR ≥ 4 is the usual requirement. With a ±1 mm ruler: plate A
+≈ 0.33 mm (TUR 1.5), plate L ≈ 0.5 mm, B3 steps ≈ 0.8 mm (TUR 0.6, skip B3).
+With a digital caliper (±0.03 mm): plate A ≈ 0.06 mm (TUR 9), plate L ≈
+0.13 mm with the fold angle measured from images (TUR 4). A uniform print scale
+error does not matter (it cancels in the on-face metrics); only the X/Y
+difference does.
 
 **Equipment**
 
@@ -26,7 +52,9 @@ so you can close it at any time and continue later (another day too).
 - the webcam on a tripod. The head must tilt down to at least 65° below
   horizontal; straight down (90°) is needed for the 0° plate-A sessions in
   rig 1 (see below);
-- digital caliper, tape measure, phone with an inclinometer app;
+- a length instrument for the scale bars: a digital caliper if possible (see
+  above); no tape or inclinometer is needed, the preview shows distance and
+  angle;
 - a metal straightedge (≥ 300 mm), two clamps and a small block as an end
   stop (test B3); gauge blocks if you have them;
 - two pieces of white card about 40 × 40 mm (test B1b);
@@ -55,10 +83,18 @@ camera, focus and calibration stay the same.
 Runs the validation test suite (about 15 s). It must end with `OK`. If it
 fails, stop and report the output: the analysis is not trustworthy.
 
-## 2. Camera index and focus (menu 2)
+## 2. Camera, profile, IMU and focus (menu 2)
 
 1. Enter the camera index. 0 is the first camera; the GUI's camera list shows
    the others.
+1. Enter the camera profile name. Each physical camera (and resolution/focus
+   setting) gets its own profile, so the desktop webcam and the Surface camera
+   never overwrite each other's calibration. The profile becomes the active
+   one for the GUI too.
+1. IMU: `rear` or `front` only when the camera is built into the device you
+   are running on (Surface). On the desktop, or with a USB webcam, `off`.
+   Check the signs once with `python surface_imu.py` (device flat, screen up:
+   raw z ≈ −1 g, rear axis from down ≈ 0°).
 2. In the focus window, hold or place plate A about 600 mm from the camera.
    Press **A** to switch autofocus on and let it settle on the plate. Then
    press **L** to lock the focus there and **ENTER** to accept. The sharpness
@@ -71,10 +107,12 @@ From now on, calibration and every capture use this fixed focus value.
 
 ## 3. Calibration (menu 3)
 
-1. Check the 100 mm ruler on the ChArUco print with the caliper. If it is not
-   100 mm (±0.3), the page was scaled: reprint at 100 %.
-2. Start calibration. The previous `config/camera_params.yaml` is backed up
-   first, to `validation_runs/calibration_backups/`.
+1. Use the EyeLab ChArUco board (5×7, 25/19 mm), flat on card or foam board.
+   Its absolute print scale does not affect the intrinsics (Zhang 2000: a
+   scaled board only changes the board's estimated distance), so no ruler
+   check is required; what matters is flatness and equal X and Y scale.
+2. Start calibration. It writes `config/cameras/<profile>.yaml`; the previous
+   one is backed up first to `config/cameras/history/`.
 3. Hold the board in front of the camera and press **SPACE** when the corners
    are drawn. Take 20-25 views covering:
    - the centre, the four corners and the edges of the image;
@@ -89,27 +127,31 @@ From now on, calibration and every capture use this fixed focus value.
 
 Do this for plate A, then for plate L.
 
-1. Enter the caliper's accuracy (the default 0.03 mm is right for a typical
-   digital caliper).
+1. Enter the instrument's accuracy ±a (digital caliper ≈ 0.02-0.03 mm, steel
+   ruler 0.5-1 mm). It is stored for the campaign and also used for B3.
 2. Measure the **X** scale bar three times, then the **Y** bar three times.
-   Each time, put the jaws from one edge of the first tick to the *same* edge
-   of the last tick (left edge to left edge), and re-seat the caliper between
-   readings. Nominal: X 200 mm; Y 150 mm on plate A, 75 mm on plate L.
-3. Plate L only: enter the measured interior angle between the two faces
-   (engineer's square or inclinometer; 90 if it sits flush on a square).
-4. Accept the suggested ground-truth uncertainty (typically ~0.06 mm) or enter
-   your own.
+   Each time, measure from one edge of the first tick to the *same* edge
+   of the last tick (left edge to left edge), and re-seat the instrument
+   between readings. Nominal: X 200 mm; Y 150 mm on plate A, 75 mm on plate L.
+3. Plate L only: the fold angle. **E** (recommended) estimates it from the
+   camera: plate L in view at 400-700 mm, SPACE, then move the camera slowly
+   around for ~6 s. Both faces' saddles are fitted jointly with the angle as
+   an unknown (`validation/fold.py`); expect ~0.1° uncertainty, against ~0.6°
+   for a protractor. **T** types in a measured value instead.
+4. The menu prints the uncertainty budget (anisotropy, print placement, paper
+   flatness, fold angle), the combined u, U (k = 2) and the TUR against 1 mm.
+   Accept the suggested value or enter your own.
 
-The menu writes `plate_A.measured.*` / `plate_L.measured.*` in
-`docs/validation_printables/`, and every session uses those files. A
-deviation above 1 % triggers a warning: that means the page was printed
-fit-to-page. Reprint it.
+The menu writes `plate_A.measured.*` / `plate_L.measured.*` into
+`config/targets`, `config/markers` and `config/geometry`, and every session
+uses those files. A deviation above 1 % triggers a warning: that means the
+page was printed fit-to-page. Reprint it.
 
 ## 5. Visual check (menu 5, optional but recommended once)
 
-The GUI opens. Load the `plate_A.measured.markers.json` marker config and the
-`plate_A.measured.unv` geometry (the menu prints the paths), then press Start
-AR. The yellow wireframe must sit on the saddle centres. Close the GUI to go
+The menu can make the measured plate's marker config and geometry (and the
+campaign's camera profile) the GUI's active ones, so the GUI opens with them
+loaded. Press Start AR. The yellow wireframe must sit on the saddle centres. Close the GUI to go
 back to the menu.
 
 ## 6. Sessions (menu 6, repeatedly)
@@ -128,8 +170,13 @@ The flow for each session:
 
 1. Build the setup on the card.
 2. Press **ENTER** to open the camera preview.
-3. In the preview, wait until it says `lock locked` with the expected number
-   of markers. The yellow circles should sit on the saddles.
+3. In the preview, adjust the camera with the **setup panel** (top left):
+   distance, angle or elevation and centring, each against its target band.
+   Green means in band; the title line says `SETUP IN BAND`. With an IMU, an
+   extra line shows the gravity-referenced angle (it must agree on a level
+   plate) and `MOVING` while the device is not still. Wait until it says
+   `lock locked` with the expected number of markers. The yellow circles
+   should sit on the saddles.
 4. Press **SPACE** to record. Don't touch anything for the 10-20 s it takes.
 5. The preview closes and a quick check is printed: raw pose rate, coasted
    rate, markers in the pose, and warnings.
@@ -141,10 +188,13 @@ recording, or when the lock was lost.
 
 ### The setups
 
-*Distance* is from the camera's front glass to the plate centre (plate L: the
-centre of the fold line), along the viewing direction, measured with a tape;
-±10 mm is fine. *Angle* is between the viewing direction and the
-perpendicular to the plate; set it with the phone inclinometer.
+*Distance* is from the camera to the plate centre (plate L: the centre of the
+fold line), along the viewing direction; ±10 mm is fine. *Angle* is between
+the viewing direction and the perpendicular to the plate. Both are read live
+from the plate pose in the preview's setup panel, so no tape or inclinometer
+is needed. They are a positioning aid only: the analysis detects the plate on
+its own, and the geometry actually achieved is logged per frame and reported
+(`achieved_*` columns in `sessions.csv`).
 
 **Rig 1 (recommended): plate flat on the table, camera tilted.**
 
@@ -157,7 +207,8 @@ perpendicular to the plate; set it with the phone inclinometer.
 **Rig 2: plate standing, camera level.** Use it if the tripod cannot look
 straight down. Prop the plate's board vertically against a heavy block and
 keep the camera level; 0° means facing the plate. For 30° and 50°, lean the
-board back by that angle, measured with the inclinometer on the board.
+board back until the setup panel shows the angle. (The IMU angle is
+gravity-referenced and does not apply to this rig.)
 
 Use the same rig for the whole of a test.
 
@@ -188,7 +239,9 @@ and 800 mm.
 3. Position 0: plate against the stop.
 4. Positions 5, 10 and 20 mm: slide the plate along the straightedge until the
    gap between stop and plate equals the step. Set it with the caliper depth
-   rod or gauge blocks.
+   rod or gauge blocks. **B3 needs ~±0.1 mm or better:** with a ±1 mm ruler the
+   step uncertainty is ~0.8 mm and the test cannot resolve a 1 mm goal (the
+   menu warns). Skip B3 until a caliper is available.
 5. After each session, enter the gap you actually measured.
 6. Between repetitions you may move the camera; position 0 is recorded again.
 
@@ -233,7 +286,7 @@ How to read them (bias vs noise, single-marker vs three, raw vs filtered):
 | Symptom | Cause / fix |
 |---|---|
 | "Camera ... delivered no frames" | Another program holds the camera (GUI, Teams, browser). Close it, or replug the webcam. |
-| "calibration file changed since recorded" | `config/camera_params.yaml` was replaced outside the menu (e.g. a GUI calibration). Run menu 3 again, or restore the backup from `validation_runs/calibration_backups/`. |
+| "calibration file changed since recorded" | the profile's `config/cameras/<profile>.yaml` was replaced outside the menu (e.g. a GUI calibration of the same profile). Run menu 3 again, or restore the backup from `config/cameras/history/`. |
 | Lock never engages | Markers too small or soft at this distance or angle. Check focus and light. At 900 mm / 50° it may simply be the limit: skip with a note (menu 6 → S). |
 | B1b: lock drops when the cards go on | The cards moved the plate, or a card covers marker 30. Uncover, re-lock, retry. |
 | Quick check: "fewer frames than planned" | Recording was aborted (Q). Redo. |
