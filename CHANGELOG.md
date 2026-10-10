@@ -2,12 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counter,
++1 per commit, reset to `000` when MINOR changes. This is *not* strict Semantic
+Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
+policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
+
+**Current build: <!-- eyelab-version -->0.2.001<!-- /eyelab-version -->** (stamped by
+`tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
+New entries under `[Unreleased]` may be tagged with the build that introduced
+them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
 
 ### Added
+
+- Build numbering `MAJOR.MINOR.BUILD`, baseline 0.2.001: `python/eyelab_version.py`
+  is the single source (now also runnable: `--string` / `--package`);
+  `tools/bump_version.py` bumps and stamps README, this file and the Unity
+  `bundleVersion`; `tools/githooks/commit-msg` + `tools/check_commit_msg.py`
+  require `0.2.014 message` commit subjects; `python/test_version_scheme.py`
+  fails on drift. `run_eyelab.bat` and `validation.bat` read the version at launch
+  instead of hardcoding it. Policy: `docs/VERSIONING.md`.
 
 - XREAL PC-beta gate project `unity_projects/xreal_pc_gates/` (phase D0–D8 of
   `docs/XREAL-PC-GATES-G1-G3.md`): Unity 6000.6.5f1 Built-in RP project with
@@ -530,6 +546,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recovered-marker counters; AR status marks coasting poses; hints explain
   acquire-3 / sustain-1 behaviour; new Geometry Editor tab and "Marker axes"
   toggle.
+
+---
+
+## [0.2.0] — 2026-07-11
+
+Commit `f7dba8e` ("v 0.2.0"): Geometry Editor tab, `unv_writer.py`, single-marker
+pose sustain (IPPE), per-marker axis overlay, aruco marker best-practice note.
+Recorded retroactively: these entries were written under `[Unreleased]` at the
+time and were never moved, so they sit in the blocks above. The version file was
+not bumped (it stayed `0.1.0`). `git show f7dba8e -- CHANGELOG.md` shows the
+original wording. This is the `0.2.000` baseline of the build counter.
+
+## [0.1.1] — 2026-07-09
+
+Commit `3898425` ("v 0.1.1"): `pose_lock.py` resilience layer (PoseLock,
+MarkerCarryover, RoiRedetector), board-guided marker recovery in
+`pose_estimator.py`. Recorded retroactively, same caveat as 0.2.0.
 
 ---
 

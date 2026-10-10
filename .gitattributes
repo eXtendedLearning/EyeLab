@@ -20,3 +20,6 @@
 *.mp4 binary
 *.aar binary
 *.unitypackage binary
+
+# Git hooks run under sh: CRLF in the shebang breaks them on a Windows checkout.
+tools/githooks/* text eol=lf

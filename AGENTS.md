@@ -1,6 +1,7 @@
 # AGENTS.md — EyeLab
 
 Entry point for any coding agent (Claude Code, Codex, Cursor) working in this repo.
+Current build: `python python/eyelab_version.py` (the only authority; this file deliberately does not state it).
 Read this file first and in full. It is short on purpose; everything else is linked, not duplicated.
 
 ## What EyeLab is
@@ -58,8 +59,10 @@ An agent cannot launch the Editor, enter Play mode, build an APK, or deploy. The
 ## Commits
 
 - Style: plain lowercase descriptive messages (`geometry bugfix`), **not** conventional commits.
-- Version lives in `python/eyelab_version.py` and nowhere else. Bumping it means updating `CHANGELOG.md` (Keep a Changelog) and tagging. Do not encode a release in a commit message alone.
-- Touch `CHANGELOG.md` and `CONTEXT.md`'s `Last updated` stamp with substantive changes.
+- **Every commit subject starts with the build it bumped to:** `0.2.014 geometry bugfix` (then plain lowercase text). Scheme `MAJOR.MINOR.BUILD`; BUILD is +1 per commit, reset on a MINOR change. The number lives in `python/eyelab_version.py` and **nowhere else as an original** — never hand-edit it or copy it into a doc or launcher; run `python tools/bump_version.py` (it stamps README, CHANGELOG and the Unity `bundleVersion`; `check` verifies). Full policy, agent hand-off rules and known limits: **`docs/VERSIONING.md`**.
+- Enable the commit guard once per clone: `git config core.hooksPath tools/githooks`.
+- Releases are tagged only at a MINOR cut (`v0.3.000`). Bumping MINOR means a `CHANGELOG.md` heading and a tag; do not encode a release in a commit message alone.
+- Touch `CHANGELOG.md` and `CONTEXT.md`'s `Last updated` stamp with substantive changes; the stamp reads `Last updated: DATE, build X.Y.ZZZ (...)`.
 - Line endings are normalised by `.gitattributes` (`* text=auto`), for a Windows checkout with Linux agents. If EOL noise reappears, renormalise — never commit CRLF.
 
 ## Sandbox hazards (agents running against a mounted copy of this repo)

@@ -1,10 +1,11 @@
 @echo off
 setlocal
 
-echo ============================================
-echo   EyeLab v0.1.0 - Phase 1 Webcam MVP Launcher
-echo ============================================
-echo.
+REM ── Set paths ────────────────────────────────────────────────────────
+set "PROJECT_DIR=%~dp0"
+set "PYTHON_DIR=%PROJECT_DIR%python"
+set "VENV_DIR=%PROJECT_DIR%venv"
+set "REQ_FILE=%PYTHON_DIR%\requirements.txt"
 
 REM ── Check Python ─────────────────────────────────────────────────────
 where python >nul 2>nul
@@ -25,15 +26,19 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
+REM ── Version: read from the single source (python\eyelab_version.py) ──
+REM Never hardcode the number here. Policy: docs\VERSIONING.md
+set "EYELAB_VERSION=unknown"
+for /f "usebackq delims=" %%V in (`python "%PYTHON_DIR%\eyelab_version.py" --string`) do set "EYELAB_VERSION=%%V"
+
+echo ============================================
+echo   %EYELAB_VERSION% - Phase 1 Webcam MVP Launcher
+echo ============================================
+echo.
+
 echo [OK] Python found:
 python --version
 echo.
-
-REM ── Set paths ────────────────────────────────────────────────────────
-set "PROJECT_DIR=%~dp0"
-set "PYTHON_DIR=%PROJECT_DIR%python"
-set "VENV_DIR=%PROJECT_DIR%venv"
-set "REQ_FILE=%PYTHON_DIR%\requirements.txt"
 
 REM ── Create venv if missing ──────────────────────────────────────────
 if not exist "%VENV_DIR%\Scripts\activate.bat" (

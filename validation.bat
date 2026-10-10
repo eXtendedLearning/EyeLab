@@ -4,11 +4,6 @@ REM EyeLab validation campaign - menu for every step of the measurement
 REM campaign (calibration, plate measurements, sessions, analysis).
 REM Guide: docs\validation-campaign.md
 
-echo ============================================
-echo   EyeLab validation campaign
-echo ============================================
-echo.
-
 where python >nul 2>nul
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Python not found on PATH.
@@ -20,6 +15,15 @@ set "PROJECT_DIR=%~dp0"
 set "PYTHON_DIR=%PROJECT_DIR%python"
 set "VENV_DIR=%PROJECT_DIR%venv"
 set "REQ_FILE=%PYTHON_DIR%\requirements.txt"
+
+REM Version: read from the single source (python\eyelab_version.py), never hardcode.
+set "EYELAB_VERSION=unknown"
+for /f "usebackq delims=" %%V in (`python "%PYTHON_DIR%\eyelab_version.py" --string`) do set "EYELAB_VERSION=%%V"
+
+echo ============================================
+echo   %EYELAB_VERSION% - validation campaign
+echo ============================================
+echo.
 
 if not exist "%VENV_DIR%\Scripts\activate.bat" (
     echo Creating virtual environment in %VENV_DIR% ...
