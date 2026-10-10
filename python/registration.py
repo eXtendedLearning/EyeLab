@@ -141,7 +141,7 @@ class RegistrationResult:
     t: np.ndarray                  # (3,1) translation vector
     rms_error_mm: float
     per_marker_errors_mm: dict[int, float]  # marker_id → residual in mm
-    condition_number: float
+    condition_number: float        # in-plane conditioning (largest/2nd singular value) of the source points
     n_correspondences: int
     timestamp: float = 0.0
 
@@ -311,7 +311,8 @@ class SpatialRegistration:
         """
         Compute the rigid registration from current correspondences.
 
-        Requires ≥3 non-collinear correspondences with both a known UNV position
+        Requires ≥3 correspondences that span at least a plane (planar layouts are valid;
+        collinear or coincident ones are rejected) with both a known UNV position
         and a detected world position.
 
         Returns RegistrationResult or None on failure.
@@ -334,10 +335,12 @@ class SpatialRegistration:
         P = np.array(unv_pts, dtype=np.float64)    # (N, 3) — UNV frame
         Q = np.array(world_pts, dtype=np.float64)   # (N, 3) — world frame
 
-        # Check collinearity
-        cond = self._condition_number(P)
-        if cond > 1e6:
-            return None   # near-collinear or degenerate
+        # Rigid registration needs both point sets to span at least a plane
+        # (rank >= 2). Three non-collinear points are always coplanar, so a
+        # small third singular value is NOT degeneracy; a small second one is.
+        if not (self._spans_a_plane(P) and self._spans_a_plane(Q)):
+            return None   # collinear or coincident
+        cond = self._in_plane_conditioning(P)
 
         # Kabsch algorithm
         R, t = self._kabsch(P, Q)
@@ -444,16 +447,30 @@ class SpatialRegistration:
         t = (centroid_Q - R @ centroid_P).reshape(3, 1)
         return R, t
 
-    @staticmethod
-    def _condition_number(pts: np.ndarray) -> float:
-        """
-        Condition number of the point cloud's covariance matrix.
+    # Scale-relative rank test: the second singular value of the centred points
+    # must be at least this fraction of the first; the first must exceed an
+    # absolute floor (metres) so that coincident points are rejected too.
+    RANK2_MIN_SV_RATIO = 1e-3
+    MIN_SPREAD_M = 1e-9
 
-        Low (<10): well-distributed markers.
-        High (>100): markers are nearly collinear — registration ill-conditioned.
-        """
+    @staticmethod
+    def _singular_values(pts: np.ndarray) -> np.ndarray:
         centered = pts - pts.mean(axis=0)
-        cov = centered.T @ centered
-        eigenvalues = np.linalg.eigvalsh(cov)
-        eigenvalues = np.sort(eigenvalues)
-        return float(eigenvalues[-1] / (eigenvalues[0] + 1e-12))
+        return np.linalg.svd(centered, compute_uv=False)   # descending
+
+    @classmethod
+    def _spans_a_plane(cls, pts: np.ndarray) -> bool:
+        """True when the centred points have rank >= 2, independent of scale."""
+        sv = cls._singular_values(pts)
+        return bool(sv[0] > cls.MIN_SPREAD_M and sv[1] >= cls.RANK2_MIN_SV_RATIO * sv[0])
+
+    @classmethod
+    def _in_plane_conditioning(cls, pts: np.ndarray) -> float:
+        """
+        Ratio of the two largest singular values of the centred points.
+
+        ~1: well spread in the plane. Large: nearly collinear. A planar layout is
+        fine; only the in-plane aspect ratio matters for the rotation estimate.
+        """
+        sv = cls._singular_values(pts)
+        return float(sv[0] / max(sv[1], 1e-300))

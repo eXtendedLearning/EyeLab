@@ -35,6 +35,7 @@ class FrameRecord:
     drawn: Dict[str, np.ndarray]
     timings_ms: dict = field(default_factory=dict)
     extra: dict = field(default_factory=dict)   # setup geometry / IMU (recorder ``extra``)
+    source: dict = field(default_factory=dict)  # source frame identity (session_id, sequence)
 
     @property
     def n_markers_measured(self) -> int:
@@ -97,5 +98,6 @@ def load_session(path) -> Session:
                 int(e["i"]), float(e["t"]), e.get("frame"), _pose(e.get("pose")),
                 _pose(e.get("measured")), e.get("lock_state"), tuple(e.get("markers_seen", [])),
                 _pts(e.get("projected")), _pts(e.get("projected_raw")), _pts(e.get("drawn")),
-                e.get("timings_ms", {}), e.get("extra", {}) or {}))
+                e.get("timings_ms", {}), e.get("extra", {}) or {},
+                e.get("source", {}) or {}))
     return Session(path, meta, records)

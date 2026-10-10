@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- XREAL PC-beta gate project `unity_projects/xreal_pc_gates/` (phase D0–D8 of
+  `docs/XREAL-PC-GATES-G1-G3.md`): Unity 6000.6.5f1 Built-in RP project with
+  the 3.1.2 preview packages and UniTask; batch-mode `ProjectSetup`,
+  `GateSceneBuilder` and `BuildGates` editor scripts; G1/G2/G3/manual harness
+  (`GateController`, `CameraProbe`, `PoseProbe`, `DeviceInfoProbe`,
+  `GateRunLog`, `GateArgs`) and the Surface launcher `Tools/run_gates.bat`.
+  Both Windows players (harness and unmodified vendor RGBCamera control) built
+  with the full native DLL set. Guide §11 records the deviations (Editor
+  version, scripted `XREALSettings`, harness `m_UseSecondWindow=false` to avoid
+  the vendor argument-less `Restart()`) and the log schema. No glasses run yet.
+- `docs/XREAL-PC-GATES-G1-G3.md`: executable gate guide for the XREAL PC beta
+  (G1 Eye frames, G2 6DoF, G3 concurrent), built with the Unity CLI on the
+  desktop and run on the Surface; harness, logging, acceptance criteria and
+  outcome matrix. AGENTS.md gains a scoped Unity-CLI exception for the gate
+  project only. No runtime result yet.
+- XREAL PC beta investigation and isolated Unity test procedure in
+  `docs/XREAL-PC-BETA-2026-10-09.md`: XREAL-hosted 3.1.2 archives, Standalone RGB
+  camera sample and Windows bindings inspected; desktop USB/NCM and TCP
+  preflight observed. Hardware/capability records updated; emulator USB/ARM
+  categorical exclusions corrected. No main SDK upgrade or runtime claim.
+  Follow-up comparison: four core DLLs match the previously probed runtime;
+  the Unity wrapper differs. Vendor session/sample testing remains necessary.
+- Project audit `docs/AUDIT-2026-10-08.md`: reproduced parser, pose-gating and
+  stale-frame defects; validation and XREAL contract review. Revised in place
+  on 9 October after reading all ADRs: recovered previous PC/Android blockers,
+  distinguished a Unity camera scene from an EyeLab Windows application, and
+  defined staged Surface camera/bridge/optical-overlay validation. Historical
+  test results are explicitly separated from the documentation-only revision.
+- `python/frame_packet.py`: immutable `FramePacket` (image made read-only, source
+  and session id, strictly increasing sequence, host receipt time) and the
+  `FrameSource` contract with a `ReplayFrameSource`. `ThreadedCapture` now
+  produces packets (`read_packet()`); `read()` stays as a writable-copy shim.
+- `docs/CAPABILITIES.md`: dated capability matrix (host, firmware, transport,
+  camera mode, tracking, display, evidence label).
+- Tests: `test_unv_coordinate_systems.py` (pyuff write/read fixtures for
+  rectangular, cylindrical, spherical, missing and multiple coordinate systems),
+  `test_frame_packet.py`, quality-gate tests at every marker count in
+  `test_pose_lock.py`, planar/scale cases in `test_registration_kabsch.py`.
+- CI runs the suite on Windows as well as Linux.
+
+### Fixed (audit 2026-10-08)
+
+- **F01 - Dataset 2420 was silently discarded.** The parser looked for `cs_id` /
+  `cs_type` / `origin` while pyuff emits `CS_sys_labels` / `CS_types` /
+  `CS_matrices`, so the coordinate-system checks never ran and an angular
+  coordinate could be read as Cartesian. 2420 is now read through the real keys
+  (all blocks merged, origins converted to metres), and nonzero definition AND
+  displacement CS references are validated even when 2420 is absent (skippable
+  as before with `validate_cs=False`; non-rectangular systems are always
+  refused).
+- **F02 - marker count bypassed the pose-quality gates.** Every candidate pose,
+  at any marker count and in any state, must now be finite with positive depth,
+  under an absolute reprojection ceiling (`max_acquire_reproj_rms_px`, 15 px),
+  unambiguous when acquiring, and, once locked, inside the adaptive RMS gate and
+  the time-aware translation/rotation limits. A genuinely moved specimen is
+  reacquired through COASTING -> SEARCHING. Behaviour change: a 3+ marker pose
+  with a very large RMS or a large jump is no longer accepted unconditionally.
+- **F03 - cached images masqueraded as fresh measurements.** `ArucoPipeline`
+  processes each (session, sequence) once, drops stale frames by a consumer-side
+  age deadline (`max_frame_age_s`, 0.5 s) that does not depend on reader
+  progress, lets an idle lock expire, resets history on a session change, and
+  passes the packet's receipt time to the pose lock. `FrameResult` carries
+  `sequence`, `session_id`, `source_id`, `received_at`, `frame_age_ms`; validation
+  records store a `source` block and use the packet time. A recorded sample is a
+  unique source frame.
+- **F06 - Kabsch rejected valid planar layouts.** The degeneracy test is now a
+  scale-relative rank-two test on the singular values of both point sets;
+  `RegistrationResult.condition_number` is the in-plane conditioning.
+- **F11 - two tests failed on Windows.** Temporary-directory cleanup is
+  registered before the watchdog's (LIFO), and the calibration test keeps the
+  mock capture reference.
+- Documentation (F05, F08, F13, F14): T2.6 checklist (20-byte header and a
+  single schema, transform naming and capture-time composition, clock mapping,
+  Phase 8 split into extrinsic and per-eye display calibration), ADR-003 draft
+  amendments (video vs optical see-through), CONTEXT status/range/wire-format
+  corrections, firmware-version reading, Nebula audit scope note,
+  `audit_verify.py` made behavioural.
+
 ### Changed
 
 - **One configuration tree for the GUI, `calibrate.py` and the validation**

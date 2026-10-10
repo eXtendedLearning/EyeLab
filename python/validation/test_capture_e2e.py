@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from calibrate import save_calibration
+from frame_packet import ReplayFrameSource
 from validation import capture
 from validation.plates import build_target, plate_a
 from validation.recorder import SessionRecorder
@@ -18,25 +19,6 @@ from validation.synth import render_scene, view_pose
 from validation.target import save_target
 
 K = np.array([[1000.0, 0, 640], [0, 1000.0, 360], [0, 0, 1]])
-
-
-class _FrameSource:
-    """Stands in for ThreadedCapture: the same read()/error/stop surface."""
-
-    def __init__(self, frames):
-        self.frames = list(frames)
-        self.error = None
-        self.is_opened = True
-
-    def read(self):
-        return self.frames.pop(0) if self.frames else None
-
-    def stats(self):
-        return {}
-
-    def stop(self):
-        pass
-
 
 
 class TestCaptureEndToEnd(unittest.TestCase):
@@ -62,7 +44,7 @@ class TestCaptureEndToEnd(unittest.TestCase):
                              0.025, 0.019)
             save_target(t, d / "t.json")
             pipe = capture.build_pipeline(t, str(d / "cam.yaml"))
-            pipe._capture = _FrameSource(frames)
+            pipe._capture = ReplayFrameSource(frames)
             meta = capture.session_meta(pipe, t, d / "t.json", d / "cam.yaml", "balanced")
             n = capture.run(pipe, lambda size: SessionRecorder(d / "s", pipe.camera_matrix,
                                                                pipe.dist_coeffs, size, "synthetic",
@@ -70,7 +52,11 @@ class TestCaptureEndToEnd(unittest.TestCase):
                             t, n_frames=30, idle_timeout_s=0.5,
                             condition={"test": "B1", "distance_mm": 550, "angle_deg": 25})
             self.assertEqual(n, 30)
-            first = json.loads((d / "s" / "log.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            rows = [json.loads(x) for x in (d / "s" / "log.jsonl").read_text(encoding="utf-8").splitlines()]
+            first = rows[0]
+            # one record per unique source frame, in source order
+            self.assertEqual([r["source"]["sequence"] for r in rows], list(range(1, 31)))
+            self.assertEqual(len({r["source"]["session_id"] for r in rows}), 1)
             sm = analyze_session(d / "s", d / "t.json", d / "report", plots=False)
 
         # setup assistant: the logged geometry is the one the scene was rendered with

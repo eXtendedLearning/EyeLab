@@ -78,12 +78,18 @@ class PoseLockStateMachineTests(unittest.TestCase):
         self.assertTrue(out.coasted)
         self.assertEqual(self.lock.last_reject_reason, "jump")
 
-    def test_full_count_pose_accepted_regardless_of_rms(self):
-        # Real board geometry can have a large stable baseline RMS; gating
-        # acquisition on it would prevent the lock from ever engaging.
-        out = self.lock.process(_pose(3, rms=50.0), now=0.0)
+    def test_full_count_pose_with_large_stable_rms_still_acquires(self):
+        # Real board geometry can have a large stable baseline RMS; the
+        # acquisition ceiling is generous enough not to block it.
+        out = self.lock.process(_pose(3, rms=8.0), now=0.0)
         self.assertIsNotNone(out)
         self.assertEqual(self.lock.state, LOCK_LOCKED)
+
+    def test_full_count_pose_above_rms_ceiling_is_not_acquired(self):
+        out = self.lock.process(_pose(3, rms=50.0), now=0.0)
+        self.assertIsNone(out)
+        self.assertEqual(self.lock.state, LOCK_SEARCHING)
+        self.assertEqual(self.lock.last_reject_reason, "rms")
 
     def test_sustain_pose_with_high_rms_is_rejected(self):
         self._acquire(t=0.0)
@@ -215,10 +221,20 @@ class AcquisitionConfirmationTests(unittest.TestCase):
         )
         self.assertIsNotNone(out)
 
-    def test_ambiguity_does_not_block_trusted_count(self):
+    def test_ambiguity_blocks_acquisition_at_trusted_count_too(self):
+        # Marker count is evidence, not a bypass: a planar solve whose mirror
+        # pose is equally good and far away cannot start a lock.
         lock = self._lock()
         out = lock.process(
             _pose(3, ambiguity_ratio=1.0, ambiguity_separation_deg=40.0), now=0.0,
+        )
+        self.assertIsNone(out)
+        self.assertEqual(lock.last_reject_reason, "ambiguous")
+
+    def test_resolved_ambiguity_does_not_block_trusted_count(self):
+        lock = self._lock()
+        out = lock.process(
+            _pose(3, ambiguity_ratio=6.0, ambiguity_separation_deg=40.0), now=0.0,
         )
         self.assertIsNotNone(out)
 
@@ -247,6 +263,10 @@ class AcquisitionConfirmationTests(unittest.TestCase):
         outs = self._feed(lock, [_pose(2) for _ in range(10)])
         self.assertTrue(all(o is None for o in outs))
 
+    def test_rms_ceiling_must_cover_sustain_floor(self):
+        with self.assertRaises(ValueError):
+            PoseLockConfig(max_reproj_rms_px=5.0, max_acquire_reproj_rms_px=4.0)
+
     def test_threshold_order_is_validated(self):
         with self.assertRaises(ValueError):
             PoseLockConfig(acquire_min_markers=4)
@@ -254,6 +274,119 @@ class AcquisitionConfirmationTests(unittest.TestCase):
             PoseLockConfig(sustain_min_markers=3, acquire_min_markers=2)
         with self.assertRaises(ValueError):
             PoseLockConfig(acquire_confirm_frames=0)
+
+
+class QualityGatesAtEveryMarkerCountTests(unittest.TestCase):
+    """Audit F02: marker count must not bypass finite / depth / RMS / motion gates."""
+
+    COUNTS = (1, 2, 3, 4, 6)
+
+    def _locked(self):
+        lock = PoseLock(PoseKalmanFilter(), PoseLockConfig(coast_duration_s=0.3))
+        for i in range(10):
+            self.assertIsNotNone(lock.process(_pose(3), now=0.033 * i))
+        self.assertEqual(lock.state, LOCK_LOCKED)
+        return lock
+
+    def test_audit_case_three_markers_high_rms_and_jump_after_lock(self):
+        lock = self._locked()
+        out = lock.process(_pose(3, tvec=(0.3, 0.0, 0.3), rms=25.0), now=0.33)
+        self.assertTrue(out.coasted)
+        self.assertIn(lock.last_reject_reason, ("rms", "jump"))
+
+    def test_high_rms_rejected_at_every_count_once_locked(self):
+        for n in self.COUNTS:
+            lock = self._locked()
+            out = lock.process(_pose(n, rms=25.0), now=0.4)
+            self.assertTrue(out.coasted, f"n={n}")
+            self.assertEqual(lock.last_reject_reason, "rms", f"n={n}")
+
+    def test_translation_jump_rejected_at_every_count_once_locked(self):
+        for n in self.COUNTS:
+            lock = self._locked()
+            out = lock.process(_pose(n, tvec=(0.3, 0.0, 0.3)), now=0.4)
+            self.assertTrue(out.coasted, f"n={n}")
+            self.assertEqual(lock.last_reject_reason, "jump", f"n={n}")
+
+    def test_rotation_jump_rejected_at_every_count_once_locked(self):
+        for n in self.COUNTS:
+            lock = self._locked()
+            out = lock.process(_pose(n, rvec=(0.0, 1.0, 0.0)), now=0.4)  # ~57 deg
+            self.assertTrue(out.coasted, f"n={n}")
+            self.assertEqual(lock.last_reject_reason, "jump", f"n={n}")
+
+    def test_non_finite_pose_rejected_at_every_count_and_state(self):
+        bad = {
+            "nan_t": dict(tvec=(np.nan, 0.0, 0.3)),
+            "inf_t": dict(tvec=(0.0, np.inf, 0.3)),
+            "nan_r": dict(rvec=(0.0, np.nan, 0.0)),
+            "nan_rms": dict(rms=float("nan")),
+        }
+        for label, kw in bad.items():
+            for n in self.COUNTS:
+                fresh = PoseLock(PoseKalmanFilter())
+                self.assertIsNone(fresh.process(_pose(n, **kw), now=0.0), f"{label} n={n}")
+                self.assertEqual(fresh.last_reject_reason, "invalid", f"{label} n={n}")
+                lock = self._locked()
+                out = lock.process(_pose(n, **kw), now=0.4)
+                self.assertTrue(out.coasted, f"{label} n={n}")
+                self.assertEqual(lock.last_reject_reason, "invalid", f"{label} n={n}")
+                self.assertTrue(np.all(np.isfinite(lock.kalman.coast()[1])))
+
+    def test_negative_or_zero_depth_rejected_at_every_count(self):
+        for z in (-0.3, 0.0):
+            for n in self.COUNTS:
+                fresh = PoseLock(PoseKalmanFilter())
+                self.assertIsNone(fresh.process(_pose(n, tvec=(0.0, 0.0, z)), now=0.0))
+                self.assertEqual(fresh.last_reject_reason, "invalid")
+                lock = self._locked()
+                out = lock.process(_pose(n, tvec=(0.0, 0.0, z)), now=0.4)
+                self.assertTrue(out.coasted)
+                self.assertEqual(lock.last_reject_reason, "invalid")
+
+    def test_ambiguous_solve_rejected_at_acquisition_for_every_count(self):
+        for n in self.COUNTS:
+            lock = PoseLock(PoseKalmanFilter(), PoseLockConfig(acquire_min_markers=1))
+            out = lock.process(
+                _pose(n, ambiguity_ratio=1.1, ambiguity_separation_deg=50.0), now=0.0,
+            )
+            self.assertIsNone(out, f"n={n}")
+            self.assertEqual(lock.last_reject_reason, "ambiguous", f"n={n}")
+
+    def test_motion_gate_is_time_aware(self):
+        # 0.2 m is a jump within 33 ms but plausible after 0.25 s at 1 m/s.
+        quick = self._locked()
+        last_accept = 0.033 * 9
+        out = quick.process(_pose(3, tvec=(0.2, 0.0, 0.3)), now=last_accept + 0.036)
+        self.assertTrue(out.coasted)
+        slow = self._locked()
+        slow.config = PoseLockConfig(coast_duration_s=1.0)  # keep the filter alive
+        out = slow.process(_pose(3, tvec=(0.2, 0.0, 0.3)), now=last_accept + 0.25)
+        self.assertFalse(out.coasted)
+
+    def test_rejected_candidates_do_not_update_the_filter(self):
+        lock = self._locked()
+        before = lock.kalman.coast()[1].copy()
+        lock.process(_pose(3, tvec=(0.3, 0.0, 0.3), rms=25.0), now=0.33)
+        # coast() advances by prediction only; the 0.3 m outlier must be absent
+        self.assertLess(abs(float(lock.kalman.coast()[1][0]) - float(before[0])), 0.01)
+
+    def test_moved_specimen_is_reacquired_through_searching(self):
+        lock = self._locked()
+        moved = lambda: _pose(3, tvec=(0.4, 0.0, 0.3))
+        t = 0.33
+        states = []
+        for _ in range(20):
+            lock.process(moved(), now=t)
+            states.append(lock.state)
+            t += 0.033
+        # rejected while the gates hold the old pose, then SEARCHING -> new lock
+        self.assertIn(LOCK_COASTING, states)
+        self.assertIn(LOCK_SEARCHING, states)
+        self.assertEqual(lock.state, LOCK_LOCKED)
+        np.testing.assert_allclose(
+            lock.kalman.coast()[1].reshape(3)[0], 0.4, atol=0.05,
+        )
 
 
 class KalmanCoastTests(unittest.TestCase):

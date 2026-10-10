@@ -117,7 +117,9 @@ class UNVParser:
             if legacy_nodes_ds is not None:
                 logger.info("Found legacy nodes dataset 15 (no 2411 present)")
         lines_ds_all = self._get_all_datasets(datasets, self.DATASET_TRACE_LINES)
-        cs_ds     = self._get_dataset(datasets, self.DATASET_COORD_SYSTEMS)
+        cs_ds     = self._merge_coord_system_datasets(
+            self._get_all_datasets(datasets, self.DATASET_COORD_SYSTEMS)
+        )
         units_ds  = self._get_dataset(datasets, self.DATASET_UNITS)
 
         try:
@@ -141,7 +143,10 @@ class UNVParser:
                 trace_lines.extend(self._parse_trace_lines(lds))
             if not trace_lines and nodes:
                 trace_lines = self._infer_axis_aligned_grid_edges(nodes)
-            coord_systems = self._parse_coord_systems(cs_ds)  if cs_ds is not None     else []
+            coord_systems = (
+                self._parse_coord_systems(cs_ds, length_factor)
+                if cs_ds is not None else []
+            )
         except UNVParseError:
             raise
         except Exception as e:
@@ -150,7 +155,10 @@ class UNVParser:
         if nodes:
             self._check_coordinate_systems(nodes, coord_systems)
 
-        if self.validate_cs and len(coord_systems) > 0:
+        # Validate references even when Dataset 2420 is absent: a nonzero CS
+        # label then has no definition at all, which is exactly the case that
+        # must not pass silently.
+        if self.validate_cs and nodes:
             self._validate_cs_references(nodes, coord_systems)
 
         metadata = {
@@ -306,14 +314,29 @@ class UNVParser:
         )
         return lines
 
-    def _parse_coord_systems(self, dataset: Dict) -> List[Dict[str, Any]]:
-        """Parse Dataset 2420 (Coordinate Systems)."""
-        cs_ids   = dataset.get("cs_id",   [])
-        cs_types = dataset.get("cs_type", [])
-        origins  = dataset.get("origin",  [])
-        x_axes   = dataset.get("x_axis",  [])
-        y_axes   = dataset.get("y_axis",  [])
-        z_axes   = dataset.get("z_axis",  [])
+    def _parse_coord_systems(
+        self, dataset: Dict, length_factor: float = 1.0
+    ) -> List[Dict[str, Any]]:
+        """Parse Dataset 2420 (Coordinate Systems).
+
+        pyuff exposes this dataset as ``CS_sys_labels``, ``CS_types`` and
+        ``CS_matrices`` (one 4x3 array per system). Earlier code looked for
+        ``cs_id`` / ``cs_type`` / ``origin`` and therefore always found an empty
+        list, which disabled every coordinate-system check. The legacy spellings
+        are still accepted for hand-built dictionaries.
+
+        Matrix layout (UFF 2420, row-vector convention ``p_global = p_local @ R
+        + o``): rows 1-3 are the local x, y and z axes expressed in the global
+        frame, row 4 is the origin. The origin is a length and is converted to
+        metres with ``length_factor`` exactly like node coordinates.
+        """
+        cs_ids = self._first_present(dataset, "CS_sys_labels", "cs_id")
+        cs_types = self._first_present(dataset, "CS_types", "cs_type")
+        matrices = dataset.get("CS_matrices")
+        legacy_origins = dataset.get("origin", [])
+        legacy_x = dataset.get("x_axis", [])
+        legacy_y = dataset.get("y_axis", [])
+        legacy_z = dataset.get("z_axis", [])
 
         if not self._has_items(cs_ids):
             logger.warning("No coordinate systems found in Dataset 2420")
@@ -323,13 +346,30 @@ class UNVParser:
         coord_systems = []
         for i, cs_id in enumerate(cs_ids):
             raw_type = int(cs_types[i]) if i < len(cs_types) else 0
+            if matrices is not None and i < len(matrices) and matrices[i] is not None:
+                m = np.asarray(matrices[i], dtype=float)
+                if m.shape != (4, 3):
+                    raise UNVParseError(
+                        f"Dataset 2420 coordinate system {int(cs_id)} has a "
+                        f"{m.shape} transformation matrix; expected 4x3."
+                    )
+                x_axis, y_axis, z_axis = (m[k].tolist() for k in range(3))
+                origin = (m[3] * length_factor).tolist()
+            else:
+                origin = [
+                    v * length_factor
+                    for v in self._safe_vector(legacy_origins, i, [0.0, 0.0, 0.0])
+                ]
+                x_axis = self._safe_vector(legacy_x, i, [1.0, 0.0, 0.0])
+                y_axis = self._safe_vector(legacy_y, i, [0.0, 1.0, 0.0])
+                z_axis = self._safe_vector(legacy_z, i, [0.0, 0.0, 1.0])
             coord_systems.append({
                 "id":     int(cs_id),
                 "type":   type_map.get(raw_type, "unknown"),
-                "origin": self._safe_vector(origins, i, [0.0, 0.0, 0.0]),
-                "xAxis":  self._safe_vector(x_axes,  i, [1.0, 0.0, 0.0]),
-                "yAxis":  self._safe_vector(y_axes,  i, [0.0, 1.0, 0.0]),
-                "zAxis":  self._safe_vector(z_axes,  i, [0.0, 0.0, 1.0]),
+                "origin": origin,
+                "xAxis":  x_axis,
+                "yAxis":  y_axis,
+                "zAxis":  z_axis,
             })
 
         logger.debug(f"Parsed {len(coord_systems)} coordinate systems from Dataset 2420")
@@ -511,7 +551,8 @@ class UNVParser:
         coord_systems: List[Dict],
     ) -> None:
         """
-        Validate that every displacementCS in Dataset 2411 is defined in Dataset 2420.
+        Validate that every nonzero definition and displacement CS in Dataset 2411 is
+        defined in Dataset 2420 (also when that dataset is absent).
 
         Displacement CS 0 (global frame) is always valid and never requires an entry.
 
@@ -521,15 +562,18 @@ class UNVParser:
         defined_ids: Set[int] = {cs["id"] for cs in coord_systems}
         missing: Set[int] = set()
 
+        # Both columns carry a CS label: the definition system the coordinates
+        # are expressed in, and the displacement system. Neither may name an
+        # undefined nonzero system (0 is the global frame).
         for node in nodes:
-            d_cs = node["displacementCS"]
-            if d_cs != 0 and d_cs not in defined_ids:
-                missing.add(d_cs)
+            for label in (node.get("exportCS", 0), node["displacementCS"]):
+                if label != 0 and label not in defined_ids:
+                    missing.add(label)
 
         if missing:
             missing_str = ", ".join(str(c) for c in sorted(missing))
             raise UNVParseError(
-                f"CRITICAL: Displacement coordinate system(s) not defined in Dataset 2420: "
+                f"CRITICAL: Coordinate system(s) referenced by nodes but not defined in Dataset 2420: "
                 f"{missing_str}.  Siemens Testlab will fail silently when visualizing mode "
                 f"shapes.  Verify that Dataset 2420 contains these CS IDs, or use "
                 f"--skip-validation to bypass this check."
@@ -543,6 +587,24 @@ class UNVParser:
     def _get_dataset(datasets: List[Dict], dataset_type: int) -> Optional[Dict]:
         """Return the first dataset matching the given type number, or None."""
         return next((d for d in datasets if d.get("type") == dataset_type), None)
+
+    @staticmethod
+    def _merge_coord_system_datasets(datasets: List[Dict]) -> Optional[Dict]:
+        """Concatenate every Dataset 2420 block (one per part) into one dict.
+
+        Taking only the first block would silently drop the systems of later
+        parts and misreport their nodes as referencing undefined systems.
+        """
+        if not datasets:
+            return None
+        if len(datasets) == 1:
+            return datasets[0]
+        merged: Dict[str, Any] = {"type": datasets[0].get("type")}
+        for key in ("CS_sys_labels", "CS_types", "CS_matrices"):
+            merged[key] = []
+            for ds in datasets:
+                merged[key].extend(list(ds.get(key) or []))
+        return merged
 
     @staticmethod
     def _get_all_datasets(datasets: List[Dict], dataset_type: int) -> List[Dict]:

@@ -36,7 +36,7 @@ class CalibrationWindowFinishTests(unittest.TestCase):
 
         window.callback = callback
         window.win = _FakeWindow()
-        window.cap = Mock()
+        cap = window.cap = Mock()   # production cleanup sets window.cap to None
         window.status_var = Mock()
         window.board = object()
         window.image_size = (640, 480)
@@ -59,7 +59,8 @@ class CalibrationWindowFinishTests(unittest.TestCase):
             None,
             None,
         )
-        window.cap.release.assert_called_once_with()
+        cap.release.assert_called_once_with()
+        self.assertIsNone(window.cap)
         self.assertEqual(window.win.unbound, ["<space>", "<Escape>"])
         self.assertTrue(window.win.destroyed)
         self.assertFalse(window._running)

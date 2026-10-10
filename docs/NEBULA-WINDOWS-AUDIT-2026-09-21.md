@@ -5,6 +5,15 @@ Method: **static only**. The executable was never run. All findings come from PE
 header parsing (`pefile`), export/import tables, string extraction, and the
 IL2CPP metadata blob.
 
+> **Scope note added 2026-10-08 (project audit F14).** Read the verdicts below as
+> a *triage of a static survey*, not as certification. Static inspection of
+> exports, imports and strings cannot establish the absence of malicious
+> behaviour or zero firmware risk, and "an export exists" is not "the function
+> works on this firmware". Capability statements here are hypotheses until
+> observed; the current, dated status of each capability (observed / documented /
+> hypothesized) is `docs/CAPABILITIES.md`. The binary is unsigned and its
+> integrity rests on the distribution channel (see §1(a)).
+
 ---
 
 ## 1. Verdict on safety

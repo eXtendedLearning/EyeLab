@@ -31,6 +31,7 @@ import yaml
 
 from calibrate import describe_resolution_mismatch, read_calibration
 from camera_utils import open_camera
+from frame_packet import FramePacket, new_session_id
 from pose_lock import (
     LOCK_SEARCHING,
     MarkerCarryover,
@@ -93,6 +94,14 @@ class FrameResult:
     refine_recovered_count: int = 0
     roi_recovered_count: int = 0
     timings_ms: dict[str, float] = field(default_factory=dict)
+    # Identity of the source frame (frame_packet.FramePacket): every result is
+    # derived from exactly one packet, and ``frame`` is that packet's image.
+    # ``received_at`` is the host perf_counter value at receipt, NOT exposure.
+    sequence: int = -1
+    session_id: str = ""
+    source_id: str = ""
+    received_at: float = 0.0
+    frame_age_ms: float = 0.0
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -204,7 +213,13 @@ class ThreadedCapture:
         )
         self.error: Optional[str] = None
 
-        self._frame: Optional[np.ndarray] = None
+        # Frame identity: every successful read becomes a FramePacket with the
+        # next sequence number. The session id changes on each new capture, so
+        # a restarted device can never be confused with its predecessor.
+        self.source_id = f"camera:{camera_index}"
+        self.session_id = new_session_id()
+        self._sequence = 0
+        self._packet: Optional[FramePacket] = None
         self._lock = threading.Lock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -250,8 +265,12 @@ class ThreadedCapture:
             self._reads += 1
             self._max_read_ms = max(self._max_read_ms, (now - started) * 1000.0)
             if ok:
+                self._sequence += 1
+                packet = FramePacket(
+                    frame, self.source_id, self.session_id, self._sequence, now,
+                )
                 with self._lock:
-                    self._frame = frame
+                    self._packet = packet
                 last_ok = now
                 self._last_ok = now
                 self._fail_streak = 0
@@ -272,9 +291,17 @@ class ThreadedCapture:
                 break
             time.sleep(CAPTURE_RETRY_SLEEP_S)
 
-    def read(self) -> Optional[np.ndarray]:
+    def read_packet(self) -> Optional[FramePacket]:
+        """Newest packet, or None before the first frame. Repeated calls return
+        the SAME packet until a newer frame arrives; compare ``sequence``."""
         with self._lock:
-            return self._frame.copy() if self._frame is not None else None
+            return self._packet
+
+    def read(self) -> Optional[np.ndarray]:
+        """Writable copy of the newest image. Carries no identity; processing
+        code must use ``read_packet`` so it can tell new frames from repeats."""
+        packet = self.read_packet()
+        return packet.image.copy() if packet is not None else None
 
     def stop(self) -> None:
         self._running = False
@@ -303,6 +330,7 @@ class ThreadedCapture:
                 None if last_ok is None
                 else round((time.perf_counter() - last_ok) * 1000.0, 1)
             ),
+            "last_sequence": self._sequence,
             "thread_alive": bool(self._thread is not None and self._thread.is_alive()),
             "join_timed_out": self._join_timed_out,
             "error": self.error,
@@ -1014,8 +1042,19 @@ class ArucoPipeline:
         udp_port: int = 9000,
         lock_config: Optional[PoseLockConfig] = None,
         enable_roi_redetect: bool = True,
+        max_frame_age_s: float = 0.5,
     ):
         self.camera_index = camera_index
+        # A frame older than this (host clock, measured at the consumer, so it
+        # holds even while the reader is blocked in a native read) is dropped.
+        self.max_frame_age_s = float(max_frame_age_s)
+        self._session_id: Optional[str] = None
+        self._last_sequence = -1
+        self.frame_counts = {
+            "processed": 0, "idle_polls": 0, "stale": 0, "out_of_order": 0,
+            "missed": 0, "sessions": 0,
+        }
+        self.last_skip_reason: Optional[str] = None
         self.marker_size_m = marker_size_mm / 1000.0
         marker_size_by_id_m = {
             int(marker_id): float(size_mm) / 1000.0
@@ -1095,6 +1134,8 @@ class ArucoPipeline:
         """Start capture. ``cap`` is an already-opened device, if the caller
         opened it off its own thread (see ``camera_utils.CameraOpener``)."""
         self._capture = ThreadedCapture(self.camera_index, cap=cap)
+        self._session_id = None
+        self._last_sequence = -1
         if not self._capture.is_opened:
             raise RuntimeError(f"Cannot open camera {self.camera_index}")
 
@@ -1148,9 +1189,11 @@ class ArucoPipeline:
         if self._capture is None:
             return None
 
-        frame = self._capture.read()
-        if frame is None:
+        packet = self._next_packet()
+        if packet is None:
             return None
+        frame = packet.image  # read-only: the exact image the pose is solved on
+        frame_age_ms = packet.age_s() * 1000.0
 
         # FPS
         self._fps_count += 1
@@ -1256,7 +1299,7 @@ class ArucoPipeline:
             measured_pose = replace(measured) if measured is not None else None
             if self.uses_structure_board:
                 # Lock owns smoothing, validation gates, and coasting
-                pose = self.pose_lock.process(measured)
+                pose = self.pose_lock.process(measured, now=packet.received_at)
             elif measured is not None:
                 measured.rvec, measured.tvec = self.kalman.update(
                     measured.rvec, measured.tvec,
@@ -1297,7 +1340,67 @@ class ArucoPipeline:
             refine_recovered_count=self.l_detector.last_refine_recovered_count,
             roi_recovered_count=roi_recovered_count,
             timings_ms=timings_ms,
+            sequence=packet.sequence,
+            session_id=packet.session_id,
+            source_id=packet.source_id,
+            received_at=packet.received_at,
+            frame_age_ms=frame_age_ms,
         )
+
+    def _begin_session(self, session_id: str) -> None:
+        """A new capture session: nothing learned from the old one carries over."""
+        if self._session_id is not None:
+            self.pose_lock.reset()
+            if self.carryover is not None:
+                self.carryover.reset()
+            self.of_tracker = OpticalFlowTracker(
+                detect_interval=self.of_tracker.detect_interval,
+            )
+        self._session_id = session_id
+        self._last_sequence = -1
+        self.frame_counts["sessions"] += 1
+
+    def _expire_idle_lock(self, age_s: float) -> None:
+        """No fresh frame: let the lock coast out instead of holding its state."""
+        if age_s > self.max_frame_age_s and self.pose_lock.is_locked:
+            self.pose_lock.process(None, now=time.perf_counter())
+
+    def _next_packet(self) -> Optional[FramePacket]:
+        """The newest packet that has not been processed yet and is still fresh.
+
+        Each (session, sequence) is processed at most once, so a caller that
+        polls faster than the camera delivers cannot inflate sample counts,
+        re-confirm an acquisition from one image, or re-update the filter from
+        stale evidence. Skips are counted in ``frame_counts``.
+        """
+        if self._capture is None:
+            return None
+        packet = self._capture.read_packet()
+        if packet is None:
+            return None
+        age_s = packet.age_s()
+        if packet.session_id != self._session_id:
+            self._begin_session(packet.session_id)
+        if packet.sequence == self._last_sequence:
+            self.frame_counts["idle_polls"] += 1
+            self.last_skip_reason = "no_new_frame"
+            self._expire_idle_lock(age_s)
+            return None
+        if packet.sequence < self._last_sequence:
+            self.frame_counts["out_of_order"] += 1
+            self.last_skip_reason = "out_of_order"
+            return None
+        if self._last_sequence >= 0:
+            self.frame_counts["missed"] += packet.sequence - self._last_sequence - 1
+        self._last_sequence = packet.sequence
+        if age_s > self.max_frame_age_s:
+            self.frame_counts["stale"] += 1
+            self.last_skip_reason = "stale"
+            self._expire_idle_lock(age_s)
+            return None
+        self.frame_counts["processed"] += 1
+        self.last_skip_reason = None
+        return packet
 
     def _recover_missing_markers(
         self,

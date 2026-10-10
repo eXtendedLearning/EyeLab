@@ -8,7 +8,13 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Windows is the real development host (file handles, temp-dir cleanup and
+    # native-driver behaviour differ from Linux), so it is tested as well.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: python
@@ -24,6 +30,7 @@ jobs:
       # OpenCV's non-headless wheel needs these system libs to import on the
       # headless CI runner.
       - name: Install system libraries for OpenCV
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
 
       - name: Install Python dependencies

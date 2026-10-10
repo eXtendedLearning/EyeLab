@@ -45,10 +45,11 @@ class PoseLockConfig:
 
     Three marker-count thresholds, ordered sustain <= acquire <= trusted:
 
-    - ``trusted_min_markers``: a pose from at least this many markers is taken
-      as is - it locks at once from SEARCHING and skips the RMS/jump gates
-      while LOCKED. It is also the count below which ROI re-detection looks
-      for the missing markers.
+    - ``trusted_min_markers``: a pose from at least this many markers locks at
+      once from SEARCHING (no multi-frame confirmation). It is also the count
+      below which ROI re-detection looks for the missing markers. The count is
+      supporting evidence only: it never exempts a pose from the validity,
+      reprojection, ambiguity and motion gates below (audit F02).
     - ``acquire_min_markers``: the fewest markers that can start a lock. Below
       the trusted count, acquisition is *confirmed*: the planar ambiguity must
       be resolvable (``min_ambiguity_ratio``, ``ambiguity_min_separation_deg``)
@@ -60,6 +61,18 @@ class PoseLockConfig:
     The marker poses on the structure come from the geometry file, so a single
     marker does define the whole structure pose; the thresholds bound how much
     the lever arm and the planar ambiguity are allowed to cost.
+
+    Phases (every candidate pose, at any marker count, first has to be finite
+    with positive depth):
+
+    - acquisition (SEARCHING): absolute reprojection-RMS ceiling, planar
+      ambiguity check, then immediate lock (trusted count) or confirmation.
+    - sustained tracking (LOCKED): adaptive RMS gate under the same ceiling and
+      time-aware motion gates against the Kalman prediction.
+    - reacquisition: a candidate that keeps failing the sustain gates (a
+      specimen that was really moved, or a lost track) exhausts the coasting
+      window; the lock then falls back to SEARCHING, the filter is reset and
+      the new pose goes through acquisition again.
     """
     acquire_min_markers: int = 2      # fewest markers that can start a lock
     sustain_min_markers: int = 1      # fewest markers that keep a lock alive
@@ -83,8 +96,19 @@ class PoseLockConfig:
     # acquisition on it would prevent the lock from ever engaging.
     max_reproj_rms_px: float = 3.0        # floor of the sustain RMS gate
     rms_baseline_factor: float = 2.5      # gate = max(floor, factor * baseline)
-    max_translation_jump_m: float = 0.05  # gate for low-marker-count poses
-    max_rotation_jump_deg: float = 15.0   # gate for low-marker-count poses
+    # Hard ceiling on reprojection RMS for ANY candidate at ANY marker count,
+    # acquisition included. Deliberately generous (hand-measured geometry can
+    # have a large but stable baseline, see above); it only has to stop gross
+    # solves. Engineering default, to be set from validation data.
+    max_acquire_reproj_rms_px: float = 15.0
+    # Motion gates against the Kalman prediction, for every marker count while
+    # locked. The allowed jump is max(per-frame floor, speed * dt) where dt is
+    # the time since the last accepted measurement, so a slow frame is not
+    # penalised and a fast one is not waved through.
+    max_translation_jump_m: float = 0.05  # per-frame floor
+    max_rotation_jump_deg: float = 15.0   # per-frame floor
+    max_translation_speed_m_s: float = 1.0
+    max_rotation_speed_deg_s: float = 360.0
 
     def __post_init__(self) -> None:
         if not (
@@ -100,6 +124,12 @@ class PoseLockConfig:
             )
         if self.acquire_confirm_frames < 1:
             raise ValueError("acquire_confirm_frames must be >= 1")
+        if self.max_acquire_reproj_rms_px < self.max_reproj_rms_px:
+            raise ValueError(
+                "max_acquire_reproj_rms_px must be >= max_reproj_rms_px"
+            )
+        if self.max_translation_speed_m_s < 0 or self.max_rotation_speed_deg_s < 0:
+            raise ValueError("motion speed limits must be >= 0")
 
 
 # Named configurations. "standard" is the default; "single" allows a lock to
@@ -146,14 +176,14 @@ class PoseLock:
     """
     Keeps the board pose alive through partial and brief total detection loss.
 
-    - SEARCHING: a pose with `trusted_min_markers` locks at once; one with at
-      least `acquire_min_markers` locks after the confirmation described in
-      PoseLockConfig (unambiguous planar solve, repeated over
+    - SEARCHING: a valid, unambiguous pose with `trusted_min_markers` locks at
+      once; one with at least `acquire_min_markers` locks after the
+      confirmation described in PoseLockConfig (repeated over
       `acquire_confirm_frames` frames).
-    - LOCKED: accepts poses down to `sustain_min_markers`; below the trusted
-      count they are gated against the Kalman prediction (RMS and
-      translation/rotation jump limits) so a bad low-count solve cannot
-      teleport the overlay.
+    - LOCKED: accepts poses down to `sustain_min_markers`; every accepted pose,
+      whatever its marker count, passes the RMS gate and the time-aware
+      translation/rotation jump limits against the Kalman prediction, so a bad
+      solve cannot teleport the overlay.
     - COASTING: on dropout, outputs the Kalman prediction for up to
       `coast_duration_s`, then falls back to SEARCHING (full reacquisition).
     """
@@ -168,7 +198,7 @@ class PoseLock:
         self.state = LOCK_SEARCHING
         self._last_accept_time = 0.0
         self._rms_baseline: Optional[float] = None  # EWMA of accepted pose RMS
-        # "count" | "rms" | "jump" | "ambiguous" | "confirming"
+        # "invalid" | "count" | "rms" | "jump" | "ambiguous" | "confirming"
         self.last_reject_reason: Optional[str] = None
         self._candidate: Optional["PoseResult"] = None  # acquisition candidate
         self._candidate_streak = 0
@@ -205,7 +235,7 @@ class PoseLock:
         if pose is None:
             self._clear_candidate()  # confirmation needs consecutive frames
 
-        if pose is not None and self._accept(pose):
+        if pose is not None and self._accept(pose, now):
             self.last_reject_reason = None
             if pose.rms_reproj_px is not None:
                 self._rms_baseline = (
@@ -257,23 +287,60 @@ class PoseLock:
         self._candidate = None
         self._candidate_streak = 0
 
-    def _confirm_acquisition(self, pose: "PoseResult") -> bool:
-        """Acquisition from fewer than the trusted marker count."""
-        cfg = self.config
-        if pose.marker_count < cfg.acquire_min_markers:
-            self._clear_candidate()
-            self.last_reject_reason = "count"
+    @staticmethod
+    def _is_valid(pose: "PoseResult") -> bool:
+        """Finite pose with the structure in front of the camera (z > 0)."""
+        try:
+            rvec = np.asarray(pose.rvec, dtype=np.float64).reshape(3)
+            tvec = np.asarray(pose.tvec, dtype=np.float64).reshape(3)
+        except (TypeError, ValueError):
             return False
+        if not (np.all(np.isfinite(rvec)) and np.all(np.isfinite(tvec))):
+            return False
+        if tvec[2] <= 0.0:
+            return False
+        rms = pose.rms_reproj_px
+        return rms is None or bool(np.isfinite(rms))
+
+    def _ambiguous(self, pose: "PoseResult") -> bool:
+        """Planar two-fold ambiguity, judged from the solve's geometry."""
+        cfg = self.config
         ratio = getattr(pose, "ambiguity_ratio", None)
         separation = getattr(pose, "ambiguity_separation_deg", None)
-        if (
+        return (
             ratio is not None
             and ratio < cfg.min_ambiguity_ratio
             and (separation is None or separation > cfg.ambiguity_min_separation_deg)
-        ):
+        )
+
+    def _reject(self, reason: str, clear_candidate: bool = True) -> bool:
+        if clear_candidate:
             self._clear_candidate()
-            self.last_reject_reason = "ambiguous"
-            return False
+        self.last_reject_reason = reason
+        return False
+
+    def _acquire(self, pose: "PoseResult") -> bool:
+        """Acquisition: SEARCHING, or LOCKED with a cold filter."""
+        cfg = self.config
+        if pose.marker_count < cfg.acquire_min_markers:
+            return self._reject("count")
+        if (
+            pose.rms_reproj_px is not None
+            and pose.rms_reproj_px > cfg.max_acquire_reproj_rms_px
+        ):
+            return self._reject("rms")
+        # No Kalman prediction exists yet to pick between the two planar
+        # solutions, so an ambiguous solve cannot start a lock at any count.
+        if self._ambiguous(pose):
+            return self._reject("ambiguous")
+        if pose.marker_count >= cfg.trusted_min_markers:
+            self._clear_candidate()
+            return True
+        return self._confirm_acquisition(pose)
+
+    def _confirm_acquisition(self, pose: "PoseResult") -> bool:
+        """Confirmation for acquisition from fewer than the trusted count."""
+        cfg = self.config
         if self._candidate is not None and self._consistent(self._candidate, pose):
             self._candidate_streak += 1
         else:
@@ -298,52 +365,51 @@ class PoseLock:
     def _sustain_rms_gate_px(self) -> float:
         cfg = self.config
         if self._rms_baseline is None:
-            return cfg.max_reproj_rms_px
-        return max(cfg.max_reproj_rms_px, cfg.rms_baseline_factor * self._rms_baseline)
+            gate = cfg.max_reproj_rms_px
+        else:
+            gate = max(cfg.max_reproj_rms_px, cfg.rms_baseline_factor * self._rms_baseline)
+        return min(gate, cfg.max_acquire_reproj_rms_px)
 
-    def _accept(self, pose: "PoseResult") -> bool:
+    def _sustain(self, pose: "PoseResult", now: float) -> bool:
+        """Sustained tracking: gates apply at every marker count."""
         cfg = self.config
-        n = pose.marker_count
+        if pose.marker_count < cfg.sustain_min_markers:
+            return self._reject("count", clear_candidate=False)
 
-        # Trusted-count poses: accept unconditionally (pre-lock behaviour).
-        if n >= cfg.trusted_min_markers:
-            self._clear_candidate()
-            return True
-
-        if not self.is_locked or not self.kalman.initialized:
-            return self._confirm_acquisition(pose)
-
-        if n < cfg.sustain_min_markers:
-            self.last_reject_reason = "count"
-            return False
-
-        # Low-marker-count pose: RMS gate (adaptive) + jump gates vs prediction
         if (
             pose.rms_reproj_px is not None
             and pose.rms_reproj_px > self._sustain_rms_gate_px()
         ):
-            self.last_reject_reason = "rms"
-            return False
+            return self._reject("rms", clear_candidate=False)
 
         prediction = self.predicted_pose()
         if prediction is None:
-            self.last_reject_reason = "jump"
-            return False
+            return self._reject("jump", clear_candidate=False)
         pred_rvec, pred_tvec = prediction
+        dt = max(0.0, now - self._last_accept_time)
+        max_t = max(cfg.max_translation_jump_m, cfg.max_translation_speed_m_s * dt)
+        max_r = max(cfg.max_rotation_jump_deg, cfg.max_rotation_speed_deg_s * dt)
         t_jump = float(
             np.linalg.norm(
                 np.asarray(pose.tvec, dtype=np.float64).reshape(3)
                 - np.asarray(pred_tvec, dtype=np.float64).reshape(3)
             )
         )
-        if t_jump > cfg.max_translation_jump_m:
-            self.last_reject_reason = "jump"
-            return False
-        r_jump = rotation_angle_between(pose.rvec, pred_rvec)
-        if r_jump > cfg.max_rotation_jump_deg:
-            self.last_reject_reason = "jump"
-            return False
+        if t_jump > max_t:
+            return self._reject("jump", clear_candidate=False)
+        if rotation_angle_between(pose.rvec, pred_rvec) > max_r:
+            return self._reject("jump", clear_candidate=False)
         return True
+
+    def _accept(self, pose: "PoseResult", now: float) -> bool:
+        # Validity first, at every marker count and in every state: a NaN or
+        # behind-the-camera pose must never reach the Kalman filter.
+        if not self._is_valid(pose):
+            return self._reject("invalid")
+        if not self.is_locked or not self.kalman.initialized:
+            return self._acquire(pose)
+        self._clear_candidate()
+        return self._sustain(pose, now)
 
 
 # ── Optical-flow marker carryover ─────────────────────────────────────────────

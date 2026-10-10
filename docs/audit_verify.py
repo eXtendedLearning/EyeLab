@@ -1,9 +1,22 @@
-"""Re-run every load-bearing claim in the audit, independently, from a clean import."""
+"""Re-run the load-bearing claims of the 2026-09-18 audit, by behaviour, from a clean import.
+
+Run from ``python/``:  ``python ../docs/audit_verify.py``
+
+Each line reports whether the DEFECT is still reproduced by running the code
+(``REPRODUCED``) or no longer is (``fixed``). Revised 2026-10-08 (audit F14): the
+earlier version also grepped source text for compatibility key names such as
+``'unit_code'`` and counted a hit as an unfixed bug; that is not evidence of
+behaviour (the parser deliberately still accepts the old spelling) and has been
+replaced by behavioural checks. The permanent regression guards are the unit
+tests (``test_scale_contracts``, ``test_unv_coordinate_systems``,
+``test_registration_kabsch``, ``test_pose_lock``); this script is a historical
+cross-check, not a test suite.
+"""
 import numpy as np, cv2, sys, tempfile
 from pathlib import Path
 sys.path.insert(0,'.')
-ok=lambda b: "PASS" if b else "*** FAIL ***"
-R=[]
+ok=lambda b: "REPRODUCED" if b else "fixed"
+R=[]   # (description, defect_reproduced)
 
 # S1a marker size
 K=np.array([[900.,0,640],[0,900,360],[0,0,1]]); d5=np.zeros(5)
@@ -21,13 +34,12 @@ O=np.vstack([marker_object_corners(c,[0,0,1],0.,0.012) for c in
 i2,_=cv2.projectPoints(O,rv,np.array([[-.04],[-.04],[0.5]]),Kt,d5)
 _,r2,t2=cv2.solvePnP(O,i2.reshape(-1,2),Kc,d5,flags=cv2.SOLVEPNP_ITERATIVE)
 R.append(("S1b resolution mismatch -> >40% depth error", (t2[2,0]/0.5-1)>0.4))
-import calibrate, inspect
-R.append(("S1b load_calibration ignores image_width", "image_width" not in inspect.getsource(calibrate.load_calibration)))
+import calibrate
+R.append(("S1b a 1920x1080 calibration used at 1280x720 is NOT detected",
+          calibrate.describe_resolution_mismatch((1920,1080),(1280,720)) is None))
 
 # S1c units
 import unv_to_json as U
-src=inspect.getsource(U)
-R.append(("S1c parser reads 'unit_code' (pyuff emits 'units_code')", "'unit_code'" in src or '"unit_code"' in src))
 p=Path(tempfile.mkdtemp())/"mm.unv"; import pyuff
 u=pyuff.UFF(str(p)); u.write_sets([pyuff.prepare_164(units_code=2,units_description="MM_N_S",temp_mode=1,length=0.001,force=1.0,temp=1.0,temp_offset=273.15),
  pyuff.prepare_2411(node_nums=np.array([1,2,3,4]),def_cs=np.zeros(4,int),disp_cs=np.zeros(4,int),color=np.zeros(4,int),
@@ -86,6 +98,8 @@ for _ in range(200):
 ratio=np.mean(pm)/np.mean(jn)
 R.append((f"S5 per-marker Kabsch >5x worse than joint solve (measured {ratio:.1f}x)", ratio>5))
 
-print("="*78); print("INDEPENDENT RE-VERIFICATION OF AUDIT CLAIMS"); print("="*78)
-for n,v in R: print(f"  [{ok(v)}] {n}")
-print("="*78); print(f"  {sum(1 for _,v in R if v)}/{len(R)} claims reproduced")
+print("="*78); print("RE-VERIFICATION OF THE 2026-09-18 AUDIT CLAIMS (by behaviour)"); print("="*78)
+for n,v in R: print(f"  [{ok(v):>10}] {n}")
+print("="*78); print(f"  {sum(1 for _,v in R if v)}/{len(R)} defects still reproduced")
+print("  S1a, S1b (geometry) and S5 are properties of the mathematics and stay 'REPRODUCED' by design;")
+print("  S4 concerns the wording of the private THEORY.md section 6.3, which this script does not read.")

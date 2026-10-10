@@ -5,7 +5,7 @@
 > each machine can and cannot do with the glasses. Update it whenever hardware is
 > bought, lent, or a capability is verified or refuted.
 >
-> Last updated: 2026-10-06 (Beam Pro / Android status, emulator verdict).
+> Last updated: 2026-10-09 (desktop USB/NCM and TCP preflight observed; PC beta camera sample inspected; emulator assessment corrected in `XREAL-PC-BETA-2026-10-09.md`).
 
 ## Glasses
 
@@ -13,19 +13,30 @@
   Eye's camera feed is the project's critical dependency — see ADR-003 and
   `docs/S3-HANDOVER-2026-09-25.md`.
 - **Firmware:** Nebula updated it after the 2026-09-25 runs; the new version is
-  not recorded yet (re-run S0: `python/xreal_probe.py`). Do not let Nebula
+  not recorded yet. **`python/xreal_probe.py` (S0) cannot record it**: it
+  resolves `Get_Glasses_FW_Version` but deliberately never calls it (signature
+  not recovered, `python/xreal_glasses.py`). Read the version from Nebula's UI
+  for now; a read-only call is possible only after its signature is recovered.
+  Do not let Nebula
   update the firmware again until the camera/IMU access routes are confirmed —
   the unofficial routes depend on firmware behaviour.
 - **XREAL Beam Pro:** ordered 2026-05-14, **not arrived** (confirmed
   2026-10-06). **No Android phone with USB-C video output** is available
-  either. So the only *official* Eye camera API (XREAL SDK 3.1.0, Unity,
-  Android-only) has no host today.
-- **Android emulator on Windows: ruled out (2026-10-06).** The XREAL Android
-  libraries are arm64-v8a only (checked in the local SDK copy); Android
-  Emulator USB passthrough is documented for Linux hosts only; and inside an
-  emulator the glasses would be a Windows monitor, not an Android display,
-  so the Surface's DP port does not help. Details:
-  Project doc `claude/xreal-access-routes-2026-10-06.md`.
+  either. The established Android SDK 3.1.0 camera route has no host today.
+  **PC beta update (2026-10-09):** XREAL-hosted 3.1.2 packages are downloadable
+  and contain a Standalone RGB camera sample and Windows camera bindings.
+  They are staged locally, not installed in the main project. Runtime camera
+  and tracking success remain unverified; see `XREAL-PC-BETA-2026-10-09.md`.
+  Four core native DLLs match those already probed in September; the Unity
+  wrapper differs. The vendor scene/session lifecycle supplies a new experiment,
+  not evidence that the earlier initialization/license blockers are solved.
+- **Android emulator / WSL: lower-priority, unverified (revised 2026-10-09).**
+  Google documents Windows USB passthrough and ARM translation in selected
+  emulator images, so the previous Linux-only/ARM64 categorical exclusion was
+  incorrect. USB forwarding does not give Android the Surface's physical DP
+  display path or XREAL runtime integration. A camera-only experiment is not
+  ruled out; full optical XR is not a demonstrated emulator capability.
+  Sources and distinctions: `XREAL-PC-BETA-2026-10-09.md`.
 
 ## Host machines
 
@@ -73,4 +84,13 @@ measurement is combined.
 
 - Surface Pro 7 CPU/RAM variant (sets the S6 compute budget).
 - Desktop webcam model and resolution.
-- Post-update glasses firmware version (S0).
+- Post-update glasses firmware version (from Nebula's UI; S0 does not read it).
+
+## Desktop connection observation (2026-10-09)
+
+Glasses connected to LAGANN_0526 enumerate as `3318:0436` with HID/audio and an
+active `UsbNcm Host Device`, address `169.254.2.10/24`. TCP connection to the
+beta's control preflight endpoint `169.254.2.1:52999` succeeds without sending
+application bytes. The separate CDC ECM interface reports Error. No XREAL
+monitor or standard Windows Eye camera is enumerated. These observations
+establish connectivity, not delivered camera frames or head poses.

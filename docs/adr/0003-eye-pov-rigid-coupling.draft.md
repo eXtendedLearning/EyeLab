@@ -1,6 +1,6 @@
 # ADR-003 — The pose camera must be rigidly coupled to the display; eye-POV only for now
 
-- **Status:** Proposed — awaiting decision
+- **Status:** Proposed — awaiting decision. Amended 2026-10-08 after the project audit (finding F13, see "Amendments" below); the amendments narrow claims that this draft made without evidence and do not change the core decision that the pose camera must be the glasses' camera.
 - **Date:** 2026-09-22
 - **Deciders:** Giacomo (Jack)
 - **Relates to:** `docs/NEBULA-WINDOWS-AUDIT-2026-09-21.md`; the "XREAL Eye access routes" section of `CONTEXT.md`
@@ -24,12 +24,21 @@ of comparable difficulty.
 
 **If the camera is rigidly mounted on the glasses** — the XREAL Eye, or the
 on-board grayscale SLAM pair — then `T_eye←cam` is a *hardware constant*. It is
-fixed at manufacture, identical every frame, and already measured: the XREAL
-native API exposes it as `NRHMDGetComponentExtrinsic` and
-`NRHMDGetComponentPoseFromHead`, alongside per-component intrinsics, FOV,
-projection matrix and distortion data (see §3 of the Nebula audit). Interocular
-separation is handled separately by `NRHMDUpdateIPD` and does not disturb the
-camera-to-head extrinsic.
+fixed at manufacture and identical every frame. The XREAL native API *exports*
+`NRHMDGetComponentExtrinsic` and `NRHMDGetComponentPoseFromHead`, alongside
+per-component intrinsics, FOV, projection matrix and distortion data (see §3 of
+the Nebula audit). That an export exists is not evidence that it returns usable
+values for this firmware and camera mode: stage S4 has not run, so the
+extrinsic is **documented but unverified**. Interocular separation is handled
+separately by `NRHMDUpdateIPD`.
+
+Note what this factor is and is not. A camera-to-head extrinsic locates the
+*camera* on the glasses. The matrix that decides whether an optical overlay lands
+on the specimen additionally contains the wearer's eye position relative to the
+display (per user, per eye, changes whenever the glasses are re-seated) and the
+display projection. The equation above is written with `T_eye←cam` for brevity;
+in an optical see-through system it is `T_display←head · T_head←cam` with the
+first factor *not* supplied by the factory extrinsic (see Amendments).
 
 **If the camera is external** — a webcam on a tripod, the current Phase-1 setup —
 then `T_eye←cam` is time-varying and unobserved. Recovering it means tracking the
@@ -83,13 +92,24 @@ The XREAL native API exposes the whole mechanism: `NRImuSetCaptureCallback` with
    viewpoint is a requirement of the application, not a refinement of it.
 2. **Single POV — the wearer's — for the foreseeable stages.** Multiple
    viewpoints are deferred (see below).
-3. **The IMU is on the critical path, not an optimisation.** It is required
-   before the overlay can be judged, because without it the registration error
-   is dominated by latency rather than by anything the vision pipeline does.
-   This reorders the plan: IMU before camera quality.
-4. **Consequently `libnr_api.dll` (Tier B of the audit) is required**, not
-   optional. Both the factory extrinsics and the IMU live there;
-   `libnr_glasses_api.dll` alone cannot supply either.
+3. **Compensation of pose age is on the critical path for optical
+   see-through, not an optimisation.** Without it the registration error is
+   dominated by latency rather than by anything the vision pipeline does.
+   *(Amended 2026-10-08.)* The draft said this makes the **raw IMU** a
+   prerequisite and "reorders the plan: IMU before camera". That went further
+   than the argument: what is required is a valid pose stream with a known clock
+   and a presentation-time rendering path. A raw IMU is one way to get it; a
+   fused head pose, or the SDK's rendering-pose path, may supply the same
+   information without raw IMU access, and S3/S3b have not yet shown either
+   working. The order of work is therefore: first prove a usable Eye camera
+   source (S5), then establish tracking and its clock (S3b/S3), the camera-head
+   extrinsic (S4) and the per-eye projection, then validate static and dynamic
+   error. See "XREAL development sequence" in `docs/AUDIT-2026-10-08.md`.
+4. **`libnr_api.dll` (Tier B of the audit) is required if the native route is
+   used**, because the extrinsics and head-tracking calls live there;
+   `libnr_glasses_api.dll` alone cannot supply them. *(Amended 2026-10-08.)* If
+   the camera arrives over the NCM route, the Python pipeline needs neither
+   library for detection; Tier B then matters only for tracking/extrinsics.
 
 ### Deferred, not rejected: multiple POV
 
@@ -147,24 +167,68 @@ this ADR does not dress it up as one.
   grayscale, and the marker-size and working-distance consequences recorded in
   `CONTEXT.md` apply in full. Grid-only rendering does not relieve this: it is a
   decoding constraint, not a display one.
-- The Surface Pro 7 cannot exercise any of this. Pre-Beam development is limited
-  to the webcam path for detection work, plus Editor/mock modes.
+- *(Corrected 2026-10-08.)* The earlier text said the Surface Pro 7 cannot
+  exercise any of this. The Surface is the one host that drives the glasses as a
+  display (S1 passed there) and has a built-in webcam, so it is the initial
+  integration host for the camera/pose diagnostic prototype. What no host has
+  today is the Android path (no Beam Pro, no compatible phone).
 
 ## Revised stage ladder
 
 | Stage | Goal | Needs | Status |
 |---|---|---|---|
-| **S0** | Identity, firmware version, HID topology | Tier A, read-only | **done 2026-09-22** — DLL loads standalone, 25/25 exports, `3318:0436`, 2 HID interfaces (`MI_00` vendor, `MI_08` keys). See audit §7a |
+| **S0** | Identity, HID topology (firmware version resolved but **never read** — signature unrecovered) | Tier A, read-only | **done 2026-09-22** — DLL loads standalone, 25/25 exports, `3318:0436`, 2 HID interfaces (`MI_00` vendor, `MI_08` keys). See audit §7a |
 | **S1** | Display smoke test — black transmissivity, wireframe legibility, stereo comfort | glasses as DP monitor, static pattern | **passed 2026-09-22** on the Surface — all pages, lines and colours legible. One finding: see "Electrochromic floor" below |
 | **S2** | Tier B "hello world": initialise the C API standalone, read `NRGetVersion` | Tier B staged, signatures recovered | **passed 2026-09-23** on the desktop — all three levels of `python/xreal_native_probe.py`, NR **3.1.1**, standalone, no graphics context. See "S2 result" |
 | **S3** | Head pose at high rate from the **raw IMU** | S2 + an NRSDK licence | **blocked 2026-09-23** — `NRImuCreate` returns 22 `LicenseFeatureUnsupported`. Every `NRImu*` export is behind a licensed-feature gate and `"imu"` is not in the list (audit §11). The code is written and correct; it stays until a licence exists. **Confirmed 2026-09-24**: the licensed-feature list is *empty*, not merely missing `imu` (audit §12) |
 | **S3b** | Head pose at high rate from the **fused pose** — `NRHeadTracking` / `NRHeadPose` | S2 | **built 2026-09-23, awaiting a run** — this family is *not* gated. **runs 2–3 on 2026-09-25**: the chain returns 0 end to end (1930 poses, no failures) but every pose is the 4x4 identity with tracking reason 1 `Initializing`. Passing the real device clock changed nothing, so the timestamp candidate is **refuted**. Only perception id 1 is creatable and the SDK names it `nr_perception_id_remote`. Open: the perception id/name map, the 6DoF plugin, the licence. Handover: `docs/S3-HANDOVER-2026-09-25.md`, audit §§11–14 |
 | **S4** | Factory calibration — per-component intrinsics, extrinsics, distortion | S2 | not started |
 | **S5** | Eye/SLAM camera as a frame source (`read()` / `stats()` / `stop()` / `source_id`) | UVC or NCM route from the audit | not started. **2026-09-24**: the NRSDK route is closed for now — `NRGrayscaleCameraCreate` is licence-gated and returned 22 in the same run as `NRImuCreate`, so UVC/NCM is the only open route |
-| **S6** | Wireframe rendered from the eye's viewpoint, pose-stabilised | S3b (or S3) + S4 + S5 | the first full test |
+| **S6** | Wireframe rendered from the eye's viewpoint, pose-stabilised | S3b (or S3) + S4 + S5 + a per-eye display projection (see Amendments) | the first full test. A video composite shown in the glasses is **not** S6 |
 
-S3 and S4 both precede S5 under this ADR, which is the reordering point: the
-previous plan in `CONTEXT.md` treated the camera feed as the gate.
+*(Superseded 2026-10-08.)* The draft stated that S3 and S4 both precede S5 and
+that the previous plan wrongly treated the camera feed as the gate. The audit's
+sequence reverses this for the bring-up: a usable Eye camera source is the first
+gate for every camera-based claim, because without it S3/S4 results cannot be
+connected to a measurement. S3b/S4 remain prerequisites for S6.
+
+## Amendments (2026-10-08, audit finding F13)
+
+**Video and optical see-through are separate products with separate gates.**
+This draft's S-ladder and `docs/tasks/T2.6-implementation-checklist.md` Phase 8
+treated them as one path. They are not:
+
+| | Video overlay (diagnostic) | Optical see-through (the requirement) |
+|---|---|---|
+| What is shown | the captured image with a drawn wireframe | only the wireframe, labels and points; the specimen is seen directly |
+| Needs world tracking | no — image registration is within one image | yes |
+| Needs camera→head extrinsic | no | yes |
+| Needs eye position and display projection | no | yes — per user, per eye |
+| Needs presentation-time compensation | no (the image and overlay share a timestamp) | yes — the world has zero latency, the overlay does not |
+| Gate | reprojection of known points into the displayed image | error at held-out positions and depths, each eye, under motion, after repeated fitting |
+
+Consequences:
+
+1. A fullscreen video panel in the glasses is a diagnostic at best and must never
+   be described as a world-registered optical overlay.
+2. The earlier belief that "a factory extrinsic supplies the eye-camera relation"
+   is withdrawn. It could supply camera-to-head, once verified; it cannot supply
+   the wearer's eye position.
+3. A rigid head-camera offset fitted from four visual alignments at one distance
+   is not SPAAM and is not a validated display calibration. A SPAAM-type
+   procedure needs a specified number of correspondences over depth, per eye, a
+   repeatability check and held-out validation.
+4. The final application shows only the wireframe and measurement points over the
+   directly visible specimen; the camera image is tracking input, not the
+   displayed background. Grayscale is acceptable.
+
+Scientific basis: Gilson, Fitzgibbon & Glennerster (2011), "An automated
+calibration method for non-see-through head mounted displays", J. Neurosci.
+Methods 199(2):328-335 (PMC3142613). It describes video displays as comparatively
+straightforward to calibrate with standard camera methods, whereas optical
+see-through displays provide no digital record of the incoming light, so those
+methods cannot be applied directly. The table above is this project's reading of
+that distinction, not a claim made by the paper.
 
 ## S1 result (2026-09-22)
 

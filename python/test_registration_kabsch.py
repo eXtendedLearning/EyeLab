@@ -62,6 +62,68 @@ class KabschRegistrationTests(unittest.TestCase):
             reg.update_detected_position(i, p + np.array([1.0, 1.0, 1.0]))
         self.assertIsNone(reg.compute())
 
+    def _planar(self, pts, R, t):
+        corrs = [MarkerCorrespondence(marker_id=i, unv_position=p) for i, p in enumerate(pts)]
+        reg = SpatialRegistration(corrs)
+        for i, p in enumerate(pts):
+            reg.update_detected_position(i, R @ p + t)
+        return reg.compute()
+
+    @staticmethod
+    def _rot(axis, deg):
+        axis = np.asarray(axis, float)
+        axis = axis / np.linalg.norm(axis)
+        a = np.deg2rad(deg)
+        K = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
+        return np.eye(3) + np.sin(a) * K + (1 - np.cos(a)) * (K @ K)
+
+    def test_exact_planar_triangle_is_registered(self):
+        # Audit F06: an exact 100 mm triangle, rigidly moved without noise.
+        tri = [np.array([0.0, 0.0, 0.0]), np.array([0.1, 0.0, 0.0]), np.array([0.0, 0.1, 0.0])]
+        R = self._rot([1, 2, 3], 37.0)
+        t = np.array([0.3, -0.1, 0.8])
+        result = self._planar(tri, R, t)
+        self.assertIsNotNone(result)
+        self.assertTrue(np.allclose(result.R, R, atol=1e-9))
+        self.assertTrue(np.allclose(result.t.flatten(), t, atol=1e-9))
+        self.assertAlmostEqual(float(np.linalg.det(result.R)), 1.0, places=9)
+        self.assertLess(result.rms_error_mm, 1e-6)
+
+    def test_larger_planar_set_is_registered(self):
+        grid = [np.array([x, y, 0.0]) for x in (0.0, 0.05, 0.1, 0.15) for y in (0.0, 0.08, 0.16)]
+        R = self._rot([0, 1, 0], 170.0)
+        t = np.array([1.0, 2.0, 3.0])
+        result = self._planar(grid, R, t)
+        self.assertIsNotNone(result)
+        self.assertTrue(np.allclose(result.R, R, atol=1e-9))
+
+    def test_planar_registration_is_scale_independent(self):
+        for scale in (1e-3, 1.0, 1e3):
+            tri = [np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]), np.array([0.2, 0.9, 0.0])]
+            tri = [p * scale for p in tri]
+            R = self._rot([1, 1, 0], 25.0)
+            result = self._planar(tri, R, np.array([0.1, 0.2, 0.3]) * scale)
+            self.assertIsNotNone(result, f"scale={scale}")
+            self.assertTrue(np.allclose(result.R, R, atol=1e-8), f"scale={scale}")
+
+    def test_coincident_points_rejected(self):
+        pts = [np.array([0.2, 0.2, 0.2])] * 4
+        self.assertIsNone(self._planar(pts, np.eye(3), np.zeros(3)))
+
+    def test_nearly_collinear_points_rejected_at_any_scale(self):
+        for scale in (0.01, 1.0, 100.0):
+            pts = [np.array([float(i), 1e-5 * (i % 2), 0.0]) * scale for i in range(5)]
+            self.assertIsNone(self._planar(pts, np.eye(3), np.zeros(3)), f"scale={scale}")
+
+    def test_collinear_detections_rejected_even_if_model_is_planar(self):
+        # Model spans a plane but the detected positions are collinear.
+        tri = [np.array([0.0, 0.0, 0.0]), np.array([0.1, 0.0, 0.0]), np.array([0.0, 0.1, 0.0])]
+        corrs = [MarkerCorrespondence(marker_id=i, unv_position=p) for i, p in enumerate(tri)]
+        reg = SpatialRegistration(corrs)
+        for i in range(3):
+            reg.update_detected_position(i, np.array([0.1 * i, 0.0, 0.0]))
+        self.assertIsNone(reg.compute())
+
     def test_too_few_correspondences_returns_none(self):
         corrs = [MarkerCorrespondence(marker_id=i, unv_position=_UNV_PTS[10 + i])
                  for i in range(2)]

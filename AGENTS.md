@@ -32,7 +32,9 @@ When two documents disagree, the one higher in this list wins. When a document d
 - **A pure scale error reprojects perfectly.** Reprojection RMS cannot detect a wrong marker size, a wrong calibration resolution, or a wrong unit factor. Never use a reprojection residual as evidence that a scale is right; check an absolute distance instead.
 - **`IArucoPoseBridge` (Unity, ADR-001 Phase 2) is load-bearing.** No non-bridge code may depend on the WebSocket implementation directly.
 - **Class names in `docs/tasks/` are contracts.** `EwmaStructureAnchor`, `CoordinateConverter`, `IStructureAnchor` and friends are cross-referenced from CONTEXT.md; renaming silently breaks those references.
-- **Known doc defect:** `.docs/THEORY.md` §6.3 states the OpenCV→Unity quaternion rule as "flip the signs of y and z". That is wrong and inconsistent with the matrix rule given in the same section. The correct map for `R → F R F⁻¹`, `F = diag(1,−1,1)` is `(w, x, y, z) → (w, −x, y, −z)`. Fix the doc when you first touch this.
+- **Process each camera frame once.** Frames are `python/frame_packet.py` `FramePacket`s (session_id, strictly increasing sequence, host `received_at`, which is not exposure time). `ArucoPipeline` processes each (session, sequence) at most once, drops packets older than `max_frame_age_s` independently of reader progress, and resets filters on a session change. Never re-run detection on a repeated frame or treat reader progress as proof of freshness.
+- **Pose acceptance is phase-dependent.** Acquisition requires validity, the RMS ceiling and an unambiguous solve at every marker count; sustained tracking uses the adaptive RMS gate and time-aware jump limits; recovery goes through COASTING/SEARCHING with a filter reset (`python/pose_lock.py`). Do not reintroduce unconditional acceptance for 3+ markers.
+- **Doc defect fixed (2026-10-08):** `.docs/THEORY.md` §6.3 now states the correct quaternion map for `R → F R F⁻¹`, `F = diag(1,−1,1)`: `(w, x, y, z) → (w, −x, y, −z)`. `.docs/tasks/T*.md` guides carry superseded banners; `.docs/PROJECT.md` and `.docs/TASKS.md` are intent, not completion evidence (see `docs/CAPABILITIES.md`).
 
 ## Python
 
@@ -50,6 +52,8 @@ When two documents disagree, the one higher in this list wins. When a document d
 `eyelab_xreal/` targets Unity 6000.4.5f1, URP, generic Android APK — **not** Beam-Pro-specific. The XREAL SDK lives at `eyelab_xreal/Packages/com.xreal.xr/` and is gitignored (no redistribution licence for modified vendor binaries): install XREAL XR Plugin 3.1.0 locally, then run `tools/patch_xreal_sdk.ps1`. Namespace is `Unity.XR.XREAL`; **no legacy `NR*` names exist in this version** — if a doc uses them, it predates the verified surface in CONTEXT.md.
 
 An agent cannot launch the Editor, enter Play mode, build an APK, or deploy. The loop is: agent writes C# → Jack runs it in Unity → agent reads `Logs/Editor.log` or `adb logcat`.
+
+**Scoped exception (2026-10-09):** for the PC-beta gate project `unity_projects/xreal_pc_gates/` only, a local agent with the Unity CLI may create the project, run the Editor in batch mode, compile and build Windows players, as specified in `docs/XREAL-PC-GATES-G1-G3.md` §1. Play mode needs Jack's explicit go-ahead; entering XR on the desktop, firmware updates and USB-configuration changes stay forbidden. `eyelab_xreal/` is unaffected.
 
 ## Commits
 

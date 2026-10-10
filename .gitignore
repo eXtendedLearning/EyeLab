@@ -94,3 +94,11 @@ scratch/
 # Backup
 *.bak
 *~
+
+# XREAL PC-beta gate project (docs/XREAL-PC-GATES-G1-G3.md §3): vendor sample
+# copy and run logs returned from the Surface stay local.
+unity_projects/xreal_pc_gates/Assets/Samples/
+unity_projects/xreal_pc_gates/Assets/Samples.meta
+unity_projects/xreal_pc_gates/GateRuns/
+unity_projects/xreal_pc_gates/Assets/EyeLabGates/Resources/EyeLabGatesBuildInfo.txt
+unity_projects/xreal_pc_gates/Assets/EyeLabGates/Resources/EyeLabGatesBuildInfo.txt.meta

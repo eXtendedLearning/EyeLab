@@ -62,15 +62,19 @@ def record_result(rec: SessionRecorder, result, target: Target, K, dist,
         # The analysis reads greyscale; storing it cuts session size about 3x.
         frame = (cv2.cvtColor(result.frame, cv2.COLOR_BGR2GRAY) if result.frame.ndim == 3
                  else result.frame)
+    # The record's time is the host receipt time of the source frame (not the
+    # exposure, and not the time this loop got round to processing it).
     return rec.record(
-        frame, timestamp=time.perf_counter(),
+        frame, timestamp=result.received_at or time.perf_counter(),
         pose=_pose_dict(result.pose), measured=_pose_dict(result.measured_pose),
         lock_state=result.lock_state, lock_reject=result.lock_reject_reason,
         markers_seen=[m.marker_id for m in result.markers],
         projected=_project(obj, ids, result.pose, K, dist),
         projected_raw=_project(obj, ids, result.measured_pose, K, dist),
         drawn=drawn, timings_ms={k: round(v, 3) for k, v in result.timings_ms.items()},
-        extra=extra)
+        extra=extra,
+        source={"session_id": result.session_id, "sequence": int(result.sequence),
+                "source_id": result.source_id, "age_ms": round(result.frame_age_ms, 2)})
 
 
 def open_camera_locked(camera_index: int, focus: Optional[float]):
@@ -146,6 +150,7 @@ def run(pipeline, rec_factory, target: Target, n_frames: int, save_every: int = 
     if K is None:
         raise RuntimeError("pipeline has no calibration")
     rec, recording, n, last = None, not wait, 0, time.monotonic()
+    recorded_frames: set = set()   # (session_id, sequence) of every recorded record
     try:
         while n < n_frames:
             err = pipeline.capture_error()
@@ -158,6 +163,9 @@ def run(pipeline, rec_factory, target: Target, n_frames: int, save_every: int = 
                 time.sleep(0.005)
                 continue
             last = time.monotonic()
+            identity = (result.session_id, result.sequence)
+            if identity in recorded_frames:
+                continue   # the same source frame is never recorded twice
             state = setup_state(result, target, K, condition, imu)
             rows = state.pop("_rows", None)
             if recording:
@@ -166,6 +174,7 @@ def run(pipeline, rec_factory, target: Target, n_frames: int, save_every: int = 
                     rec = rec_factory((w, h))
                 record_result(rec, result, target, K, dist, save_frame=(n % save_every == 0),
                               extra=state or None)
+                recorded_frames.add(identity)
                 n += 1
             if preview:
                 key = _show(pipeline, result, target, K, dist, recording, n, n_frames, rows,

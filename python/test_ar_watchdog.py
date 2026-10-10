@@ -23,9 +23,12 @@ class ARWatchdogTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.log_dir = Path(self._tmp.name)
-
-    def tearDown(self) -> None:
-        self._tmp.cleanup()
+        # Cleanups run last-in-first-out: registering the directory first means
+        # every watchdog (registered later, in _watchdog) is stopped and its
+        # JSONL handle closed BEFORE the directory is removed. Deleting the
+        # directory in tearDown() ran first and failed on Windows, which
+        # refuses to delete an open file.
+        self.addCleanup(self._tmp.cleanup)
 
     def _watchdog(self, **kwargs) -> ARWatchdog:
         params = dict(
