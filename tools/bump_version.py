@@ -32,7 +32,7 @@ UNITY_RE = re.compile(r"^(  bundleVersion: )(.*?)(\r?)$", re.MULTILINE)
 CONTEXT_FILE = "CONTEXT.md"
 CONTEXT_BUILD_RE = re.compile(r"Last updated:[^\n]*?\bbuild (\d+\.\d+\.\d{3})")
 
-_SRC_RE = re.compile(r'^__version__ = "([^"]+)"$', re.MULTILINE)
+_SRC_RE = re.compile(r'^__version__ = "([^"]+)"(\r?)$', re.MULTILINE)
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d{3})$")
 
 
@@ -81,7 +81,7 @@ def read_source_version(root=ROOT):
 
 def write_source_version(version, root=ROOT):
     path = Path(root) / "python" / "eyelab_version.py"
-    text, n = _SRC_RE.subn(f'__version__ = "{version}"', _read(path))
+    text, n = _SRC_RE.subn(lambda m: f'__version__ = "{version}"{m.group(2)}', _read(path))
     if n != 1:
         raise SystemExit(f"{path}: expected exactly one __version__ line, found {n}")
     _write(path, text)

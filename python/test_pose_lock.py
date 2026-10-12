@@ -369,7 +369,7 @@ class QualityGatesAtEveryMarkerCountTests(unittest.TestCase):
         before = lock.kalman.coast()[1].copy()
         lock.process(_pose(3, tvec=(0.3, 0.0, 0.3), rms=25.0), now=0.33)
         # coast() advances by prediction only; the 0.3 m outlier must be absent
-        self.assertLess(abs(float(lock.kalman.coast()[1][0]) - float(before[0])), 0.01)
+        self.assertLess(abs(float(lock.kalman.coast()[1][0, 0]) - float(before[0, 0])), 0.01)
 
     def test_moved_specimen_is_reacquired_through_searching(self):
         lock = self._locked()

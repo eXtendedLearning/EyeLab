@@ -8,12 +8,20 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.2.001<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.2.002<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
+
+### Fixed
+
+- (0.2.002) CI: extract scalar translation components explicitly in the rejected-pose
+  regression test for NumPy 2.4 compatibility. The version tool now reads and
+  updates both LF and CRLF source files without changing their line endings;
+  regression tests cover both formats. These address the shared test error in
+  run 38044386232 and the additional Windows version errors in run 38058570706.
 
 ### Added
 

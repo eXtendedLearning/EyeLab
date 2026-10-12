@@ -4,6 +4,7 @@ import importlib.util
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -47,6 +48,26 @@ class SourceTests(unittest.TestCase):
 
     def test_tool_reads_same_version_as_module(self):
         self.assertEqual(bump.read_source_version(), eyelab_version.__version__)
+
+    def test_tool_reads_source_with_lf_and_crlf(self):
+        for newline in (b"\n", b"\r\n"):
+            with self.subTest(newline=newline), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "python" / "eyelab_version.py"
+                source.parent.mkdir()
+                source.write_bytes(b'__version__ = "0.2.009"' + newline)
+                self.assertEqual(bump.read_source_version(root), "0.2.009")
+
+    def test_tool_writes_source_preserving_lf_and_crlf(self):
+        for newline in (b"\n", b"\r\n"):
+            with self.subTest(newline=newline), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "python" / "eyelab_version.py"
+                source.parent.mkdir()
+                original = newline.join((b"# version source", b'__version__ = "0.2.009"', b""))
+                source.write_bytes(original)
+                bump.write_source_version("0.2.010", root)
+                self.assertEqual(source.read_bytes(), original.replace(b"0.2.009", b"0.2.010"))
 
 
 class BumpTests(unittest.TestCase):
