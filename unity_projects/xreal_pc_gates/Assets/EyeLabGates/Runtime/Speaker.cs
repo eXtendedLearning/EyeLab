@@ -14,6 +14,7 @@ namespace EyeLabGates
     public sealed class Speaker : IDisposable
     {
         const string Script =
+            "$ProgressPreference = 'SilentlyContinue'\n" +
             "Add-Type -AssemblyName System.Speech\n" +
             "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer\n" +
             "try { $v = $s.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'en*' } | Select-Object -First 1\n" +
@@ -61,7 +62,13 @@ namespace EyeLabGates
                         log("READY", speaker.Voice);
                     }
                 };
-                p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrEmpty(e.Data)) log("STDERR", e.Data); };
+                p.ErrorDataReceived += (_, e) =>
+                {
+                    // PowerShell serialises its progress stream as CLIXML on a redirected stderr: noise.
+                    if (!string.IsNullOrEmpty(e.Data) && !e.Data.StartsWith("#< CLIXML", StringComparison.Ordinal)
+                        && !e.Data.StartsWith("<Objs", StringComparison.Ordinal))
+                        log("STDERR", e.Data);
+                };
                 p.Exited += (_, __) => { speaker.m_Dead = true; };
                 p.Start();
                 p.BeginOutputReadLine();

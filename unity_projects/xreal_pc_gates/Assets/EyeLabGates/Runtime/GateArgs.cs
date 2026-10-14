@@ -10,7 +10,7 @@ namespace EyeLabGates
 
     /// <summary>
     /// Command-line arguments of the gate player (docs/XREAL-PC-GATES-G1-G3.md §5):
-    /// <c>-gate G1|G2|G3|manual -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -duration s
+    /// <c>-gate G1|G2|G3|manual -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60 -duration s
     /// -snapshotEvery s -label text -logRoot dir</c>. G1-G3 follow the timed protocols in
     /// <see cref="GateProtocol"/>; <c>-duration</c> only applies to manual (it is recorded otherwise).
     /// Unknown arguments (e.g. Unity's own <c>-logFile</c>) are ignored.
@@ -22,6 +22,8 @@ namespace EyeLabGates
         public string Reader = "vendor";
         /// <summary>Restart the camera when its lag has grown by this many seconds; 0 = never.</summary>
         public double FlushLag;
+        /// <summary>XR render rate: 60 (default, display rate) or 30 (vSyncCount 2, lighter host load).</summary>
+        public int RenderFps = 60;
         public double Duration;
         public double SnapshotEvery = 2.0;
         public string Label = "run";
@@ -93,6 +95,11 @@ namespace EyeLabGates
                         i++;
                         if (TryPositive(value, out double d)) duration = d;
                         else a.Warnings.Add($"bad -duration '{value}', using default");
+                        break;
+                    case "-renderfps":
+                        i++;
+                        if (value == "30" || value == "60") a.RenderFps = value == "30" ? 30 : 60;
+                        else a.Warnings.Add($"bad -renderFps '{value}', using 60");
                         break;
                     case "-flushlag":
                         i++;

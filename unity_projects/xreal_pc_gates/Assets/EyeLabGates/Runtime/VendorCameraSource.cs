@@ -15,6 +15,8 @@ namespace EyeLabGates
         public override ulong Timestamp => m_Texture != null ? m_Texture.GetTimeStamp() : 0;
         public override Vector2Int Resolution => m_Texture != null ? m_Texture.GetResolution() : Vector2Int.zero;
         public override Texture2D LumaTexture => m_Texture != null ? m_Texture.GetYUVFormatTextures()[0] : null;
+        public override Texture2D ChromaU => m_Texture != null ? m_Texture.GetYUVFormatTextures()[1] : null;
+        public override Texture2D ChromaV => m_Texture != null ? m_Texture.GetYUVFormatTextures()[2] : null;
 
         void OnEnable()
         {

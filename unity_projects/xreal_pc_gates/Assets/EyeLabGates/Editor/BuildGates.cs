@@ -45,17 +45,9 @@ namespace EyeLabGates.EditorTools
             var info = CollectBuildInfo();
             WriteBuildInfoResource(info);
 
+            RescueRunZips();
             if (Directory.Exists(Win64Dir))
             {
-                // Run zips returned from the Surface are sometimes dropped here; keep them.
-                string keep = Path.Combine(ProjectDir, "GateRuns");
-                foreach (var z in Directory.GetFiles(Win64Dir, "GateRuns_*.zip"))
-                {
-                    Directory.CreateDirectory(keep);
-                    string dest = Path.Combine(keep, Path.GetFileName(z));
-                    if (!File.Exists(dest)) File.Move(z, dest);
-                    Log($"moved run zip {Path.GetFileName(z)} -> GateRuns/");
-                }
                 Directory.Delete(Win64Dir, true);
                 Log($"cleaned {Win64Dir}");
             }
@@ -110,6 +102,71 @@ namespace EyeLabGates.EditorTools
             if (File.Exists(zip)) File.Delete(zip);
             ZipFile.CreateFromDirectory(Win64Dir, zip, CompressionLevel.Optimal, false);
             Log($"ZIP {zip} ({new FileInfo(zip).Length} bytes)");
+
+            ArchiveOldBuilds(zip);
+            WriteLatestBuildPointer(info, zip);
+        }
+
+        /// <summary>
+        /// Builds/ keeps only the newest build zip; older ones go to Builds/archive/, which keeps the
+        /// <see cref="ArchiveKeep"/> most recent and deletes the rest (every build is reproducible from
+        /// its git commit, recorded in BUILD_INFO.txt).
+        /// </summary>
+        const int ArchiveKeep = 2;
+
+        static void ArchiveOldBuilds(string newest)
+        {
+            string builds = Path.Combine(ProjectDir, "Builds");
+            string archive = Path.Combine(builds, "archive");
+            Directory.CreateDirectory(archive);
+            foreach (var z in Directory.GetFiles(builds, "XrealPcGates_*.zip"))
+            {
+                if (string.Equals(Path.GetFullPath(z), Path.GetFullPath(newest), StringComparison.OrdinalIgnoreCase)) continue;
+                string dest = Path.Combine(archive, Path.GetFileName(z));
+                if (File.Exists(dest)) File.Delete(dest);
+                File.Move(z, dest);
+                Log($"archived {Path.GetFileName(z)}");
+            }
+            var old = Directory.GetFiles(archive, "XrealPcGates_*.zip").OrderByDescending(Path.GetFileName).Skip(ArchiveKeep).ToList();
+            foreach (var z in old)
+            {
+                File.Delete(z);
+                Log($"deleted old build {Path.GetFileName(z)} (keeping {ArchiveKeep} in archive)");
+            }
+        }
+
+        /// <summary>Run zips returned from the Surface are sometimes dropped into Builds/; move them to GateRuns/_inbox.</summary>
+        static void RescueRunZips()
+        {
+            string builds = Path.Combine(ProjectDir, "Builds");
+            if (!Directory.Exists(builds)) return;
+            string inbox = Path.Combine(ProjectDir, "GateRuns", "_inbox");
+            foreach (var z in Directory.GetFiles(builds, "GateRuns_*.zip", SearchOption.AllDirectories))
+            {
+                Directory.CreateDirectory(inbox);
+                string dest = Path.Combine(inbox, Path.GetFileName(z));
+                if (File.Exists(dest)) { Log($"run zip {Path.GetFileName(z)} already in GateRuns/_inbox; left in place"); continue; }
+                File.Move(z, dest);
+                Log($"moved run zip {Path.GetFileName(z)} -> GateRuns/_inbox/");
+            }
+        }
+
+        /// <summary>
+        /// Tracked pointer to the newest build. The Surface launcher compares it with its own
+        /// BUILD_INFO.txt (after a git pull) and warns when the copied build is older.
+        /// </summary>
+        static void WriteLatestBuildPointer(List<KeyValuePair<string, string>> info, string zip)
+        {
+            string utc = info.First(kv => kv.Key == "utc_build").Value;
+            string head = info.First(kv => kv.Key == "git_head").Value;
+            string text =
+                "# Newest XREAL gate build (written by BuildGates.BuildAll; commit it with the build's source).\n" +
+                "# The Surface launcher warns when its BUILD_INFO.txt utc_build differs from this one.\n" +
+                $"utc_build = {utc}\n" +
+                $"zip = Builds/{Path.GetFileName(zip)}\n" +
+                $"source_git_head = {head}\n";
+            File.WriteAllText(Path.Combine(ProjectDir, "LATEST_BUILD.txt"), text);
+            Log($"wrote LATEST_BUILD.txt (utc_build {utc})");
         }
 
         static List<KeyValuePair<string, string>> CollectBuildInfo()

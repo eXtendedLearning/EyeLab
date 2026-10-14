@@ -37,6 +37,7 @@ namespace EyeLabGates
         readonly StringBuilder m_Pose = new StringBuilder();
         readonly StringBuilder m_Events = new StringBuilder();
         readonly StringBuilder m_Perf = new StringBuilder();
+        readonly StringBuilder m_Native = new StringBuilder();
         readonly int m_MainThreadId;
         double m_LastFlush;
         bool m_RunInfoDirty;
@@ -83,6 +84,9 @@ namespace EyeLabGates
 
         public void Perf(string row) { lock (m_Lock) m_Perf.Append(row).Append('\n'); }
 
+        /// <summary>One native XREAL log line ("t_unity type message"), for native.log.</summary>
+        public void Native(string line) { lock (m_Lock) m_Native.Append(line).Append('\n'); }
+
         public void Event(string evt, object result = null, string detail = null)
         {
             string r = Csv(Convert.ToString(result, Inv) ?? "");
@@ -125,13 +129,14 @@ namespace EyeLabGates
 
         public void Flush()
         {
-            string cam, pose, ev, perf, json = null;
+            string cam, pose, ev, perf, native, json = null;
             lock (m_Lock)
             {
                 cam = Take(m_Camera);
                 pose = Take(m_Pose);
                 ev = Take(m_Events);
                 perf = Take(m_Perf);
+                native = Take(m_Native);
                 if (m_RunInfoDirty)
                 {
                     json = RunInfo.ToJson();
@@ -144,6 +149,7 @@ namespace EyeLabGates
                 if (pose.Length > 0) File.AppendAllText(Path.Combine(Directory, "pose.csv"), pose);
                 if (ev.Length > 0) File.AppendAllText(Path.Combine(Directory, "events.csv"), ev);
                 if (perf.Length > 0) File.AppendAllText(Path.Combine(Directory, "perf.csv"), perf);
+                if (native.Length > 0) File.AppendAllText(Path.Combine(Directory, "native.log"), native);
                 if (json != null) File.WriteAllText(Path.Combine(Directory, "run.json"), json);
             }
             catch (Exception e)
@@ -152,7 +158,12 @@ namespace EyeLabGates
             }
         }
 
-        /// <summary>Writes a binary PGM (P5) on a worker thread; <paramref name="pixels"/> must be a private copy.</summary>
+        /// <summary>
+        /// Writes a binary PGM (P5) on a worker thread; <paramref name="pixels"/> must be a private copy in
+        /// native buffer order. The XREAL RGB buffer is stored bottom-up (verified 2026-10-14: ArUco
+        /// detection succeeds only on the vertically flipped image), so rows are written in reverse and
+        /// the file is upright. Snapshots from builds up to utc_build 2026-10-14T08:24:36Z are upside down.
+        /// </summary>
         public void SavePgmAsync(string name, int width, int height, byte[] pixels)
         {
             string path = Path.Combine(SnapshotDirectory, name + ".pgm");
@@ -164,7 +175,8 @@ namespace EyeLabGates
                     {
                         byte[] header = Encoding.ASCII.GetBytes($"P5\n{width} {height}\n255\n");
                         fs.Write(header, 0, header.Length);
-                        fs.Write(pixels, 0, width * height);
+                        for (int y = height - 1; y >= 0; y--)
+                            fs.Write(pixels, y * width, width);
                     }
                 }
                 catch (Exception e)

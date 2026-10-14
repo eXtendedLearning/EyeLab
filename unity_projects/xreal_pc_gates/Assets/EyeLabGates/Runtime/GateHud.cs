@@ -9,8 +9,9 @@ namespace EyeLabGates
     /// <summary>
     /// Operator display. Drawn once per view: the whole window, or each eye's half when the XR window
     /// is side by side (3840x1080). Per view: a large centred banner with the step title, a countdown
-    /// and a progress bar (flashes bright on every step change); a large tracking line; a small grey
-    /// camera preview at the bottom (only while frames arrive); diagnostics in small print.
+    /// and a progress bar (flashes bright on every step change); a large tracking line; a throttling
+    /// warning when the CPU clock falls below 80 % of nominal; a colour camera preview at the bottom
+    /// (only while frames arrive); diagnostics in small print.
     /// On the glasses black is transparent, so dark panels read as see-through.
     /// </summary>
     public sealed class GateHud : MonoBehaviour
@@ -31,8 +32,8 @@ namespace EyeLabGates
         string m_Build = "";
         readonly Dictionary<int, GUIStyle> m_Styles = new Dictionary<int, GUIStyle>();
 
-        // Small RGB copy of the Y plane for display (Alpha8 does not draw reliably through IMGUI).
-        const int PreviewWidth = 320;
+        // Small RGB copy of the YUV frame for display (Alpha8 does not draw reliably through IMGUI).
+        const int PreviewWidth = 480;
         const double PreviewInterval = 1.0 / 15.0;
         Texture2D m_Preview;
         byte[] m_PreviewRgb;
@@ -65,17 +66,46 @@ namespace EyeLabGates
                 m_Preview = new Texture2D(pw, ph, TextureFormat.RGB24, false) { filterMode = FilterMode.Bilinear };
                 m_PreviewRgb = new byte[pw * ph * 3];
             }
+            // Chroma planes (half resolution) when available; otherwise grey.
+            Texture2D uTex = src.ChromaU, vTex = src.ChromaV;
+            NativeArray<byte> uData = default, vData = default;
+            int cw = w / 2, ch = h / 2;
+            bool colour = uTex != null && vTex != null && uTex.width == cw && vTex.width == cw;
+            if (colour)
+            {
+                uData = uTex.GetRawTextureData<byte>();
+                vData = vTex.GetRawTextureData<byte>();
+                colour = uData.Length >= cw * ch && vData.Length >= cw * ch;
+            }
+
             for (int y = 0; y < ph; y++)
             {
-                // Texture row 0 is drawn at the bottom; native row 0 is the top of the image.
-                int srcRow = (h - 1 - (int)((y + 0.5) * h / ph)) * w;
+                // The native buffer is bottom-up (row 0 = bottom of the image) and texture row 0 is
+                // drawn at the bottom, so rows map without a flip (corrected 2026-10-14).
+                int sy = (int)((y + 0.5) * h / ph);
+                int srcRow = sy * w;
+                int cRow = (sy / 2) * cw;
                 int dst = y * pw * 3;
                 for (int x = 0; x < pw; x++)
                 {
-                    byte v = data[srcRow + (int)((x + 0.5) * w / pw)];
-                    m_PreviewRgb[dst++] = v;
-                    m_PreviewRgb[dst++] = v;
-                    m_PreviewRgb[dst++] = v;
+                    int sx = (int)((x + 0.5) * w / pw);
+                    int luma8 = data[srcRow + sx];
+                    if (colour)
+                    {
+                        // BT.601 YCbCr -> RGB, full range.
+                        int cb = uData[cRow + sx / 2] - 128;
+                        int cr = vData[cRow + sx / 2] - 128;
+                        m_PreviewRgb[dst++] = Clamp(luma8 + ((359 * cr) >> 8));
+                        m_PreviewRgb[dst++] = Clamp(luma8 - ((88 * cb + 183 * cr) >> 8));
+                        m_PreviewRgb[dst++] = Clamp(luma8 + ((454 * cb) >> 8));
+                    }
+                    else
+                    {
+                        byte v = (byte)luma8;
+                        m_PreviewRgb[dst++] = v;
+                        m_PreviewRgb[dst++] = v;
+                        m_PreviewRgb[dst++] = v;
+                    }
                 }
             }
             m_Preview.LoadRawTextureData(m_PreviewRgb);
@@ -83,6 +113,8 @@ namespace EyeLabGates
             m_PreviewTs = src.Timestamp;
             m_LastPreview = now;
         }
+
+        static byte Clamp(int v) => (byte)(v < 0 ? 0 : v > 255 ? 255 : v);
 
         void OnGUI()
         {
@@ -155,7 +187,7 @@ namespace EyeLabGates
             Color trackColor;
             if (reason == NativeTracking.NoValue)
             {
-                trackText = m_Gate.XRActive ? "TRACKING: n/a" : "";
+                trackText = m_Gate.XRActive ? "TRACKING: waiting for first report" : "";
                 trackColor = Grey;
             }
             else if (reason == NativeTracking.Ready)
@@ -168,18 +200,29 @@ namespace EyeLabGates
                 trackText = $"TRACKING: {NativeTracking.Name(reason).ToUpperInvariant()} - look around slowly";
                 trackColor = Red;
             }
+            float ty = by + bh + pad;
             if (trackText.Length > 0)
             {
                 float th = big.fontSize * 1.5f;
-                float ty = by + bh + pad;
                 Fill(new Rect(bx, ty, bw, th), Panel);
                 Label(new Rect(bx, ty, bw, th), trackText, big, trackColor);
+                ty += th + pad;
             }
 
-            // ---- camera preview (grey, only while frames arrive)
+            // ---- host throttling warning (CPU clock well below nominal)
+            double clock = m_Perf.CpuPerformancePct;
+            if (!double.IsNaN(clock) && clock < 80.0)
+            {
+                var warn = Style(Mathf.RoundToInt(h / 30f), TextAnchor.MiddleCenter, true);
+                float wh = warn.fontSize * 1.5f;
+                Fill(new Rect(bx, ty, bw, wh), Panel);
+                Label(new Rect(bx, ty, bw, wh), $"SURFACE THROTTLED: CPU clock {clock.ToString("F0", Inv)}% of nominal", warn, Red);
+            }
+
+            // ---- camera preview (colour, only while frames arrive)
             if (m_Gate.Source.IsCapturing && m_Preview != null)
             {
-                float pw = v.width * 0.30f;
+                float pw = v.width * 0.45f;
                 float ph = pw * m_Preview.height / Mathf.Max(1, m_Preview.width);
                 var pr = new Rect(v.x + (v.width - pw) / 2f, v.yMax - ph - h * 0.04f, pw, ph);
                 Fill(new Rect(pr.x - 2, pr.y - 2, pr.width + 4, pr.height + 4), Color.black);

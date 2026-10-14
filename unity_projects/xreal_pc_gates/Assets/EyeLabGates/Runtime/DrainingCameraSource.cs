@@ -33,6 +33,8 @@ namespace EyeLabGates
         public override ulong Timestamp => m_Timestamp;
         public override Vector2Int Resolution => m_Resolution;
         public override Texture2D LumaTexture => m_Y;
+        public override Texture2D ChromaU => m_U;
+        public override Texture2D ChromaV => m_V;
         public override int LastDrained => m_LastDrained;
 
         public override bool StartCapture()

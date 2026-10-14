@@ -28,6 +28,7 @@ namespace EyeLabGates
         const float ExitXRTimeout = 10f;
         const float TrackingReadyTimeout = 60f;
         const float TrackingReadyHold = 1f;
+        const float NoReportFallbackSeconds = 15f;
         const float TickFromStepSeconds = 8f;   // 3-2-1 ticks only on steps at least this long
         const double FlushCooldown = 5.0;
         const double LostCueCooldown = 5.0;
@@ -121,7 +122,12 @@ namespace EyeLabGates
             m_Tick = Tone("tick", 660f, 0.07f);
             m_ReadyBeep = Tone("ready", 1320f, 0.5f);
             m_Speaker = Speaker.TryStart((result, detail) => m_Log.Event("speech", result, detail));
+
+            NativeTracking.Install();
+            m_Log.Event("native_log", NativeTracking.Installed ? "INSTALLED" : "UNAVAILABLE", NativeTracking.InstallError);
         }
+
+        void OnDestroy() => NativeTracking.Uninstall();
 
         string m_StepId = "setup";
 
@@ -211,11 +217,18 @@ namespace EyeLabGates
                 StartCoroutine(FlushCamera());
             }
 
+            while (NativeTracking.TryDequeue(out string nativeLine))
+                m_Log.Native(nativeLine);
             m_Log.FlushIfDue();
         }
 
         void OnApplicationQuit()
         {
+            NativeTracking.Uninstall();
+            while (NativeTracking.TryDequeue(out string nativeLine))
+                m_Log.Native(nativeLine);
+            m_Log.Event("native_log", "SUMMARY",
+                $"lines={NativeTracking.LinesSeen} reason_lines={NativeTracking.ReasonLinesSeen} dropped={NativeTracking.DroppedLines}");
             WriteRepeatSummary();
             m_Log.Event("application_quit", "", "");
             m_Log.Flush();
@@ -330,6 +343,13 @@ namespace EyeLabGates
             m_Log.Event("enter_xr_wait", started ? "STARTED" : "TIMEOUT", $"timeout={EnterXRTimeout}s");
             if (!started) { result("XR_TIMEOUT"); yield break; }
             m_Device.Probe("xr");
+            if (m_Args.RenderFps == 30)
+            {
+                // HelloMR.OnEnterXR sets vSyncCount = 1 after this callback; override a few frames later.
+                for (int i = 0; i < 5; i++) yield return null;
+                QualitySettings.vSyncCount = 2;
+                m_Log.Event("render_fps", 30, "vSyncCount=2 (half of the 60 Hz display rate)");
+            }
             result("OK");
         }
 
@@ -365,6 +385,18 @@ namespace EyeLabGates
                 else
                 {
                     readySince = double.NaN;
+                }
+                // No report at all (native log route not delivering): do not block the run on a
+                // missing signal; continue after a fixed scan time and say so in the log.
+                if (m_Pose.LastTrackingReason == NativeTracking.NoValue && NativeTracking.ReasonLinesSeen == 0
+                    && now - t0 > NoReportFallbackSeconds)
+                {
+                    m_Log.Event("tracking_ready", "ASSUMED",
+                        $"no tracking report after {NoReportFallbackSeconds}s (native_log installed={NativeTracking.Installed})");
+                    Say("Tracking state unknown. Continuing.");
+                    yield return new WaitForSecondsRealtime(1.5f);
+                    result(true);
+                    yield break;
                 }
                 if (now - t0 > TrackingReadyTimeout)
                 {
@@ -552,6 +584,7 @@ namespace EyeLabGates
             yield return new WaitForSecondsRealtime(1.5f); // let the last spoken cue finish
             m_Speaker?.Dispose();
             m_Speaker = null;
+            NativeTracking.Uninstall();
 #if UNITY_EDITOR
             UnityEditor.EditorApplication.isPlaying = false;
 #else
@@ -691,7 +724,7 @@ namespace EyeLabGates
                 case GateKind.G2: return "G2 6DoF";
                 case GateKind.G3:
                     string reader = m_Source.SourceName == "drain" ? " +drain" : "";
-                    string flush = m_Args.FlushLag > 0 ? " +flush" : "";
+                    string flush = (m_Args.FlushLag > 0 ? " +flush" : "") + (m_Args.RenderFps == 30 ? " @30fps" : "");
                     switch (m_Args.Order)
                     {
                         case "tracked": return $"G3c camera after READY{reader}{flush}";

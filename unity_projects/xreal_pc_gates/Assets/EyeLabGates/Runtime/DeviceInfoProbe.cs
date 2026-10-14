@@ -26,6 +26,7 @@ namespace EyeLabGates
                 .Set("order", args.Order)
                 .Set("reader", args.Reader)
                 .Set("flush_lag_s", args.FlushLag)
+                .Set("render_fps", args.RenderFps)
                 .Set("duration_s", args.Duration)
                 .Set("snapshot_every_s", args.SnapshotEvery)
                 .Set("label", args.Label)
@@ -37,7 +38,8 @@ namespace EyeLabGates
             var build = new JsonObject()
                 .Set("unity_version", Application.unityVersion)
                 .Set("product", Application.productName)
-                .Set("is_editor", Application.isEditor);
+                .Set("is_editor", Application.isEditor)
+                .Set("snapshot_orientation", "upright (native bottom-up rows reversed)");
             var info = Resources.Load<TextAsset>(BuildInfoResource);
             if (info != null)
             {

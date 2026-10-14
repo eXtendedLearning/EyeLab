@@ -788,3 +788,99 @@ is the 25 mm ChArUco board at about 0.5–1 m; reference 1/2 are two directions
   `perf_counters` (`OK`/`UNAVAILABLE`), `camera_flush`.
 - `step` detail is `<seconds>s <TITLE>: <detail>`; step ids are unchanged.
 - `-flushLag <s>` (default 0 = off).
+
+## 15. Voice-guided runs of 2026-10-14, host throttling, and the build/run workflow
+
+### Results (build `2026-10-14T08:24:36Z`)
+
+Voice cues, beeps and the banner worked as intended (operator). Per run
+(`python -m xreal_gates summary`):
+
+| Run | Result | Camera | Tracking | CPU clock (median / min, % of nominal) |
+|---|---|---|---|---|
+| G1 | COMPLETED | 30 fps, no lag | – (no XR) | 230 / 95 |
+| G2 | COMPLETED (211 s protocol) | – | native log: ready 1.4 s after XR start | **63 / 52** |
+| G3c, G3c-drain, G3c-flush | TRACKING_TIMEOUT, no camera frames | – | HUD "n/a" (bug below) | 58-60 / 43-51 |
+| G3-3DoF | COMPLETED | **8 fps, lag 101 s after 137 s** | 3DoF | 59 / 44 |
+
+Three findings:
+
+1. **"Tracking n/a" was a harness bug.** The Windows `XREALXRPlugin.dll` does
+   not export `GetTrackingReason` (its export table has 260 entries; the call
+   threw and the harness stopped asking). G3c therefore waited 60 s for a READY
+   that could never be reported and stopped before starting the camera. The
+   DLL does export `SetNativeLogCallback` and formats
+   `TrackingReason changed: %d -> %d` itself, so the new build installs that
+   callback (the vendor does so only in the Editor), parses the reason, and
+   writes every native line to `native.log` in the run folder. If no report
+   arrives within 15 s the run continues with `tracking_ready,ASSUMED`. Also
+   noted: the DLL exports `GetHeadPoseAtTime` and `GetHMDTimeNanos`, the
+   candidates for capture-time pose lookup (G4).
+2. **The Surface throttles.** `% Processor Performance` falls from about 220 %
+   (turbo) to **45-60 % of nominal** about 50 s after XR starts and stays there
+   for every later run, with only a brief recovery between runs. System load
+   drops at the same time, so the CPU is held back, not saturated. Unity's own
+   frame rate sags (38-58 fps). On the throttled CPU the Eye stream decodes at
+   7-9 fps instead of 30; every frame is still delivered in order, so the image
+   falls behind by 0.75 s per second (**101 s after 137 s**, matching the
+   operator's "over 90 s"). G1 without XR on a cool Surface: 30 fps, no lag.
+   This is the cause of the G3 latency on this host; the camera path itself is
+   not slow. Whether it is thermal or power limiting is not separated (mains
+   power and Windows power mode to be confirmed).
+3. **The Eye image buffer is bottom-up.** On a G1 snapshot, ArUco detection
+   (DICT_4X4_50) finds 16 markers after a vertical flip, 2 spurious ones as
+   stored and after a 180° rotation. So the preview's flip was backwards (the
+   operator saw it upside down) and **all PGM snapshots up to build
+   `2026-10-14T08:24:36Z` are upside down**: flip them vertically before any
+   calibration use (a mirrored image calibrates to the wrong handedness).
+   The §12 claim that the snapshots were upright was wrong.
+
+### Changes in build `2026-10-14T09:18:55Z`
+
+- Tracking reason from the native log callback (above); `native.log` per run;
+  `native_log` events (`INSTALLED`/`UNAVAILABLE`, `SUMMARY` with line counts).
+- Snapshots written **upright** (rows reversed); `run.json` `build.snapshot_orientation`.
+- Preview: correct orientation, **colour** (BT.601 from the Y/U/V planes),
+  45 % of each eye's width, bottom centre.
+- HUD: red **SURFACE THROTTLED** line when the CPU clock is below 80 % of nominal.
+- G3c-30fps (`-renderFps 30`, vSyncCount 2): halves the XR render load, to test
+  whether a lighter load avoids throttling.
+- Launcher: new order (G1, G3c, G3c-30fps, G3c-flush, G2, G3-3DoF, G3c-drain),
+  outdated-build warning, export of new runs only.
+
+### Build and run workflow (desktop ↔ Surface)
+
+The repo carries the **source**; a build is a 150 MB artefact and is not in git.
+After every rebuild both must reach the Surface:
+
+1. Desktop: `BuildGates.BuildAll` writes `Builds/XrealPcGates_<yyyymmdd_HHmm>.zip`
+   and the tracked pointer `unity_projects/xreal_pc_gates/LATEST_BUILD.txt`.
+   Commit and push (the pointer travels with the source).
+2. Surface: `git pull`; copy the newest zip from the desktop (USB stick or
+   share) and unzip it over `C:\EyeLabGates\`.
+3. The launcher compares its own `BUILD_INFO.txt` with `LATEST_BUILD.txt` in the
+   pulled repo (found via `EYELAB_REPO`, `C:\github_repos\EyeLab` or
+   `C:\GitHub_Uni\EyeLab`) and prints a framed **WARNING** when they differ.
+   The build time is also shown at the bottom left of the app.
+
+Retention:
+
+- `Builds/` keeps only the newest zip; `Builds/archive/` keeps the two before it;
+  older ones are deleted by `BuildAll` (each is reproducible from the
+  `source_git_head` in its `BUILD_INFO.txt`). Run zips found in `Builds/` are
+  moved to `GateRuns/_inbox/`.
+- Surface: menu **Z** zips only runs not exported yet and moves them to
+  `GateRuns\_exported\` (earlier exports were cumulative).
+- Desktop: copy run zips into `GateRuns/_inbox/`, then from `python/`:
+  `python -m xreal_gates import` (de-duplicates into `GateRuns/runs/<run>/`,
+  attaches each player log as `player.log`, moves the zip to `_imported/`,
+  which is safe to delete) and `python -m xreal_gates summary`.
+  Session reports live in `GateRuns/sessions/`.
+
+### Next Surface session
+
+Before running: mains power, Windows power mode **Best performance**, Surface
+upright on its kickstand in a cool spot (a desk fan on its back helps), and
+let it cool for 5 minutes between XR runs, or until the HUD no longer shows
+SURFACE THROTTLED. Order: **G1** (sanity: colour, upright preview), **G3c**,
+**G3c-30fps**, **G3c-flush**, then G2 and the rest if time allows.

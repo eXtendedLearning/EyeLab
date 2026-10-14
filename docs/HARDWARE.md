@@ -5,7 +5,7 @@
 > each machine can and cannot do with the glasses. Update it whenever hardware is
 > bought, lent, or a capability is verified or refuted.
 >
-> Last updated: 2026-10-13 (Surface runs of the PC beta 3.1.2 gate harness: Smart App Control must be off; Eye frames and 6DoF each observed, concurrent use degrades. Earlier: 2026-10-09 desktop USB/NCM and TCP preflight; PC beta sample inspected; emulator assessment corrected).
+> Last updated: 2026-10-14 (Surface throttles under sustained XR load; Eye buffer is bottom-up. Earlier: 2026-10-13 Surface runs of the PC beta 3.1.2 gate harness: Smart App Control must be off; Eye frames and 6DoF each observed, concurrent use degrades. Earlier: 2026-10-09 desktop USB/NCM and TCP preflight; PC beta sample inspected; emulator assessment corrected).
 
 ## Glasses
 
@@ -51,6 +51,7 @@ Two machines, with complementary limits:
 | Glasses as a display (USB-C DP Alt Mode) | **no** — on a desktop board the Type-C DP Alt Mode is sourced by the iGPU, which this CPU lacks; the RTX 5060's outputs are not USB-C | **yes** — S1 display smoke test passed 2026-09-22 |
 | Cameras | desktop USB webcam (model to record) | built-in cameras |
 | Windows security | – | **Smart App Control must be off** for the XREAL PC SDK: it blocked the unsigned `libnr_api.dll` (error 4551) on 2026-10-10; turned off by Jack 2026-10-13 |
+| Sustained XR load | – | **throttles**: CPU clock falls from ~220 % to 45-60 % of nominal about 50 s after XR starts and stays low across runs (2026-10-14, `perf.csv`); the Eye stream then decodes at 7-9 fps. Thermal vs power limit not separated; CPU/RAM variant still to record |
 | Current role | native-SDK probing (S0–S5), compute-heavy work | display path (S1; S6 candidate), PC beta gate runs, portable demos |
 
 The glasses have a single USB-C connector, so the host must deliver video
