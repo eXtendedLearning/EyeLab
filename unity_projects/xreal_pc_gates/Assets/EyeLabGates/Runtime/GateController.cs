@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Threading;
 using System.Threading.Tasks;
 using Unity.XR.XREAL;
 using Unity.XR.XREAL.Experimental;
@@ -26,7 +27,11 @@ namespace EyeLabGates
         const float GlassesTimeout = 30f;
         const float EnterXRTimeout = 20f;
         const float ExitXRTimeout = 10f;
-        const float TrackingReadyTimeout = 60f;
+        const float TrackingReadyTimeout = 30f;      // was 60 s; 6DoF was ready in 1.4-24 s on the Surface
+        const double CoolEnoughPct = 150.0;          // CPU clock under load, % of nominal (cool: ~220, throttled: 45-60)
+        const float CooldownProbeLoadSeconds = 3.5f;
+        const float CooldownProbeEverySeconds = 10f;
+        const double CooldownMaxSeconds = 600.0;
         const float TrackingReadyHold = 1f;
         const float NoReportFallbackSeconds = 15f;
         const float TickFromStepSeconds = 8f;   // 3-2-1 ticks only on steps at least this long
@@ -80,6 +85,7 @@ namespace EyeLabGates
         public int StepCount { get; private set; }
         public double StepStart { get; private set; } = double.NegativeInfinity;
         public double StepEnd { get; private set; } = double.NaN;
+        public bool IsCooldown => m_Args != null && m_Args.Gate == GateKind.Cooldown;
 
         void Awake()
         {
@@ -173,6 +179,7 @@ namespace EyeLabGates
                 case GateKind.G1: m_Sequence = StartCoroutine(RunG1()); break;
                 case GateKind.G2: m_Sequence = StartCoroutine(RunG2()); break;
                 case GateKind.G3: m_Sequence = StartCoroutine(RunG3()); break;
+                case GateKind.Cooldown: m_Sequence = StartCoroutine(RunCooldown()); break;
                 default:
                     Show("manual", "MANUAL MODE", "Keys: C camera, X XR, 3/6 DoF, R recenter, M mark, Esc quit", "");
                     StartCoroutine(ProbeWhenConnected());
@@ -307,6 +314,74 @@ namespace EyeLabGates
             yield return RunProtocol(GateProtocol.G3());
             StopCapture("end");
             yield return Quit("COMPLETED");
+        }
+
+        /// <summary>
+        /// Between XR runs: is the Surface cool again? An idle CPU clocks down by itself, so the clock is
+        /// read under a short load (two busy threads for 3.5 s) every 10 s. Two probes at or above
+        /// <see cref="CoolEnoughPct"/> end the check ("Cool enough"); the glasses are not needed.
+        /// </summary>
+        IEnumerator RunCooldown()
+        {
+            Say("Cool-down check");
+            double t0 = Time.realtimeSinceStartupAsDouble;
+            int probe = 0, good = 0;
+            while (true)
+            {
+                probe++;
+                Show("cool_load", $"MEASURING (check {probe})", "Short CPU load to read the clock", "");
+                StepEnd = StepStart + CooldownProbeLoadSeconds;
+                var stop = new ManualResetEventSlim(false);
+                var load = new[] { new Thread(() => Spin(stop)), new Thread(() => Spin(stop)) };
+                foreach (var th in load) { th.IsBackground = true; th.Start(); }
+                yield return new WaitForSecondsRealtime(CooldownProbeLoadSeconds);
+                double clock = m_Perf.CpuPerformancePct;
+                stop.Set();
+                m_Log.Event("cooldown_probe", double.IsNaN(clock) ? "n/a" : clock.ToString("F0", CultureInfo.InvariantCulture),
+                            $"probe={probe} threshold={CoolEnoughPct.ToString(CultureInfo.InvariantCulture)}");
+
+                if (double.IsNaN(clock))
+                {
+                    Show("cool_na", "NO CPU COUNTERS", "Cannot read the clock on this machine", "");
+                    Say("Cannot read the CPU clock");
+                    yield return new WaitForSecondsRealtime(3f);
+                    yield return Quit("NO_COUNTERS");
+                    yield break;
+                }
+                good = clock >= CoolEnoughPct ? good + 1 : 0;
+                string pct = clock.ToString("F0", CultureInfo.InvariantCulture);
+                if (good >= 2)
+                {
+                    Show("cool_ready", "COOL ENOUGH", $"CPU clock {pct}% under load. Start the next gate.", "");
+                    Say("Cool enough. Start the next gate.");
+                    yield return new WaitForSecondsRealtime(4f);
+                    yield return Quit("COOL");
+                    yield break;
+                }
+                double elapsed = Time.realtimeSinceStartupAsDouble - t0;
+                if (elapsed > CooldownMaxSeconds)
+                {
+                    Say("Still hot after ten minutes");
+                    yield return Quit("COOLDOWN_TIMEOUT");
+                    yield break;
+                }
+                Show("cool_wait", $"COOLING: CLOCK {pct}%",
+                     $"Ready at {CoolEnoughPct.ToString("F0", CultureInfo.InvariantCulture)}% under load, twice in a row. " +
+                     $"Waiting {(elapsed / 60).ToString("F0", CultureInfo.InvariantCulture)} min so far.", "");
+                StepEnd = StepStart + CooldownProbeEverySeconds;
+                Say(clock >= CoolEnoughPct ? $"{pct} percent. One more check." : $"{pct} percent. Still cooling.");
+                yield return new WaitForSecondsRealtime(CooldownProbeEverySeconds);
+            }
+        }
+
+        static double s_SpinSink;
+
+        static void Spin(ManualResetEventSlim stop)
+        {
+            double x = 1.0;
+            while (!stop.IsSet)
+                for (int i = 0; i < 100000; i++) x = Math.Sqrt(x + i);
+            s_SpinSink = x; // keep the loop observable
         }
 
         /// <summary>Waits for the glasses and checks that the native session was created.</summary>
@@ -722,6 +797,7 @@ namespace EyeLabGates
             {
                 case GateKind.G1: return "G1 camera only";
                 case GateKind.G2: return "G2 6DoF";
+                case GateKind.Cooldown: return "Cool-down check";
                 case GateKind.G3:
                     string reader = m_Source.SourceName == "drain" ? " +drain" : "";
                     string flush = (m_Args.FlushLag > 0 ? " +flush" : "") + (m_Args.RenderFps == 30 ? " @30fps" : "");

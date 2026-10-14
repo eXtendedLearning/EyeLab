@@ -211,7 +211,7 @@ namespace EyeLabGates
 
             // ---- host throttling warning (CPU clock well below nominal)
             double clock = m_Perf.CpuPerformancePct;
-            if (!double.IsNaN(clock) && clock < 80.0)
+            if (!double.IsNaN(clock) && clock < 80.0 && !m_Gate.IsCooldown)
             {
                 var warn = Style(Mathf.RoundToInt(h / 30f), TextAnchor.MiddleCenter, true);
                 float wh = warn.fontSize * 1.5f;

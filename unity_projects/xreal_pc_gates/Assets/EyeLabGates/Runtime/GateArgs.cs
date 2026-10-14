@@ -6,11 +6,11 @@ using UnityEngine;
 
 namespace EyeLabGates
 {
-    public enum GateKind { Manual, G1, G2, G3 }
+    public enum GateKind { Manual, G1, G2, G3, Cooldown }
 
     /// <summary>
     /// Command-line arguments of the gate player (docs/XREAL-PC-GATES-G1-G3.md §5):
-    /// <c>-gate G1|G2|G3|manual -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60 -duration s
+    /// <c>-gate G1|G2|G3|manual|cooldown -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60 -duration s
     /// -snapshotEvery s -label text -logRoot dir</c>. G1-G3 follow the timed protocols in
     /// <see cref="GateProtocol"/>; <c>-duration</c> only applies to manual (it is recorded otherwise).
     /// Unknown arguments (e.g. Unity's own <c>-logFile</c>) are ignored.
@@ -72,6 +72,7 @@ namespace EyeLabGates
                             case "g2": a.Gate = GateKind.G2; break;
                             case "g3": a.Gate = GateKind.G3; break;
                             case "manual": a.Gate = GateKind.Manual; break;
+                            case "cooldown": a.Gate = GateKind.Cooldown; break;
                             default: a.Warnings.Add($"unknown -gate '{value}', using manual"); break;
                         }
                         break;

@@ -40,7 +40,7 @@ if not defined REPO (
 echo  Check: the same build time is shown small at the bottom left of the app.
 echo  Before each run: Nebula and XREAL apps closed, glasses on the Surface USB-C, mains power,
 echo  Windows power mode "Best performance", Surface standing in a cool place, sound on.
-echo  If the app shows "SURFACE THROTTLED", let it cool for a few minutes before the next run.
+echo  Between XR runs use K (cool-down check): it says "Cool enough" when the next run can start.
 echo  Run folder: %RUNROOT%
 echo.
 echo  1  G1         camera only, no XR                          (about 2 min)
@@ -51,12 +51,13 @@ echo  5  G2         6DoF tracking only                          (about 4.5 min)
 echo  6  G3-3DoF    camera + XR in 3DoF (no 6DoF tracking)      (about 3 min)
 echo  7  G3c-drain  as 2, latest-frame reader                   (about 3 min)
 echo  8  Manual     keyboard control
+echo  K  Cool-down  CPU clock check, run between XR gates      (until cool, max 10 min)
 echo  V  Vendor     XREAL RGBCamera sample (control, unmodified)
 echo  O  Open run folder
 echo  Z  Zip NEW runs for transfer (exported runs move to _exported)
 echo  Q  Quit
 echo.
-choice /c 12345678VOZQ /n /m "Select: "
+choice /c 12345678KVOZQ /n /m "Select: "
 set "SEL=%errorlevel%"
 if "%SEL%"=="1" call :gate G1 g1 & goto menu
 if "%SEL%"=="2" call :gate G3 g3c -order tracked & goto menu
@@ -66,9 +67,10 @@ if "%SEL%"=="5" call :gate G2 g2 & goto menu
 if "%SEL%"=="6" call :gate G3 g3_3dof -order 3dof & goto menu
 if "%SEL%"=="7" call :gate G3 g3c_drain -order tracked -reader drain & goto menu
 if "%SEL%"=="8" call :gate manual manual & goto menu
-if "%SEL%"=="9" call :vendor & goto menu
-if "%SEL%"=="10" start "" explorer "%RUNROOT%" & goto menu
-if "%SEL%"=="11" call :zipruns & goto menu
+if "%SEL%"=="9" call :gate cooldown cooldown & goto menu
+if "%SEL%"=="10" call :vendor & goto menu
+if "%SEL%"=="11" start "" explorer "%RUNROOT%" & goto menu
+if "%SEL%"=="12" call :zipruns & goto menu
 goto :eof
 
 rem %1 gate, %2 label, %3..%6 optional extra args

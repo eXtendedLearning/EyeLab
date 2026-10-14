@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.2.005<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.2.006<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -25,6 +25,10 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.2.006) XREAL gate harness: cool-down check between XR runs (launcher `K`;
+  reads the Surface CPU clock under a short load and says "Cool enough" at
+  150 % of nominal), tracking wait shortened to 30 s, run archive accepts
+  cool-down runs. Rebuilt (`LATEST_BUILD.txt` 2026-10-14T10:03:14Z).
 - (0.2.005) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §15): voice-guided runs of
   14 Oct analysed. Surface CPU throttles to 45-60 % of nominal about 50 s into
   XR, which explains the 101 s camera lag; Eye image buffer is bottom-up

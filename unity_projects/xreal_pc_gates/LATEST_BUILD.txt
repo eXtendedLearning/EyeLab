@@ -1,5 +1,5 @@
 # Newest XREAL gate build (written by BuildGates.BuildAll; commit it with the build's source).
 # The Surface launcher warns when its BUILD_INFO.txt utc_build differs from this one.
-utc_build = 2026-10-14T09:18:55Z
-zip = Builds/XrealPcGates_20261014_1119.zip
-source_git_head = 227da0851b8615b3bacdef9565df7bc2c9d3db84
+utc_build = 2026-10-14T10:03:14Z
+zip = Builds/XrealPcGates_20261014_1203.zip
+source_git_head = fc7679eafe686d472a76a4316d5f9bc38426607e

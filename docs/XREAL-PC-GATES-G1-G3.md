@@ -835,7 +835,7 @@ Three findings:
    calibration use (a mirrored image calibrates to the wrong handedness).
    The §12 claim that the snapshots were upright was wrong.
 
-### Changes in build `2026-10-14T09:18:55Z`
+### Changes in builds `2026-10-14T09:18:55Z` and `2026-10-14T10:03:14Z`
 
 - Tracking reason from the native log callback (above); `native.log` per run;
   `native_log` events (`INSTALLED`/`UNAVAILABLE`, `SUMMARY` with line counts).
@@ -843,6 +843,13 @@ Three findings:
 - Preview: correct orientation, **colour** (BT.601 from the Y/U/V planes),
   45 % of each eye's width, bottom centre.
 - HUD: red **SURFACE THROTTLED** line when the CPU clock is below 80 % of nominal.
+- **Cool-down check** (launcher `K`, `-gate cooldown`, no glasses needed): every 10 s it loads
+  two CPU threads for 3.5 s and reads the clock (an idle CPU clocks down by itself, so the
+  clock is only meaningful under load); two readings at or above 150 % of nominal end it with
+  "Cool enough" (cool Surface: about 220 %, throttled: 45-60 %). Probes are logged as
+  `cooldown_probe` events, so cooling methods (radiator, fan) can be compared. Gave up after 10 min.
+- Tracking wait shortened to 30 s (ready was reported 1.4-24 s after XR start); with no tracking
+  report at all the run continues after 15 s.
 - G3c-30fps (`-renderFps 30`, vSyncCount 2): halves the XR render load, to test
   whether a lighter load avoids throttling.
 - Launcher: new order (G1, G3c, G3c-30fps, G3c-flush, G2, G3-3DoF, G3c-drain),
@@ -881,6 +888,6 @@ Retention:
 
 Before running: mains power, Windows power mode **Best performance**, Surface
 upright on its kickstand in a cool spot (a desk fan on its back helps), and
-let it cool for 5 minutes between XR runs, or until the HUD no longer shows
-SURFACE THROTTLED. Order: **G1** (sanity: colour, upright preview), **G3c**,
+run the cool-down check (`K`) between XR runs and start the next run when it
+says "Cool enough". Order: **G1** (sanity: colour, upright preview), **G3c**,
 **G3c-30fps**, **G3c-flush**, then G2 and the rest if time allows.
