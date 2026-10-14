@@ -8,7 +8,8 @@ namespace EyeLabGates
     /// Samples the XR head pose every <c>Update</c> (phase <c>update</c>) and in
     /// <see cref="Application.onBeforeRender"/> (phase <c>render</c>) into pose.csv: head device validity,
     /// <see cref="CommonUsages.trackingState"/> flags, position (m) and rotation, the main camera's world
-    /// pose, <see cref="XREALPlugin.GetTrackingType"/> and whether the XREAL loader is active.
+    /// pose, <see cref="XREALPlugin.GetTrackingType"/>, whether the XREAL loader is active and the native
+    /// tracking reason (sampled in the update phase; 0 = tracking ready).
     /// </summary>
     public sealed class PoseProbe : MonoBehaviour
     {
@@ -21,6 +22,7 @@ namespace EyeLabGates
         public Quaternion LastRotation { get; private set; } = Quaternion.identity;
         public string LastTrackingType { get; private set; } = "";
         public bool LoaderActive { get; private set; }
+        public int LastTrackingReason { get; private set; } = NativeTracking.NoValue;
 
         public void Attach(GateRunLog log) => m_Log = log;
 
@@ -41,6 +43,7 @@ namespace EyeLabGates
             {
                 // Native tracking-type query only with an active session; without one there is nothing to ask.
                 LastTrackingType = LoaderActive ? XREALPlugin.GetTrackingType().ToString() : "";
+                LastTrackingReason = NativeTracking.Reason();
             }
 
             InputDevice head = InputDevices.GetDeviceAtXRNode(XRNode.Head);
@@ -73,7 +76,8 @@ namespace EyeLabGates
                 $"{GateRunLog.F(Time.realtimeSinceStartupAsDouble)},{Time.frameCount},{phase},{(valid ? 1 : 0)},{(int)state}," +
                 $"{F(p.x)},{F(p.y)},{F(p.z)},{F(q.x)},{F(q.y)},{F(q.z)},{F(q.w)}," +
                 $"{F(cp.x)},{F(cp.y)},{F(cp.z)},{F(cq.x)},{F(cq.y)},{F(cq.z)},{F(cq.w)}," +
-                $"{LastTrackingType},{(LoaderActive ? 1 : 0)}");
+                $"{LastTrackingType},{(LoaderActive ? 1 : 0)}," +
+                $"{(LastTrackingReason == NativeTracking.NoValue ? "" : LastTrackingReason.ToString(System.Globalization.CultureInfo.InvariantCulture))}");
         }
 
         static string F(float v) => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture);

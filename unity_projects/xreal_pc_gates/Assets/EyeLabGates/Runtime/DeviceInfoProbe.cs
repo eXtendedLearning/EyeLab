@@ -24,6 +24,7 @@ namespace EyeLabGates
             var a = new JsonObject()
                 .Set("gate", args.GateName)
                 .Set("order", args.Order)
+                .Set("reader", args.Reader)
                 .Set("duration_s", args.Duration)
                 .Set("snapshot_every_s", args.SnapshotEvery)
                 .Set("label", args.Label)

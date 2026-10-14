@@ -314,6 +314,8 @@ diagnostic only.
 
 ### `run_gates.bat` (written by Claude Code in D8)
 
+> **Superseded 2026-10-13 by §13** (guided protocols, new menu). Kept for the record.
+
 A menu launcher in the build root. Each option runs
 `GateHarness\XrealPcGates.exe -gate … -label <option> -logFile "<runroot>\player_<gate>_<timestamp>.log"`
 so that every run keeps its own Unity player log next to the CSVs.
@@ -532,3 +534,177 @@ unity run C:\GitHub_Uni\EyeLab\unity_projects\xreal_pc_gates -l <log> -- -execut
 ```
 
 (`unity run` adds `-batchmode -quit` itself and rejects a forwarded `-quit`.)
+
+## 12. Surface results (2026-10-10, 2026-10-13)
+
+Full numbers: `GateRuns/CODY_0526_20261013_143648/report.md` (gitignored). Status rows:
+`CAPABILITIES.md` 4, 11, 16-18. Analysis was done with a quick script; the §8
+package is still to be written.
+
+**2026-10-10: nothing ran.** Windows Smart App Control refused `libnr_api.dll`
+(error 4551, `An Application Control policy has blocked this file`) in every
+player, including the vendor control → `NotFindRuntime`, no session, black XR
+display, frozen HUD. All XREAL DLLs are unsigned. Jack turned Smart App Control
+off on 2026-10-13 (`HARDWARE.md`).
+
+**2026-10-13:**
+
+| Gate | Result | Missing for a formal verdict |
+|---|---|---|
+| G1 | Frames: 30.0 Hz, 1280×720, `cam_ts` in ns, strictly increasing, no skipped frames, max gap 67 ms; snapshots show a live upright scene | S1 marks (static/motion/covered), restart cycles (capture was stopped after 17 s by the sample's on-screen Stop button), plate in view |
+| G2 | 6DoF: switch true, pose valid with Position+Rotation, changing on 99 % of render frames; TrackingReason Initializing → Scanning → None in ~4 s | S2 translation/rotation reps with marks, ≥180 s |
+| G3 xrfirst | **Degrades.** Camera 23.8 Hz but every frame is delivered in order, so latency grows ~0.2 s per second (+6.8 s after 33 s); TrackingReason never reaches None; pose plausible for ~16 s, then runs away to 23 m and freezes | – (fails as run) |
+| G3b camfirst | **Fails.** Camera 29.6 Hz; perception start errors (`GlassesDisconnect`, `InvalidArgument`); pose constant for the whole run **while reported valid with Position+Rotation** | – |
+
+Outcome-matrix row (§9): **G1 ✓, G2 ✓, G3 ✗ on this host** — camera and 6DoF
+degrade each other. What the data does not yet separate: SDK behaviour vs.
+Surface CPU load (H.26x decode, SLAM and 3840×1080 rendering on an Iris Plus
+machine), and the effect of the start order.
+
+Lessons for the harness and for EyeLab:
+
+- `InputDevices` `isValid`/`trackingState` are **not** health signals (G3b). Use
+  pose change plus the native TrackingReason (`NotTrackingReason`: 0 None,
+  1 Initializing, 2 Relocalizing, 3 InsufficientLight, 4 InsufficientFeatures,
+  5 ExcessiveMotion, 6 Unsupported, 7 CameraUnavailable, 8 Scanning; visible in
+  the player log as `TrackingReason changed`).
+- The vendor camera texture acquires at most one frame per Unity `Update` and the
+  native layer queues, so a slow consumer accumulates latency instead of dropping
+  frames. EyeLab must read the newest frame, never the oldest.
+- The vendor calibration calls (`GetCameraIntrinsic`, `GetDevicePoseFromHead`,
+  `GetDeviceResolution`) return `false` before XR starts and plausible values
+  inside XR (RGB fx≈fy≈607.3 px at 1280×720; RGB camera ≈28 mm ahead of the head
+  origin; displays ±31.6 mm). Vendor claims for G4, not validated.
+- Showing the Eye image on the glasses (the G3 observation) is uncalibrated video
+  see-through. It proves the data path. Registering an optical overlay needs the
+  camera-to-head extrinsic and per-eye projection validated against a ChArUco
+  calibration of the delivered mode (G4, ADR-003).
+
+**Proposed next runs (not yet implemented):**
+
+1. **G3c:** camera started only after TrackingReason reaches None, with the
+   reason logged per frame (the API is `internal`; read it by reflection).
+2. **Latest-frame reader:** drain the native queue each `Update` and log the
+   backlog, to test whether latency can be bounded.
+3. **G3 in 3DoF:** camera + XR rendering without SLAM, plus process CPU time in
+   the logs, to separate render/decode load from SLAM.
+4. **Full S1/S2 protocols** for formal G1/G2 verdicts.
+5. Harness fixes: abort with `NO_SESSION` when the session fails; log each
+   distinct native error once with a count; disable the sample's on-screen
+   Play/Stop buttons in the harness scene.
+
+## 13. Guided harness (build of 2026-10-13) — operator instructions
+
+What changed after §12, and exactly what to do on the Surface.
+
+### What changed in the harness
+
+- **Guided protocols.** G1, G2 and G3 now run the §6 protocols as timed steps.
+  The current instruction is shown in **yellow** with a countdown, the next one
+  in grey, and every new step is announced by a **short beep**. No `M` presses
+  are needed (`M` still adds an extra mark). Steps are logged as `step` events,
+  which is what the analysis segments on.
+- **Tracking state on screen.** The HUD shows `TRACKING: READY` (green) or the
+  reason it is not ready (red: `INITIALIZING`, `SCANNING`, `INSUFFICIENTLIGHT`,
+  ...), read from the native `GetTrackingReason` export. A **long high beep**
+  sounds when tracking becomes ready.
+- **New G3 variants:** G3c (camera only after READY), G3c-drain (same with a
+  latest-frame reader), G3-3DoF (camera with XR rendering but no 6DoF tracking),
+  and the 13 Oct G3-xr ordering for comparison. G3b (camera before XR) is
+  dropped from the menu: it failed on 13 Oct.
+- **Live diagnostics:** camera fps, **camera lag growth** (how far behind the
+  image is compared with the start of capture), frames drained, process CPU
+  in cores.
+- **HUD in both eyes** in XR (the 3840×1080 window is side by side), larger font.
+- **Fixes:** the sample's on-screen Play/Stop buttons are hidden (a click
+  stopped the 13 Oct G1 capture); `NO_SESSION` stops the run when the native
+  session was not created; repeated native errors are logged once and counted
+  (`repeat_summary` at the end) instead of thousands of rows.
+
+### Do I click anything?
+
+**No.** Start a gate from `run_gates.bat`; from then on the harness connects,
+enters XR, switches tracking, starts the camera and steps through the protocol
+by itself. Do not click in the app window (the sample's remaining "Enter XR"
+and DoF buttons would interfere). Keys: **Esc** aborts (only if something is
+clearly wrong; an aborted run is still logged), **M** adds an extra mark. Let
+every run finish on its own: the formal criteria need the full length.
+
+### How do I know tracking is ready (G2, G3c)?
+
+After Enter XR and the 6DoF switch the harness shows, in the glasses:
+
+> LOOK AROUND SLOWLY at a well-lit, textured part of the room until TRACKING turns READY. (60 s)
+
+with the red tracking line below it, typically `INITIALIZING`, then `SCANNING`.
+`SCANNING` means the tracker wants to see the environment: turn your head
+slowly left and right over furniture, shelves, posters (not a blank wall, a
+window or only the floor). Do not cover the Eye. When the tracker reports
+normal tracking for one continuous second:
+
+- the line turns **green `TRACKING: READY`**;
+- you hear a **long high beep**;
+- the yellow instruction switches to the first protocol step (with its short beep).
+
+On 13 Oct this took about 4 s in G2. If it is not ready after 60 s, G3c stops
+with `TRACKING_TIMEOUT` (G2 carries on; the run then documents the failure).
+If tracking drops later, the line turns red again; keep following the steps.
+
+### Before the session (once)
+
+1. Copy and unzip the new build (`Builds/XrealPcGates_20261013_1513.zip`) to
+   `C:\EyeLabGates\`, replacing the old folder. Smart App Control stays off.
+2. Optional but tidy: move the old run folders out of
+   `%USERPROFILE%\AppData\LocalLow\EyeLab\XrealPcGates\GateRuns` (menu `O`), so
+   the transfer zip holds only the new runs.
+3. Mains power; Nebula and every XREAL app closed; glasses straight into the
+   Surface USB-C; decline any firmware update.
+4. Scene: plate A or L at about 0.5 m on a textured table in good light; tape
+   marks **A** and **B** on the floor 500 mm apart (B to the right of A); two
+   reference directions 90° apart (e.g. two walls of a room corner); some
+   textured objects in view for tracking.
+
+### Run order and what to do in each
+
+Run them in this order. Wear the glasses for every run (in G1 holding them is
+fine, but the Eye must see the plate).
+
+| # | Run | What happens automatically | What you do |
+|---|---|---|---|
+| 1 | **G1** (~1.5 min, no XR) | connect, camera on, 4 guided steps, 3 automatic camera restarts, quit. The HUD is on the **Surface screen** (no XR) | Look at the plate: **still 20 s, slow head motion 20 s, cover the Eye 5 s, uncover 10 s**, then stay still during the restarts. Follow the beeps. |
+| 2 | **G2** (~4 min) | connect, Enter XR (screens rearrange), 6DoF, wait for READY, 40 guided steps incl. an automatic 3DoF/6DoF switch, exit XR, quit | Put the glasses on when told; look around until READY. Then: **still on A 30 s**; **3 translations** (on A, side-step right to B, hold, back to A, hold); **3 rotations** (reference 1, turn 90° to reference 2, hold, back, hold); **cover/uncover**; after the switch to 3DoF **one more translation**. Keep height and facing during side-steps. |
+| 3 | **G3c** (~3 min) | as G2 up to READY, then camera on, 11 guided steps, camera off, quit | Look around until READY, then: still at the plate 20 s, slow motion 20 s, cover 5 s, uncover 10 s, one translation A-B-A, look around slowly 40 s, still 20 s. Watch the HUD **lag** value and the TRACKING line; note anything odd. |
+| 4 | **G3c-drain** (~3 min) | same as 3 with the latest-frame reader | Same as 3. |
+| 5 | **G3-3DoF** (~2.5 min) | XR in 3DoF (no tracking wait), camera on, same steps | Same steps as 3 (side-steps do not move the pose in 3DoF: expected). |
+| 6 | **G3-xr** (~2.5 min) | the 13 Oct ordering: camera right after the 6DoF switch | Same steps as 3. |
+| – | Manual / Vendor | only if something needs a closer look | – |
+
+Then menu **Z** zips all runs. Copy the zip to the desktop into
+`unity_projects/xreal_pc_gates/GateRuns/` (not into `Builds/`, which every
+rebuild cleans) and note what you saw (lag, flicker, tracking drops,
+disconnects).
+
+### What the comparison will tell us
+
+| If ... | then ... |
+|---|---|
+| G3c keeps READY and the lag stays bounded | the 13 Oct failure was the start order; concurrent use is feasible on the Surface |
+| lag grows in G3c but not in G3c-drain | the backlog is in the application read path; EyeLab must drain to the newest frame |
+| lag grows in both and `drained` stays 0 | the backlog is upstream (decoder/transport): host CPU or SDK limit |
+| G3-3DoF is fine but G3c is not | 6DoF tracking plus camera is the limit, not rendering |
+| CPU (cores busy) near the Surface core count when it fails | host-bound; a faster host (desktop + DP-in, ADR-003 Q6) is the next test |
+
+### Log schema changes (supersede the §11 table where they differ)
+
+- `camera.csv` adds `drained` (frames discarded before this one in the same
+  Update; empty for the vendor reader) and `source` (`vendor`/`drain`).
+- `pose.csv` adds `tracking_reason` (native `NotTrackingReason`, 0 = ready;
+  empty when XR is off).
+- New `perf.csv` (1 Hz): `t_unity,frame,unity_fps,cpu_process_pct,cpu_cores_busy,gc_mb,cam_fps,tracking_reason,step`.
+- New events: `session` (`OK`/`NO_SESSION`), `tracking_reason` (on change),
+  `tracking_ready` (`WAIT`/`READY`/`TIMEOUT`), `protocol` (`begin`/`end`),
+  `step` (result = step id), `repeat_summary` (result = count). `xreal_error`
+  and `unity_log` now appear once per distinct message.
+- `-order` accepts `tracked` (default), `xrfirst`, `3dof`, `camfirst`;
+  `-reader vendor|drain`. `-duration` only applies to manual. New `gate_result`
+  values: `NO_SESSION`, `TRACKING_TIMEOUT`.

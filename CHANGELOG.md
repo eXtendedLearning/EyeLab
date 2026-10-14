@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.2.002<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.2.003<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -25,6 +25,21 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.2.003) Gate harness, guided build (`XREAL-PC-GATES-G1-G3.md` §13): timed
+  on-screen protocols with beeps replace manual marks; native tracking reason
+  shown (READY/SCANNING...) and logged; new G3 variants (camera after tracking
+  ready, latest-frame reader, 3DoF, 13 Oct ordering); per-second CPU/frame-rate
+  log (`perf.csv`); live camera-lag readout; HUD in both eyes; `NO_SESSION`
+  stop, de-duplicated native errors, sample Play/Stop buttons hidden. Rebuilt
+  both Windows players. BuildGates keeps run zips found in `Builds/Win64`.
+- (0.2.003) XREAL PC-beta gate results from the Surface (`XREAL-PC-GATES-G1-G3.md`
+  §12; `CAPABILITIES.md` rows 4, 11, 16-18; `HARDWARE.md`). Windows Smart App
+  Control blocked the unsigned XREAL runtime on 2026-10-10; with it off
+  (2026-10-13) Eye frames (30 Hz, 1280x720) and 6DoF are each observed, but
+  camera + 6DoF together degrade on the Surface (growing camera latency,
+  tracking never initialises or fails depending on start order). Vendor
+  intrinsics/extrinsics recorded as claims for G4. Firmware string is not
+  readable through the SDK (licence-refused).
 - Build numbering `MAJOR.MINOR.BUILD`, baseline 0.2.001: `python/eyelab_version.py`
   is the single source (now also runnable: `--string` / `--package`);
   `tools/bump_version.py` bumps and stamps README, this file and the Unity

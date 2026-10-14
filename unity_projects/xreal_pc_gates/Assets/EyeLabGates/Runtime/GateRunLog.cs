@@ -12,16 +12,17 @@ namespace EyeLabGates
 {
     /// <summary>
     /// One gate run on disk: <c>&lt;logRoot&gt;/&lt;yyyymmdd_HHmmss&gt;_&lt;gate&gt;_&lt;label&gt;/</c> with
-    /// <c>run.json</c>, <c>camera.csv</c>, <c>pose.csv</c>, <c>events.csv</c> and <c>snapshots/</c>.
+    /// <c>run.json</c>, <c>camera.csv</c>, <c>pose.csv</c>, <c>events.csv</c>, <c>perf.csv</c> and <c>snapshots/</c>.
     /// CSV rows are buffered in memory and appended by <see cref="FlushIfDue"/> (every 1 s) and
     /// <see cref="Flush"/> (on quit). All numbers use the invariant culture.
     /// </summary>
     public sealed class GateRunLog
     {
-        public const string CameraHeader = "t_unity,frame,cam_ts,res_w,res_h,y_mean,y_mad_prev,dup_ts";
+        public const string CameraHeader = "t_unity,frame,cam_ts,res_w,res_h,y_mean,y_mad_prev,dup_ts,drained,source";
         public const string PoseHeader = "t_unity,frame,phase,valid,tracking_state,pos_x,pos_y,pos_z,rot_x,rot_y,rot_z,rot_w," +
-                                         "cam_pos_x,cam_pos_y,cam_pos_z,cam_rot_x,cam_rot_y,cam_rot_z,cam_rot_w,tracking_type,loader_active";
+                                         "cam_pos_x,cam_pos_y,cam_pos_z,cam_rot_x,cam_rot_y,cam_rot_z,cam_rot_w,tracking_type,loader_active,tracking_reason";
         public const string EventsHeader = "t_unity,frame,event,result,detail";
+        public const string PerfHeader = "t_unity,frame,unity_fps,cpu_process_pct,cpu_cores_busy,gc_mb,cam_fps,tracking_reason,step";
 
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -34,6 +35,7 @@ namespace EyeLabGates
         readonly StringBuilder m_Camera = new StringBuilder();
         readonly StringBuilder m_Pose = new StringBuilder();
         readonly StringBuilder m_Events = new StringBuilder();
+        readonly StringBuilder m_Perf = new StringBuilder();
         readonly int m_MainThreadId;
         double m_LastFlush;
         bool m_RunInfoDirty;
@@ -47,6 +49,7 @@ namespace EyeLabGates
             File.WriteAllText(Path.Combine(dir, "camera.csv"), CameraHeader + "\n");
             File.WriteAllText(Path.Combine(dir, "pose.csv"), PoseHeader + "\n");
             File.WriteAllText(Path.Combine(dir, "events.csv"), EventsHeader + "\n");
+            File.WriteAllText(Path.Combine(dir, "perf.csv"), PerfHeader + "\n");
         }
 
         public static GateRunLog Create(GateArgs args)
@@ -76,6 +79,8 @@ namespace EyeLabGates
         public void Camera(string row) { lock (m_Lock) m_Camera.Append(row).Append('\n'); }
 
         public void Pose(string row) { lock (m_Lock) m_Pose.Append(row).Append('\n'); }
+
+        public void Perf(string row) { lock (m_Lock) m_Perf.Append(row).Append('\n'); }
 
         public void Event(string evt, object result = null, string detail = null)
         {
@@ -119,12 +124,13 @@ namespace EyeLabGates
 
         public void Flush()
         {
-            string cam, pose, ev, json = null;
+            string cam, pose, ev, perf, json = null;
             lock (m_Lock)
             {
                 cam = Take(m_Camera);
                 pose = Take(m_Pose);
                 ev = Take(m_Events);
+                perf = Take(m_Perf);
                 if (m_RunInfoDirty)
                 {
                     json = RunInfo.ToJson();
@@ -136,6 +142,7 @@ namespace EyeLabGates
                 if (cam.Length > 0) File.AppendAllText(Path.Combine(Directory, "camera.csv"), cam);
                 if (pose.Length > 0) File.AppendAllText(Path.Combine(Directory, "pose.csv"), pose);
                 if (ev.Length > 0) File.AppendAllText(Path.Combine(Directory, "events.csv"), ev);
+                if (perf.Length > 0) File.AppendAllText(Path.Combine(Directory, "perf.csv"), perf);
                 if (json != null) File.WriteAllText(Path.Combine(Directory, "run.json"), json);
             }
             catch (Exception e)

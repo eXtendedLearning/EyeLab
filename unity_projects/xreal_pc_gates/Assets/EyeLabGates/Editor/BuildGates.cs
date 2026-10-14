@@ -47,6 +47,15 @@ namespace EyeLabGates.EditorTools
 
             if (Directory.Exists(Win64Dir))
             {
+                // Run zips returned from the Surface are sometimes dropped here; keep them.
+                string keep = Path.Combine(ProjectDir, "GateRuns");
+                foreach (var z in Directory.GetFiles(Win64Dir, "GateRuns_*.zip"))
+                {
+                    Directory.CreateDirectory(keep);
+                    string dest = Path.Combine(keep, Path.GetFileName(z));
+                    if (!File.Exists(dest)) File.Move(z, dest);
+                    Log($"moved run zip {Path.GetFileName(z)} -> GateRuns/");
+                }
                 Directory.Delete(Win64Dir, true);
                 Log($"cleaned {Win64Dir}");
             }

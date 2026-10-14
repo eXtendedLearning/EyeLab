@@ -5,7 +5,7 @@
 > each machine can and cannot do with the glasses. Update it whenever hardware is
 > bought, lent, or a capability is verified or refuted.
 >
-> Last updated: 2026-10-09 (desktop USB/NCM and TCP preflight observed; PC beta camera sample inspected; emulator assessment corrected in `XREAL-PC-BETA-2026-10-09.md`).
+> Last updated: 2026-10-13 (Surface runs of the PC beta 3.1.2 gate harness: Smart App Control must be off; Eye frames and 6DoF each observed, concurrent use degrades. Earlier: 2026-10-09 desktop USB/NCM and TCP preflight; PC beta sample inspected; emulator assessment corrected).
 
 ## Glasses
 
@@ -13,7 +13,8 @@
   Eye's camera feed is the project's critical dependency — see ADR-003 and
   `docs/S3-HANDOVER-2026-09-25.md`.
 - **Firmware:** Nebula updated it after the 2026-09-25 runs; the new version is
-  not recorded yet. **`python/xreal_probe.py` (S0) cannot record it**: it
+  not recorded yet. The PC beta 3.1.2 version calls are licence-refused
+  (`CAPABILITIES.md` row 4, 2026-10-13). **`python/xreal_probe.py` (S0) cannot record it**: it
   resolves `Get_Glasses_FW_Version` but deliberately never calls it (signature
   not recovered, `python/xreal_glasses.py`). Read the version from Nebula's UI
   for now; a read-only call is possible only after its signature is recovered.
@@ -46,10 +47,11 @@ Two machines, with complementary limits:
 |---|---|---|
 | GPU | NVIDIA RTX 5060 (discrete only — F-series CPU, **no iGPU**) | Intel integrated |
 | Motherboard | ASUS TUF B860-PLUS WIFI (has a Thunderbolt/USB4 header) | — |
-| USB data to the glasses | **yes** — S0, S2 and the S3/S3b runs were made here | not tested with the native probes |
+| USB data to the glasses | **yes** — S0, S2 and the S3/S3b runs were made here | **yes** — PC beta 3.1.2 session, Eye frames and 6DoF observed 2026-10-13 (not with the native probes) |
 | Glasses as a display (USB-C DP Alt Mode) | **no** — on a desktop board the Type-C DP Alt Mode is sourced by the iGPU, which this CPU lacks; the RTX 5060's outputs are not USB-C | **yes** — S1 display smoke test passed 2026-09-22 |
 | Cameras | desktop USB webcam (model to record) | built-in cameras |
-| Current role | native-SDK probing (S0–S5), compute-heavy work | display path (S1; S6 candidate), portable demos |
+| Windows security | – | **Smart App Control must be off** for the XREAL PC SDK: it blocked the unsigned `libnr_api.dll` (error 4551) on 2026-10-10; turned off by Jack 2026-10-13 |
+| Current role | native-SDK probing (S0–S5), compute-heavy work | display path (S1; S6 candidate), PC beta gate runs, portable demos |
 
 The glasses have a single USB-C connector, so the host must deliver video
 **and** USB data on that one cable for S6 (eye-POV overlay): only the Surface
@@ -94,3 +96,13 @@ beta's control preflight endpoint `169.254.2.1:52999` succeeds without sending
 application bytes. The separate CDC ECM interface reports Error. No XREAL
 monitor or standard Windows Eye camera is enumerated. These observations
 establish connectivity, not delivered camera frames or head poses.
+
+## Surface PC-beta gate runs (2026-10-10, 2026-10-13)
+
+Gate harness `unity_projects/xreal_pc_gates/`, procedure and analysis in
+`XREAL-PC-GATES-G1-G3.md` (§12), status rows 4, 11 and 16-18 in `CAPABILITIES.md`.
+In short: with Smart App Control off, the Surface runs an XREAL PC-beta session
+that presents on the glasses; the Eye delivers 1280x720 frames at 30 Hz without
+XR, and 6DoF tracking works on its own. Camera and 6DoF together degrade on this
+host (growing camera latency, tracking never initialises or fails). Whether the
+Surface's CPU is the cause has not been measured.

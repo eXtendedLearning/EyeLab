@@ -10,13 +10,16 @@ namespace EyeLabGates
 
     /// <summary>
     /// Command-line arguments of the gate player (docs/XREAL-PC-GATES-G1-G3.md §5):
-    /// <c>-gate G1|G2|G3|manual -order xrfirst|camfirst -duration s -snapshotEvery s -label text -logRoot dir</c>.
+    /// <c>-gate G1|G2|G3|manual -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -duration s
+    /// -snapshotEvery s -label text -logRoot dir</c>. G1-G3 follow the timed protocols in
+    /// <see cref="GateProtocol"/>; <c>-duration</c> only applies to manual (it is recorded otherwise).
     /// Unknown arguments (e.g. Unity's own <c>-logFile</c>) are ignored.
     /// </summary>
     public sealed class GateArgs
     {
         public GateKind Gate = GateKind.Manual;
-        public string Order = "xrfirst";
+        public string Order = "tracked";
+        public string Reader = "vendor";
         public double Duration;
         public double SnapshotEvery = 2.0;
         public string Label = "run";
@@ -24,7 +27,7 @@ namespace EyeLabGates
         public string[] Raw = Array.Empty<string>();
         public readonly List<string> Warnings = new List<string>();
 
-        public bool CameraFirst => Order == "camfirst";
+        public static readonly string[] Orders = { "tracked", "xrfirst", "3dof", "camfirst" };
 
         public static double DefaultDuration(GateKind gate)
         {
@@ -71,10 +74,18 @@ namespace EyeLabGates
                     case "-order":
                         i++;
                         string order = (value ?? "").ToLowerInvariant();
-                        if (order == "xrfirst" || order == "camfirst")
+                        if (Array.IndexOf(Orders, order) >= 0)
                             a.Order = order;
                         else
-                            a.Warnings.Add($"unknown -order '{value}', using xrfirst");
+                            a.Warnings.Add($"unknown -order '{value}', using tracked");
+                        break;
+                    case "-reader":
+                        i++;
+                        string reader = (value ?? "").ToLowerInvariant();
+                        if (reader == "vendor" || reader == "drain")
+                            a.Reader = reader;
+                        else
+                            a.Warnings.Add($"unknown -reader '{value}', using vendor");
                         break;
                     case "-duration":
                         i++;
