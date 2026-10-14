@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.2.003<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.2.004<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -25,6 +25,15 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.2.004) XREAL gate runs of 2026-10-14 (old 9 Oct build) analysed in
+  `XREAL-PC-GATES-G1-G3.md` §14 and `CAPABILITIES.md` rows 16-18: complete G1
+  (30 fps, restart 0.9 s), 3-min G2 with tracking held, G3 tracking held but
+  camera lag growing to 102 s; camera-before-XR breaking 6DoF reproduced.
+  Harness: spoken step cues (Windows speech), 3-2-1 ticks, large flashing
+  banner in the middle of each eye, small grey Eye preview instead of the
+  full-screen sample image (which showed solid green without frames),
+  G3c-flush option, CPU utility/performance (throttling) logging, build time
+  in launcher and HUD, immediate log flush at the gate result.
 - (0.2.003) Gate harness, guided build (`XREAL-PC-GATES-G1-G3.md` §13): timed
   on-screen protocols with beeps replace manual marks; native tracking reason
   shown (READY/SCANNING...) and logged; new G3 variants (camera after tracking

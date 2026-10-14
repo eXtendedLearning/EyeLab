@@ -2,7 +2,6 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Text;
 using System.Threading.Tasks;
 using Unity.XR.XREAL;
 using Unity.XR.XREAL.Experimental;
@@ -13,13 +12,15 @@ using UnityEngine.XR;
 namespace EyeLabGates
 {
     /// <summary>
-    /// Gate state machine (G1/G2/G3/manual), guided protocol (timed steps with HUD countdown and beeps),
-    /// keyboard control, HUD and lifecycle event log. XR is entered and exited only through the scene's
-    /// <see cref="HelloMR.OnClickSwitchXRButton"/>, i.e. the vendor flow. In the Editor, XR is refused:
-    /// entering XR on the desktop changes its EDID and monitor layout (docs/XREAL-PC-GATES-G1-G3.md §1).
+    /// Gate state machine (G1/G2/G3/manual) and guided protocol: timed steps announced by voice and
+    /// beep and shown large by <see cref="GateHud"/>. Keyboard control and lifecycle event log. XR is
+    /// entered and exited only through the scene's <see cref="HelloMR.OnClickSwitchXRButton"/>, i.e.
+    /// the vendor flow. In the Editor, XR is refused: entering XR on the desktop changes its EDID and
+    /// monitor layout (docs/XREAL-PC-GATES-G1-G3.md §1).
     /// </summary>
     [RequireComponent(typeof(CameraProbe), typeof(PoseProbe), typeof(DeviceInfoProbe))]
     [RequireComponent(typeof(PerfProbe), typeof(VendorCameraSource), typeof(DrainingCameraSource))]
+    [RequireComponent(typeof(GateHud))]
     public sealed class GateController : MonoBehaviour
     {
         const float GlassesTimeout = 30f;
@@ -27,6 +28,9 @@ namespace EyeLabGates
         const float ExitXRTimeout = 10f;
         const float TrackingReadyTimeout = 60f;
         const float TrackingReadyHold = 1f;
+        const float TickFromStepSeconds = 8f;   // 3-2-1 ticks only on steps at least this long
+        const double FlushCooldown = 5.0;
+        const double LostCueCooldown = 5.0;
 
         [SerializeField] HelloMR m_HelloMR;
         [SerializeField] XREALRGBCameraTexture m_CameraTexture;
@@ -38,34 +42,43 @@ namespace EyeLabGates
         DeviceInfoProbe m_Device;
         PerfProbe m_Perf;
         CameraSource m_Source;
+        Speaker m_Speaker;
 
         bool m_GlassesConnected;
         bool m_SessionFailed;
         bool m_SubsystemsStarted;
+        bool m_InProtocol;
         int m_Marks;
         int m_CaptureSessions;
         int m_LastReason = NativeTracking.NoValue;
-        double m_StartTime;
+        double m_LastLostCue = double.NegativeInfinity;
+        double m_LastFlush = double.NegativeInfinity;
+        int m_LastTick = -1;
+        float m_StepSeconds;
         bool m_Quitting;
         bool m_SummaryWritten;
         Coroutine m_Sequence;
         readonly Dictionary<string, int> m_Repeats = new Dictionary<string, int>();
 
-        // Guided-protocol state shown on the HUD.
-        string m_StepId = "setup";
-        string m_Instruction = "Starting...";
-        string m_NextInstruction = "";
-        int m_StepIndex, m_StepCount;
-        double m_StepEnd = double.NaN;
-
         AudioSource m_Audio;
-        AudioClip m_Beep, m_ReadyBeep;
-        GUIStyle m_HudStyle;
+        AudioClip m_Beep, m_Tick, m_ReadyBeep;
 
         public HelloMR HelloMR { get => m_HelloMR; set => m_HelloMR = value; }
         public XREALRGBCameraTexture CameraTexture { get => m_CameraTexture; set => m_CameraTexture = value; }
 
-        bool XRActive => XREALUtility.GetActiveLoader() != null;
+        // ---- state read by GateHud
+        public CameraSource Source => m_Source;
+        public bool XRActive => XREALUtility.GetActiveLoader() != null;
+        public bool GlassesConnected => m_GlassesConnected;
+        public int Marks => m_Marks;
+        public string GateTitle { get; private set; } = "";
+        public string StepTitle { get; private set; } = "STARTING";
+        public string StepDetail { get; private set; } = "";
+        public string NextTitle { get; private set; } = "";
+        public int StepIndex { get; private set; }
+        public int StepCount { get; private set; }
+        public double StepStart { get; private set; } = double.NegativeInfinity;
+        public double StepEnd { get; private set; } = double.NaN;
 
         void Awake()
         {
@@ -84,17 +97,33 @@ namespace EyeLabGates
             m_Source = m_Args.Reader == "drain" ? (CameraSource)drain : vendor;
             (m_Source == drain ? (Behaviour)vendor : drain).enabled = false;
 
+            // The sample's full-screen YUV RawImage renders solid green while no frames arrive (14 Oct
+            // G2) and spans both eyes in XR; GateHud draws a small preview instead.
+            if (drain.Preview != null)
+            {
+                drain.Preview.gameObject.SetActive(false);
+                drain.Preview = null;
+            }
+
             m_Camera.Attach(m_Log, m_Source, m_Args.SnapshotEvery);
             m_Pose.Attach(m_Log);
             m_Device.Attach(m_Log);
             m_Perf.Attach(m_Log, m_Camera, m_Pose, () => m_StepId);
-            m_StartTime = Time.realtimeSinceStartupAsDouble;
+            GateTitle = MakeGateTitle();
+            GetComponent<GateHud>().Attach(this, m_Camera, m_Pose, m_Perf, BuildStamp());
 
+            if (FindAnyObjectByType<AudioListener>() == null)
+                gameObject.AddComponent<AudioListener>();
             m_Audio = gameObject.AddComponent<AudioSource>();
             m_Audio.spatialBlend = 0f;
-            m_Beep = Tone("beep", 880f, 0.15f);
+            m_Audio.volume = 1f;
+            m_Beep = Tone("beep", 880f, 0.18f);
+            m_Tick = Tone("tick", 660f, 0.07f);
             m_ReadyBeep = Tone("ready", 1320f, 0.5f);
+            m_Speaker = Speaker.TryStart((result, detail) => m_Log.Event("speech", result, detail));
         }
+
+        string m_StepId = "setup";
 
         void OnEnable()
         {
@@ -128,7 +157,8 @@ namespace EyeLabGates
             foreach (var w in m_Args.Warnings)
                 m_Log.Event("arg_warning", "", w);
             m_Log.Event("gate_start", m_Args.GateName,
-                $"order={m_Args.Order} reader={m_Source.SourceName} label={m_Args.Label} dir={m_Log.Directory}");
+                $"order={m_Args.Order} reader={m_Source.SourceName} flushLag={m_Args.FlushLag.ToString(CultureInfo.InvariantCulture)} " +
+                $"label={m_Args.Label} dir={m_Log.Directory}");
             if (m_HelloMR == null) m_Log.Event("setup_warning", "", "HelloMR not found in scene");
             if (m_CameraTexture == null) m_Log.Event("setup_warning", "", "XREALRGBCameraTexture not found in scene");
 
@@ -138,7 +168,7 @@ namespace EyeLabGates
                 case GateKind.G2: m_Sequence = StartCoroutine(RunG2()); break;
                 case GateKind.G3: m_Sequence = StartCoroutine(RunG3()); break;
                 default:
-                    SetInstruction("manual", "Manual mode: use the keys below. Esc quits.", "");
+                    Show("manual", "MANUAL MODE", "Keys: C camera, X XR, 3/6 DoF, R recenter, M mark, Esc quit", "");
                     StartCoroutine(ProbeWhenConnected());
                     break;
             }
@@ -147,12 +177,40 @@ namespace EyeLabGates
         void Update()
         {
             HandleKeys();
+            double now = Time.realtimeSinceStartupAsDouble;
+
             int reason = m_Pose.LastTrackingReason;
             if (reason != m_LastReason)
             {
                 m_Log.Event("tracking_reason", NativeTracking.Name(reason), reason.ToString(CultureInfo.InvariantCulture));
+                if (m_InProtocol && m_LastReason == NativeTracking.Ready && reason != NativeTracking.NoValue
+                    && now - m_LastLostCue > LostCueCooldown)
+                {
+                    Say("Tracking lost");
+                    m_LastLostCue = now;
+                }
                 m_LastReason = reason;
             }
+
+            // 3-2-1 ticks before the end of long steps.
+            if (!double.IsNaN(StepEnd) && m_StepSeconds >= TickFromStepSeconds)
+            {
+                int left = (int)Math.Ceiling(StepEnd - now);
+                if (left >= 1 && left <= 3 && left != m_LastTick)
+                {
+                    m_Audio.PlayOneShot(m_Tick);
+                    m_LastTick = left;
+                }
+            }
+
+            // Optional flush: restart the camera when its backlog exceeds the threshold.
+            if (m_Args.FlushLag > 0 && m_Source.IsCapturing && !m_Quitting
+                && m_Camera.LagGrowth > m_Args.FlushLag && now - m_LastFlush > FlushCooldown)
+            {
+                m_LastFlush = now;
+                StartCoroutine(FlushCamera());
+            }
+
             m_Log.FlushIfDue();
         }
 
@@ -161,6 +219,8 @@ namespace EyeLabGates
             WriteRepeatSummary();
             m_Log.Event("application_quit", "", "");
             m_Log.Flush();
+            m_Speaker?.Dispose();
+            m_Speaker = null;
         }
 
         // ---------------------------------------------------------------- sequences
@@ -173,6 +233,7 @@ namespace EyeLabGates
 
         IEnumerator RunG1()
         {
+            Say("Gate one. Camera only.");
             string connect = null;
             yield return Connect(r => connect = r);
             if (connect != "OK") { yield return Quit(connect); yield break; }
@@ -185,6 +246,7 @@ namespace EyeLabGates
 
         IEnumerator RunG2()
         {
+            Say("Gate two. Six degrees of freedom.");
             string connect = null;
             yield return Connect(r => connect = r);
             if (connect != "OK") { yield return Quit(connect); yield break; }
@@ -202,6 +264,7 @@ namespace EyeLabGates
 
         IEnumerator RunG3()
         {
+            Say("Gate three. Camera and tracking.");
             string connect = null;
             yield return Connect(r => connect = r);
             if (connect != "OK") { yield return Quit(connect); yield break; }
@@ -223,7 +286,10 @@ namespace EyeLabGates
                 if (!ready) { yield return Quit("TRACKING_TIMEOUT"); yield break; }
             }
             if (order != "camfirst")
+            {
                 StartCapture(order == "tracked" ? "after_tracking_ready" : order == "3dof" ? "after_3dof" : "after_6dof_switch");
+                Say("Camera on");
+            }
 
             yield return RunProtocol(GateProtocol.G3());
             StopCapture("end");
@@ -233,7 +299,7 @@ namespace EyeLabGates
         /// <summary>Waits for the glasses and checks that the native session was created.</summary>
         IEnumerator Connect(Action<string> result)
         {
-            SetInstruction("connect", "Connecting to the glasses... (keep them plugged in)", "");
+            Show("connect", "CONNECTING", "Keep the glasses plugged into the Surface", "");
             m_Log.Event("wait_glasses", "begin", $"timeout={GlassesTimeout}s");
             bool ok = false;
             yield return WaitUntilOrTimeout(() => m_GlassesConnected, GlassesTimeout, r => ok = r);
@@ -256,7 +322,8 @@ namespace EyeLabGates
 
         IEnumerator StartXR(Action<string> result)
         {
-            SetInstruction("enter_xr", "Entering XR: put the glasses on now.", "");
+            Show("enter_xr", "PUT THE GLASSES ON", "Entering XR, the screens will rearrange", "");
+            Say("Put the glasses on");
             if (!EnterXR()) { result("XR_REFUSED"); yield break; }
             bool started = false;
             yield return WaitUntilOrTimeout(() => m_SubsystemsStarted, EnterXRTimeout, r => started = r);
@@ -272,12 +339,13 @@ namespace EyeLabGates
         /// </summary>
         IEnumerator WaitTrackingReady(Action<bool> result)
         {
-            SetInstruction("wait_tracking",
-                "LOOK AROUND SLOWLY at a well-lit, textured part of the room until TRACKING turns READY.", "");
+            Show("wait_tracking", "LOOK AROUND SLOWLY", "Well-lit, textured part of the room, until TRACKING READY", "");
+            Say("Look around slowly until tracking is ready");
             m_Log.Event("tracking_ready", "WAIT", $"timeout={TrackingReadyTimeout}s");
             double t0 = Time.realtimeSinceStartupAsDouble;
             double readySince = double.NaN;
-            m_StepEnd = t0 + TrackingReadyTimeout;
+            StepStart = t0;
+            StepEnd = t0 + TrackingReadyTimeout;
             while (true)
             {
                 double now = Time.realtimeSinceStartupAsDouble;
@@ -288,6 +356,8 @@ namespace EyeLabGates
                     {
                         m_Log.Event("tracking_ready", "READY", $"after={(now - t0).ToString("F1", CultureInfo.InvariantCulture)}s");
                         m_Audio.PlayOneShot(m_ReadyBeep);
+                        Say("Tracking ready");
+                        yield return new WaitForSecondsRealtime(1.5f); // let the cue finish before step 1
                         result(true);
                         yield break;
                     }
@@ -299,6 +369,7 @@ namespace EyeLabGates
                 if (now - t0 > TrackingReadyTimeout)
                 {
                     m_Log.Event("tracking_ready", "TIMEOUT", $"last={NativeTracking.Name(m_Pose.LastTrackingReason)}");
+                    Say("Tracking not ready");
                     result(false);
                     yield break;
                 }
@@ -308,14 +379,19 @@ namespace EyeLabGates
 
         IEnumerator RunProtocol(List<ProtocolStep> steps)
         {
-            m_StepCount = steps.Count;
+            StepCount = steps.Count;
+            m_InProtocol = true;
             m_Log.Event("protocol", "begin", $"steps={steps.Count} seconds={GateProtocol.TotalSeconds(steps).ToString(CultureInfo.InvariantCulture)}");
             for (int i = 0; i < steps.Count; i++)
             {
                 var step = steps[i];
-                m_StepIndex = i + 1;
-                SetInstruction(step.Id, step.Instruction, i + 1 < steps.Count ? steps[i + 1].Instruction : "(end)");
-                m_StepEnd = Time.realtimeSinceStartupAsDouble + step.Seconds;
+                StepIndex = i + 1;
+                Show(step.Id, step.Title, step.Detail, i + 1 < steps.Count ? steps[i + 1].Title : "END");
+                double now = Time.realtimeSinceStartupAsDouble;
+                StepStart = now;
+                StepEnd = now + step.Seconds;
+                m_StepSeconds = step.Seconds;
+                m_LastTick = -1;
                 switch (step.Action)
                 {
                     case StepAction.CameraStart: StartCapture(step.Id); break;
@@ -323,20 +399,31 @@ namespace EyeLabGates
                     case StepAction.Track3DoF: StartCoroutine(SwitchTracking(TrackingType.MODE_3DOF)); break;
                     case StepAction.Track6DoF: StartCoroutine(SwitchTracking(TrackingType.MODE_6DOF)); break;
                 }
-                m_Log.Event("step", step.Id, $"{step.Seconds.ToString(CultureInfo.InvariantCulture)}s {step.Instruction}");
+                m_Log.Event("step", step.Id, $"{step.Seconds.ToString(CultureInfo.InvariantCulture)}s {step.Title}: {step.Detail}");
                 m_Audio.PlayOneShot(m_Beep);
+                Say(step.Speech);
                 yield return new WaitForSecondsRealtime(step.Seconds);
             }
+            m_InProtocol = false;
             m_Log.Event("protocol", "end", "");
-            SetInstruction("done", "Protocol complete. Finishing...", "");
+            Show("done", "DONE", "Protocol complete, finishing", "");
+            Say("Done");
         }
 
-        void SetInstruction(string id, string text, string next)
+        void Show(string id, string title, string detail, string next)
         {
             m_StepId = id;
-            m_Instruction = text;
-            m_NextInstruction = next;
-            m_StepEnd = double.NaN;
+            StepTitle = title;
+            StepDetail = detail;
+            NextTitle = next;
+            StepStart = Time.realtimeSinceStartupAsDouble;
+            StepEnd = double.NaN;
+            m_StepSeconds = 0;
+        }
+
+        void Say(string text)
+        {
+            if (!string.IsNullOrEmpty(text)) m_Speaker?.Say(text);
         }
 
         static IEnumerator WaitUntilOrTimeout(Func<bool> condition, float timeout, Action<bool> result = null)
@@ -381,6 +468,14 @@ namespace EyeLabGates
                 return;
             }
             m_Log.Event("stop_capture", ok, why);
+        }
+
+        IEnumerator FlushCamera()
+        {
+            m_Log.Event("camera_flush", "begin", $"lag={m_Camera.LagGrowth.ToString("F2", CultureInfo.InvariantCulture)}s");
+            StopCapture("flush");
+            yield return new WaitForSecondsRealtime(0.2f);
+            if (!m_Quitting) StartCapture("flush");
         }
 
         bool EnterXR()
@@ -435,11 +530,16 @@ namespace EyeLabGates
         {
             if (m_Quitting) yield break;
             m_Quitting = true;
-            SetInstruction("quit", $"Finished: {result}. Closing...", "");
+            m_InProtocol = false;
+            Show("quit", result == "COMPLETED" ? "FINISHED" : result, "Closing, you can take the glasses off", "");
             m_Log.Event("gate_result", result, m_Args.GateName);
+            m_Log.Flush(); // 14 Oct G2: the process ended during Exit XR before the next periodic flush
+            Say(result == "COMPLETED" ? "Finished. You can take the glasses off." : "Stopped");
 
             if (m_Source.IsCapturing)
                 StopCapture("quit");
+            WriteRepeatSummary();
+            m_Log.Flush();
             if (XRActive)
             {
                 ExitXR();
@@ -447,9 +547,11 @@ namespace EyeLabGates
                 yield return WaitUntilOrTimeout(() => !XRActive, ExitXRTimeout, r => stopped = r);
                 m_Log.Event("exit_xr_wait", stopped ? "STOPPED" : "TIMEOUT", "");
             }
-            WriteRepeatSummary();
             m_Log.Event("quit", "", "");
             m_Log.Flush();
+            yield return new WaitForSecondsRealtime(1.5f); // let the last spoken cue finish
+            m_Speaker?.Dispose();
+            m_Speaker = null;
 #if UNITY_EDITOR
             UnityEditor.EditorApplication.isPlaying = false;
 #else
@@ -467,6 +569,7 @@ namespace EyeLabGates
             {
                 m_Marks++;
                 m_Log.Event("mark", m_Marks, m_StepId);
+                m_Audio.PlayOneShot(m_Tick);
             }
             if (Input.GetKeyDown(KeyCode.C))
             {
@@ -578,7 +681,40 @@ namespace EyeLabGates
                     m_Log.Event("repeat_summary", kv.Value, kv.Key);
         }
 
-        // ---------------------------------------------------------------- HUD and sound
+        // ---------------------------------------------------------------- helpers
+
+        string MakeGateTitle()
+        {
+            switch (m_Args.Gate)
+            {
+                case GateKind.G1: return "G1 camera only";
+                case GateKind.G2: return "G2 6DoF";
+                case GateKind.G3:
+                    string reader = m_Source.SourceName == "drain" ? " +drain" : "";
+                    string flush = m_Args.FlushLag > 0 ? " +flush" : "";
+                    switch (m_Args.Order)
+                    {
+                        case "tracked": return $"G3c camera after READY{reader}{flush}";
+                        case "3dof": return $"G3 camera + 3DoF{reader}{flush}";
+                        case "camfirst": return $"G3b camera before XR{reader}{flush}";
+                        default: return $"G3 camera after 6DoF switch{reader}{flush}";
+                    }
+                default: return "Manual";
+            }
+        }
+
+        static string BuildStamp()
+        {
+            var info = Resources.Load<TextAsset>(DeviceInfoProbe.BuildInfoResource);
+            if (info == null) return "editor";
+            foreach (var line in info.text.Split('\n'))
+            {
+                int eq = line.IndexOf('=');
+                if (eq > 0 && line.Substring(0, eq).Trim() == "utc_build")
+                    return line.Substring(eq + 1).Trim();
+            }
+            return "?";
+        }
 
         static AudioClip Tone(string name, float hz, float seconds)
         {
@@ -588,94 +724,11 @@ namespace EyeLabGates
             for (int i = 0; i < n; i++)
             {
                 float env = Mathf.Min(1f, Mathf.Min(i, n - i) / (0.01f * rate)); // 10 ms fade in/out
-                data[i] = 0.4f * env * Mathf.Sin(2f * Mathf.PI * hz * i / rate);
+                data[i] = 0.6f * env * Mathf.Sin(2f * Mathf.PI * hz * i / rate);
             }
             var clip = AudioClip.Create(name, n, 1, rate, false);
             clip.SetData(data, 0);
             return clip;
         }
-
-        void OnGUI()
-        {
-            int fontSize = Mathf.Max(16, Screen.height / 42);
-            if (m_HudStyle == null || m_HudStyle.fontSize != fontSize)
-            {
-                m_HudStyle = new GUIStyle(GUI.skin.box)
-                {
-                    alignment = TextAnchor.UpperLeft,
-                    fontSize = fontSize,
-                    richText = true,
-                    wordWrap = true,
-                };
-                m_HudStyle.normal.textColor = Color.white;
-            }
-
-            string text = HudText();
-            // In XR the main window spans both eyes side by side (3840x1080): draw once per eye.
-            bool sideBySide = XRActive && Screen.width >= 2 * Screen.height;
-            float width = (sideBySide ? Screen.width / 2f : Screen.width) - 40f;
-            width = Mathf.Min(width, fontSize * 44f);
-            float height = m_HudStyle.CalcHeight(new GUIContent(text), width);
-            GUI.Box(new Rect(20, 20, width, height), text, m_HudStyle);
-            if (sideBySide)
-                GUI.Box(new Rect(Screen.width / 2f + 20, 20, width, height), text, m_HudStyle);
-        }
-
-        string HudText()
-        {
-            var inv = CultureInfo.InvariantCulture;
-            var sb = new StringBuilder();
-            double now = Time.realtimeSinceStartupAsDouble;
-            sb.Append($"<b>{GateTitle()}</b>   t = {(now - m_StartTime).ToString("F0", inv)} s\n");
-
-            string countdown = double.IsNaN(m_StepEnd) ? "" : $"  ({Math.Max(0, m_StepEnd - now).ToString("F0", inv)} s)";
-            string stepNo = m_StepCount > 0 && m_StepIndex > 0 ? $"[{m_StepIndex}/{m_StepCount}] " : "";
-            sb.Append($"<size={(int)(m_HudStyle.fontSize * 1.35f)}><color=#ffd84a>{stepNo}{m_Instruction}{countdown}</color></size>\n");
-            if (!string.IsNullOrEmpty(m_NextInstruction))
-                sb.Append($"<color=#aaaaaa>next: {m_NextInstruction}</color>\n");
-
-            int reason = m_Pose.LastTrackingReason;
-            string tracking = reason == NativeTracking.NoValue
-                ? "<color=#aaaaaa>TRACKING: n/a (XR off)</color>"
-                : reason == NativeTracking.Ready
-                    ? $"<color=#4cff4c><b>TRACKING: READY</b></color> ({m_Pose.LastTrackingType})"
-                    : $"<color=#ff5c5c><b>TRACKING: {NativeTracking.Name(reason).ToUpperInvariant()}</b></color> ({m_Pose.LastTrackingType})";
-            sb.Append(tracking + "\n");
-
-            double lag = m_Camera.LagGrowth;
-            sb.Append($"camera {(m_Source.IsCapturing ? "ON" : "off")} [{m_Source.SourceName}]  {m_Camera.Fps.ToString("F1", inv)} fps  " +
-                      $"lag {(double.IsNaN(lag) ? "-" : (lag >= 0 ? "+" : "") + lag.ToString("F2", inv) + " s")}  " +
-                      $"frames {m_Camera.UniqueFrames.ToString(inv)}  drained {m_Camera.DrainedFrames.ToString(inv)}  " +
-                      $"cpu {m_Perf.CpuCoresBusy.ToString("F1", inv)} cores\n");
-
-            Vector3 p = m_Pose.LastPosition * 1000f;
-            Vector3 e = m_Pose.LastRotation.eulerAngles;
-            sb.Append($"head mm x {p.x.ToString("F0", inv)} y {p.y.ToString("F0", inv)} z {p.z.ToString("F0", inv)}   " +
-                      $"yaw {Wrap(e.y).ToString("F0", inv)} pitch {Wrap(e.x).ToString("F0", inv)} roll {Wrap(e.z).ToString("F0", inv)}\n");
-            sb.Append($"<color=#aaaaaa>glasses {(m_GlassesConnected ? "connected" : "-")}  XR {(XRActive ? "on" : "off")}  marks {m_Marks}  " +
-                      $"last: {m_Log.LastEvent}</color>\n");
-            sb.Append("<color=#aaaaaa>Do not click anything. Keys: Esc abort  M mark  (manual: C camera  X XR  3/6 DoF  R recenter)</color>");
-            return sb.ToString();
-        }
-
-        string GateTitle()
-        {
-            switch (m_Args.Gate)
-            {
-                case GateKind.G1: return "G1  camera only";
-                case GateKind.G2: return "G2  6DoF";
-                case GateKind.G3:
-                    switch (m_Args.Order)
-                    {
-                        case "tracked": return $"G3c  camera after TRACKING READY ({m_Source.SourceName} reader)";
-                        case "3dof": return $"G3  camera + 3DoF ({m_Source.SourceName} reader)";
-                        case "camfirst": return $"G3b  camera before XR ({m_Source.SourceName} reader)";
-                        default: return $"G3  camera right after 6DoF switch ({m_Source.SourceName} reader)";
-                    }
-                default: return "Manual";
-            }
-        }
-
-        static float Wrap(float deg) => deg > 180f ? deg - 360f : deg;
     }
 }

@@ -4,27 +4,36 @@ namespace EyeLabGates
 {
     public enum StepAction { None, CameraStart, CameraStop, Track3DoF, Track6DoF }
 
-    /// <summary>One guided step: shown on the HUD with a countdown, announced by a beep, logged as a
-    /// <c>step</c> event (result = id). The action runs when the step begins.</summary>
+    /// <summary>
+    /// One guided step. <see cref="Title"/> is shown large in the middle of each eye and spoken;
+    /// <see cref="Detail"/> is the small line under it. The step is logged as a <c>step</c> event
+    /// (result = <see cref="Id"/>); <see cref="Action"/> runs when it begins.
+    /// </summary>
     public sealed class ProtocolStep
     {
         public readonly string Id;
-        public readonly string Instruction;
+        public readonly string Title;
+        public readonly string Detail;
+        public readonly string Speech;
         public readonly float Seconds;
         public readonly StepAction Action;
 
-        public ProtocolStep(string id, string instruction, float seconds, StepAction action = StepAction.None)
+        public ProtocolStep(string id, string title, string detail, float seconds,
+                            StepAction action = StepAction.None, string speech = null)
         {
             Id = id;
-            Instruction = instruction;
+            Title = title;
+            Detail = detail;
             Seconds = seconds;
             Action = action;
+            Speech = speech ?? title;
         }
     }
 
     /// <summary>
     /// The operator protocols of docs/XREAL-PC-GATES-G1-G3.md §6 as timed steps, so the run needs no
-    /// manual marks. Step ids are the phase names the analysis segments on.
+    /// manual marks. Step ids are the phase names the analysis segments on. "A"/"B" are the two floor
+    /// tape marks 500 mm apart (B to the right of A), not specimen plates.
     /// </summary>
     public static class GateProtocol
     {
@@ -32,15 +41,16 @@ namespace EyeLabGates
         {
             var s = new List<ProtocolStep>
             {
-                new ProtocolStep("static", "Look at the plate. Keep your head STILL.", 20),
-                new ProtocolStep("motion", "Move your head SLOWLY (small nods and turns); keep the plate in view.", 20),
-                new ProtocolStep("covered", "COVER the Eye camera with your hand. Keep still.", 5),
-                new ProtocolStep("uncovered", "UNCOVER. Look at the plate, keep still.", 10),
+                new ProtocolStep("static", "HOLD STILL", "Look at the board", 20, speech: "Hold still, look at the board"),
+                new ProtocolStep("motion", "MOVE HEAD SLOWLY", "Small nods and turns, keep the board in view", 20, speech: "Move your head slowly"),
+                new ProtocolStep("covered", "COVER THE EYE", "Hand over the camera, keep still", 5, speech: "Cover the camera"),
+                new ProtocolStep("uncovered", "UNCOVER, HOLD STILL", "Look at the board", 10, speech: "Uncover, hold still"),
             };
             for (int i = 1; i <= 3; i++)
             {
-                s.Add(new ProtocolStep($"restart_{i}_off", $"Keep still: automatic camera restart {i}/3 (camera off).", 2, StepAction.CameraStop));
-                s.Add(new ProtocolStep($"restart_{i}_on", $"Keep still: automatic camera restart {i}/3 (camera on).", 10, StepAction.CameraStart));
+                s.Add(new ProtocolStep($"restart_{i}_off", "HOLD STILL", $"Automatic camera restart {i}/3 (off)", 2, StepAction.CameraStop,
+                                       i == 1 ? "Hold still for the camera restarts" : ""));
+                s.Add(new ProtocolStep($"restart_{i}_on", "HOLD STILL", $"Automatic camera restart {i}/3 (on)", 10, StepAction.CameraStart, ""));
             }
             return s;
         }
@@ -49,23 +59,26 @@ namespace EyeLabGates
         {
             var s = new List<ProtocolStep>
             {
-                new ProtocolStep("static", "Stand on A, face forward. Keep your head STILL.", 30),
+                new ProtocolStep("static", "HOLD STILL ON A", "Stand on floor mark A, face forward", 30, speech: "Stand on A and hold still"),
             };
             for (int i = 1; i <= 3; i++)
-                AddTranslation(s, $"trans_{i}", $"{i}/3");
+                AddTranslation(s, $"trans_{i}", $"Translation {i}/3");
             for (int i = 1; i <= 3; i++)
             {
-                s.Add(new ProtocolStep($"rot_{i}_ref1", $"Rotation {i}/3: face REFERENCE 1, keep still.", 5));
-                s.Add(new ProtocolStep($"rot_{i}_turn", $"Rotation {i}/3: turn to REFERENCE 2 (90 deg), body and head together.", 4));
-                s.Add(new ProtocolStep($"rot_{i}_ref2", $"Rotation {i}/3: hold on REFERENCE 2, keep still.", 5));
-                s.Add(new ProtocolStep($"rot_{i}_back", $"Rotation {i}/3: turn back to REFERENCE 1.", 4));
-                s.Add(new ProtocolStep($"rot_{i}_ref1_end", $"Rotation {i}/3: hold on REFERENCE 1, keep still.", 5));
+                string r = $"Rotation {i}/3";
+                s.Add(new ProtocolStep($"rot_{i}_ref1", "FACE REFERENCE 1", $"{r}: hold still", 5, speech: "Face reference one"));
+                s.Add(new ProtocolStep($"rot_{i}_turn", "TURN TO REFERENCE 2", $"{r}: 90 degrees, body and head together", 4, speech: "Turn to reference two"));
+                s.Add(new ProtocolStep($"rot_{i}_ref2", "HOLD ON REFERENCE 2", $"{r}: hold still", 5, speech: "Hold"));
+                s.Add(new ProtocolStep($"rot_{i}_back", "TURN BACK TO REFERENCE 1", r, 4, speech: "Turn back to reference one"));
+                s.Add(new ProtocolStep($"rot_{i}_ref1_end", "HOLD ON REFERENCE 1", $"{r}: hold still", 5, speech: "Hold"));
             }
-            s.Add(new ProtocolStep("covered", "On A, still: COVER the Eye camera with your hand.", 5));
-            s.Add(new ProtocolStep("uncovered", "UNCOVER. Keep still.", 5));
-            s.Add(new ProtocolStep("dof3_switch", "Switching to 3DoF. Stand on A, keep still.", 5, StepAction.Track3DoF));
-            AddTranslation(s, "dof3_trans", "3DoF");
-            s.Add(new ProtocolStep("dof6_switch", "Switching back to 6DoF. Keep still.", 5, StepAction.Track6DoF));
+            s.Add(new ProtocolStep("covered", "COVER THE EYE", "On A, hand over the camera, keep still", 5, speech: "Cover the camera"));
+            s.Add(new ProtocolStep("uncovered", "UNCOVER, HOLD STILL", "On A", 5, speech: "Uncover, hold still"));
+            s.Add(new ProtocolStep("dof3_switch", "3DOF NOW: HOLD STILL ON A", "Tracking switched to 3DoF", 5, StepAction.Track3DoF,
+                                   "Three degrees of freedom now. Hold still on A"));
+            AddTranslation(s, "dof3_trans", "3DoF translation");
+            s.Add(new ProtocolStep("dof6_switch", "6DOF AGAIN: HOLD STILL", "Tracking switched back to 6DoF", 5, StepAction.Track6DoF,
+                                   "Six degrees of freedom again. Hold still"));
             return s;
         }
 
@@ -74,24 +87,24 @@ namespace EyeLabGates
         {
             var s = new List<ProtocolStep>
             {
-                new ProtocolStep("static", "Stand on A, look at the plate. Keep your head STILL.", 20),
-                new ProtocolStep("motion", "Move your head SLOWLY (small nods and turns); keep the plate in view.", 20),
-                new ProtocolStep("covered", "COVER the Eye camera with your hand. Keep still.", 5),
-                new ProtocolStep("uncovered", "UNCOVER. Look at the plate, keep still.", 10),
+                new ProtocolStep("static", "HOLD STILL", "On A, look at the board", 20, speech: "Look at the board and hold still"),
+                new ProtocolStep("motion", "MOVE HEAD SLOWLY", "Small nods and turns, keep the board in view", 20, speech: "Move your head slowly"),
+                new ProtocolStep("covered", "COVER THE EYE", "Hand over the camera, keep still", 5, speech: "Cover the camera"),
+                new ProtocolStep("uncovered", "UNCOVER, HOLD STILL", "Look at the board", 10, speech: "Uncover, hold still"),
             };
-            AddTranslation(s, "trans_1", "1/1");
-            s.Add(new ProtocolStep("look_around", "Look around the room SLOWLY.", 40));
-            s.Add(new ProtocolStep("static_end", "Look at the plate. Keep your head STILL.", 20));
+            AddTranslation(s, "trans_1", "Translation");
+            s.Add(new ProtocolStep("look_around", "LOOK AROUND SLOWLY", "Slowly scan the room", 40, speech: "Look around the room slowly"));
+            s.Add(new ProtocolStep("static_end", "HOLD STILL", "Look at the board", 20, speech: "Look at the board and hold still"));
             return s;
         }
 
         static void AddTranslation(List<ProtocolStep> s, string id, string label)
         {
-            s.Add(new ProtocolStep($"{id}_A", $"Translation {label}: stand on A facing forward, keep still.", 5));
-            s.Add(new ProtocolStep($"{id}_toB", $"Translation {label}: SIDE-STEP RIGHT to B; keep height and facing.", 4));
-            s.Add(new ProtocolStep($"{id}_B", $"Translation {label}: hold on B, keep still.", 5));
-            s.Add(new ProtocolStep($"{id}_toA", $"Translation {label}: SIDE-STEP back to A.", 4));
-            s.Add(new ProtocolStep($"{id}_A_end", $"Translation {label}: hold on A, keep still.", 5));
+            s.Add(new ProtocolStep($"{id}_A", "ON A, HOLD STILL", $"{label}: face forward", 5, speech: "On A, hold still"));
+            s.Add(new ProtocolStep($"{id}_toB", "STEP RIGHT TO B", $"{label}: keep height and facing", 4, speech: "Step right to B"));
+            s.Add(new ProtocolStep($"{id}_B", "HOLD ON B", $"{label}: keep still", 5, speech: "Hold"));
+            s.Add(new ProtocolStep($"{id}_toA", "STEP BACK TO A", $"{label}: keep height and facing", 4, speech: "Step back to A"));
+            s.Add(new ProtocolStep($"{id}_A_end", "HOLD ON A", $"{label}: keep still", 5, speech: "Hold"));
         }
 
         public static float TotalSeconds(List<ProtocolStep> steps)

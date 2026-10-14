@@ -10,7 +10,7 @@ namespace EyeLabGates
 
     /// <summary>
     /// Command-line arguments of the gate player (docs/XREAL-PC-GATES-G1-G3.md §5):
-    /// <c>-gate G1|G2|G3|manual -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -duration s
+    /// <c>-gate G1|G2|G3|manual -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -duration s
     /// -snapshotEvery s -label text -logRoot dir</c>. G1-G3 follow the timed protocols in
     /// <see cref="GateProtocol"/>; <c>-duration</c> only applies to manual (it is recorded otherwise).
     /// Unknown arguments (e.g. Unity's own <c>-logFile</c>) are ignored.
@@ -20,6 +20,8 @@ namespace EyeLabGates
         public GateKind Gate = GateKind.Manual;
         public string Order = "tracked";
         public string Reader = "vendor";
+        /// <summary>Restart the camera when its lag has grown by this many seconds; 0 = never.</summary>
+        public double FlushLag;
         public double Duration;
         public double SnapshotEvery = 2.0;
         public string Label = "run";
@@ -91,6 +93,11 @@ namespace EyeLabGates
                         i++;
                         if (TryPositive(value, out double d)) duration = d;
                         else a.Warnings.Add($"bad -duration '{value}', using default");
+                        break;
+                    case "-flushlag":
+                        i++;
+                        if (TryPositive(value, out double fl)) a.FlushLag = fl;
+                        else a.Warnings.Add($"bad -flushLag '{value}', flushing disabled");
                         break;
                     case "-snapshotevery":
                         i++;

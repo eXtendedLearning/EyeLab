@@ -708,3 +708,83 @@ disconnects).
 - `-order` accepts `tracked` (default), `xrfirst`, `3dof`, `camfirst`;
   `-reader vendor|drain`. `-duration` only applies to manual. New `gate_result`
   values: `NO_SESSION`, `TRACKING_TIMEOUT`.
+
+## 14. Surface runs of 2026-10-14 and the voice-guided build
+
+### What ran
+
+All 14 Oct runs used the **9 Oct build** (`run.json` `build.utc_build`
+`2026-10-09T13:54:41Z`): the §13 guided build had not been copied to the
+Surface. Hence no guidance, no beeps and the small top-left HUD. The launcher
+and the HUD now show the build time so this is visible at once.
+
+Even unguided, the runs were long enough to add facts (`GateRuns/CODY_0526_20261014_095954/`):
+
+| Run | Camera | 6DoF | Notes |
+|---|---|---|---|
+| G1 | 30 fps (median), 1280×720, **no lag growth over 96 s**; 3/3 restarts deliver the first frame after **0.9 s** | – | **completed**; phases unmarked, so G1 criterion 3 is still not assessable |
+| G2 | – | tracking ready **24 s** after XR start (Scanning before), then ready for the rest of the 180 s run (two short InsufficientLight episodes); pose range 512 mm in x, yaw 186° | the full-screen sample preview showed **solid green** (YUV shader with no frames) across both eyes; the process ended during Exit XR before the final log flush (no `gate_result`) |
+| G3 (camera right after the 6DoF switch) | rate falls over time: **23 → 17 → 10 → 9 → 8 fps** per 30 s; every frame still delivered in order, so the **lag grows to 102 s after 178 s** ("a couple of minutes old", operator) | **ready after 2.6 s and stayed ready** (brief InsufficientLight) for 3 min; pose sane (range 0.9 m) | unlike 13 Oct, no runaway: the 13 Oct divergence is not reproducible |
+| G3b (camera before XR) | 29 → 27 → 21 → 10 fps; lag 17.5 s after 105 s | `SwitchTrackingType(6DOF)` false, pose constant (same as 13 Oct) | camera-first breaks 6DoF: **reproduced** |
+
+Unity's render rate stayed at 57–60 fps in all XR runs while the camera rate
+fell, so the main thread is not the bottleneck: the camera pipeline upstream of
+the acquisition API (decoder/transport) loses throughput over minutes once XR
+runs, and nothing drops old frames. Thermal throttling of the fanless Surface
+is a candidate; the new `perf.csv` columns test it.
+
+Status after 14 Oct: **G1 frames: observed (complete run). G2 6DoF: observed
+over 3 min. Concurrent camera + 6DoF: tracking holds, but the camera stream
+becomes unusable within a minute on the Surface (unbounded latency).** The
+register-then-hold idea (§9, row 2) or a bounded-latency camera path is
+required; the G3c-flush run tests the cheapest form.
+
+### What changed in the build of 2026-10-14
+
+- **Spoken cues** (Windows speech, English voice if installed, else the
+  default voice): every step is announced ("Step right to B", "Hold",
+  "Cover the camera", "Tracking ready", "Tracking lost", "Finished"). Sound goes
+  to the Windows default output device.
+- **Beeps:** a beep at every step start, **3-2-1 ticks** before the end of
+  steps of 8 s or longer, a long high beep when tracking becomes ready.
+- **Large banner in the middle of each eye:** step title in large letters,
+  countdown (red in the last 3 s), progress bar, next step; the whole banner
+  **flashes yellow** for 0.8 s at every step change. Tracking line below it
+  (green READY / red reason). Diagnostics in small print at the bottom left,
+  including the **build time**.
+- **No more green screen:** the sample's full-screen preview is hidden; a small
+  grey preview of the Eye image (with fps and lag) sits at the bottom centre of
+  each eye, only while frames arrive.
+- **G3c-flush** (menu 5): restarts the camera whenever its lag has grown by
+  more than 1 s (`-flushLag 1`), to test whether a restart clears the backlog
+  (G1: restart costs 0.9 s). The lag reference is now kept across restarts.
+- `perf.csv` adds whole-system CPU utility and **CPU performance** (clock as a
+  percentage of nominal; a fall under load means throttling) and the camera
+  lag; the log is flushed immediately when the gate result is written.
+
+### Operator procedure (supersedes the run table of §13)
+
+1. Unzip `Builds/XrealPcGates_20261014_1024.zip` to `C:\EyeLabGates\`
+   **replacing the old folder**, and start `run_gates.bat` from there. The menu
+   header must read `build 2026-10-14T08:24:36Z`; the same time appears at the
+   bottom left of the app. If it shows `2026-10-09` or `2026-10-13`, the old
+   build is running.
+2. Windows sound on, volume up. The cues play on the default output device;
+   if that is the glasses you hear them in the glasses.
+3. Run in this order: **1 G1** (sanity check that voice and banner work),
+   **2 G2**, **3 G3c**, **5 G3c-flush**, **4 G3c-drain**, **6 G3-3DoF**. Let each
+   finish; just do what the voice says. Esc only to abort.
+4. Menu **Z**, copy the zip to the desktop into
+   `unity_projects/xreal_pc_gates/GateRuns/`.
+
+"A"/"B" are floor tape marks 500 mm apart (B to the right of A); "the board"
+is the 25 mm ChArUco board at about 0.5–1 m; reference 1/2 are two directions
+90° apart.
+
+### Log schema changes (in addition to §13)
+
+- `perf.csv`: `t_unity,frame,unity_fps,cpu_process_pct,cpu_cores_busy,cpu_system_utility_pct,cpu_performance_pct,gc_mb,cam_fps,cam_lag_growth_s,tracking_reason,step`.
+- New events: `speech` (`READY` with the voice name, `UNAVAILABLE`, `STDERR`),
+  `perf_counters` (`OK`/`UNAVAILABLE`), `camera_flush`.
+- `step` detail is `<seconds>s <TITLE>: <detail>`; step ids are unchanged.
+- `-flushLag <s>` (default 0 = off).

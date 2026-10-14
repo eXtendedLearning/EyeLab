@@ -35,8 +35,10 @@ namespace EyeLabGates
         public Vector2Int LastResolution { get; private set; }
 
         /// <summary>
-        /// How much further behind the newest frame is than at the start of this capture session, in s:
-        /// (receipt time - cam_ts) now minus the same at the first frame. Assumes cam_ts in ns (G1 data).
+        /// How much further behind the newest frame is than the first frame of the run, in s:
+        /// (receipt time - cam_ts) now minus the same at the first frame. The reference is kept across
+        /// capture restarts, so a restart that flushes a backlog shows as a drop. Assumes cam_ts in ns
+        /// on one device clock (G1: slope 1.000 per second, restarts keep the offset).
         /// </summary>
         public double LagGrowth { get; private set; } = double.NaN;
 
@@ -73,8 +75,6 @@ namespace EyeLabGates
         {
             m_HasPrevSub = false;
             m_HasPrevTs = false;
-            m_FirstOffset = double.NaN;
-            LagGrowth = double.NaN;
         }
 
         void OnFrame()

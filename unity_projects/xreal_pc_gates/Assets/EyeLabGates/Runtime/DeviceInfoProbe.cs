@@ -25,6 +25,7 @@ namespace EyeLabGates
                 .Set("gate", args.GateName)
                 .Set("order", args.Order)
                 .Set("reader", args.Reader)
+                .Set("flush_lag_s", args.FlushLag)
                 .Set("duration_s", args.Duration)
                 .Set("snapshot_every_s", args.SnapshotEvery)
                 .Set("label", args.Label)
