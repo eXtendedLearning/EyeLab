@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.2.006<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.2.007<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -25,6 +25,23 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.2.007) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §16). The radiator runs of
+  14 Oct show the Eye stream arriving at 30 fps over USB but decoded on the
+  Surface CPU. The decoder falls behind next to 6DoF even at full clock, so §15's
+  "throttling alone" is corrected; restarting the camera empties the queue.
+  Direction: lighter pipeline for the Beam Pro, desktop DP-in card not bought
+  (`HARDWARE.md`, `AGENTS.md`).
+  - New gate **G4, light overlay**: world-locked 60 x 40 cm grid, no video on
+    the glasses, short camera bursts with one saved frame each, XR at 30 fps,
+    6DoF, 3DoF or no-camera variants, 5-minute sustain protocol.
+  - Cool-down check fixed: a 20 s load judged on its last 5 s. The 3.5 s probe
+    was fooled by the turbo burst.
+  - Movement prompts while tracking scans.
+  - Display rotation logging and screenshots for the upside-down G2 report.
+  - Thermal-zone temperatures in `perf.csv`.
+  - The run summary adds full-clock seconds, USB receive rate, hottest zone
+    and bursts.
+  - Rebuilt: `LATEST_BUILD.txt` 2026-10-14T20:21:48Z.
 - (0.2.006) XREAL gate harness: cool-down check between XR runs (launcher `K`;
   reads the Surface CPU clock under a short load and says "Cool enough" at
   150 % of nominal), tracking wait shortened to 30 s, run archive accepts

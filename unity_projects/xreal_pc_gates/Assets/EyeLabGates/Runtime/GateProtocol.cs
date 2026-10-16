@@ -31,7 +31,7 @@ namespace EyeLabGates
     }
 
     /// <summary>
-    /// The operator protocols of docs/XREAL-PC-GATES-G1-G3.md §6 as timed steps, so the run needs no
+    /// The operator protocols of docs/XREAL-PC-GATES-G1-G3.md §6 (G4: §16) as timed steps, so the run needs no
     /// manual marks. Step ids are the phase names the analysis segments on. "A"/"B" are the two floor
     /// tape marks 500 mm apart (B to the right of A), not specimen plates.
     /// </summary>
@@ -95,6 +95,28 @@ namespace EyeLabGates
             AddTranslation(s, "trans_1", "Translation");
             s.Add(new ProtocolStep("look_around", "LOOK AROUND SLOWLY", "Slowly scan the room", 40, speech: "Look around the room slowly"));
             s.Add(new ProtocolStep("static_end", "HOLD STILL", "Look at the board", 20, speech: "Look at the board and hold still"));
+            return s;
+        }
+
+        /// <summary>
+        /// G4 light overlay, about 5 min: the world-locked grid is placed on the board at the start and
+        /// stays in view; the camera only takes short bursts. The long run tests whether the light load
+        /// is thermally sustainable; the steps test whether the grid stays put (6DoF) or drifts (3DoF).
+        /// </summary>
+        public static List<ProtocolStep> G4()
+        {
+            var s = new List<ProtocolStep>
+            {
+                new ProtocolStep("static", "HOLD STILL", "On A, grid on the board: does it stay put?", 30, speech: "Look at the board and hold still"),
+                new ProtocolStep("motion", "MOVE HEAD SLOWLY", "Small nods and turns, keep the board in view", 30, speech: "Move your head slowly"),
+            };
+            AddTranslation(s, "trans_1", "Translation");
+            s.Add(new ProtocolStep("look_away", "LOOK AWAY, THEN BACK", "Turn 90 degrees away, then back to the board", 20, speech: "Look away, then back to the board"));
+            s.Add(new ProtocolStep("walk", "WALK AROUND SLOWLY", "A slow loop around the room, end on A facing the board", 40, speech: "Walk around slowly, then come back to A"));
+            s.Add(new ProtocolStep("static_2", "HOLD STILL ON A", "Look at the board", 30, speech: "On A, hold still"));
+            s.Add(new ProtocolStep("motion_2", "MOVE HEAD SLOWLY", "Small nods and turns, keep the board in view", 30, speech: "Move your head slowly"));
+            s.Add(new ProtocolStep("sustain", "HOLD STILL, RELAX", "Long hold: is the Surface keeping up?", 60, speech: "Hold still and relax"));
+            s.Add(new ProtocolStep("look_around", "LOOK AROUND SLOWLY", "Slowly scan the room, end on the board", 30, speech: "Look around slowly, end on the board"));
             return s;
         }
 

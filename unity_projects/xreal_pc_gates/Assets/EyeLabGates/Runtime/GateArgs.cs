@@ -6,13 +6,14 @@ using UnityEngine;
 
 namespace EyeLabGates
 {
-    public enum GateKind { Manual, G1, G2, G3, Cooldown }
+    public enum GateKind { Manual, G1, G2, G3, G4, Cooldown }
 
     /// <summary>
     /// Command-line arguments of the gate player (docs/XREAL-PC-GATES-G1-G3.md §5):
-    /// <c>-gate G1|G2|G3|manual|cooldown -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60 -duration s
-    /// -snapshotEvery s -label text -logRoot dir</c>. G1-G3 follow the timed protocols in
-    /// <see cref="GateProtocol"/>; <c>-duration</c> only applies to manual (it is recorded otherwise).
+    /// <c>-gate G1|G2|G3|G4|manual|cooldown -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60
+    /// -burstEvery s -burstFrames n -duration s -snapshotEvery s -label text -logRoot dir</c>. G1-G4 follow the timed protocols in
+    /// <see cref="GateProtocol"/>; <c>-duration</c> only applies to manual (it is recorded otherwise). G4 (light overlay)
+    /// renders at 30 fps unless <c>-renderFps 60</c> is given, and reads <c>-order tracked</c> as 6DoF, <c>3dof</c> as 3DoF.
     /// Unknown arguments (e.g. Unity's own <c>-logFile</c>) are ignored.
     /// </summary>
     public sealed class GateArgs
@@ -24,6 +25,10 @@ namespace EyeLabGates
         public double FlushLag;
         /// <summary>XR render rate: 60 (default, display rate) or 30 (vSyncCount 2, lighter host load).</summary>
         public int RenderFps = 60;
+        /// <summary>G4: start the camera every this many seconds for one short burst; 0 = camera never started.</summary>
+        public double BurstEvery = 2.0;
+        /// <summary>G4: frames per burst; the last one is saved as a snapshot.</summary>
+        public int BurstFrames = 3;
         public double Duration;
         public double SnapshotEvery = 2.0;
         public string Label = "run";
@@ -40,6 +45,7 @@ namespace EyeLabGates
                 case GateKind.G1: return 60;
                 case GateKind.G2: return 180;
                 case GateKind.G3: return 180;
+                case GateKind.G4: return 300;
                 default: return 0;
             }
         }
@@ -54,6 +60,7 @@ namespace EyeLabGates
         {
             var a = new GateArgs { Raw = argv ?? Array.Empty<string>() };
             double? duration = null;
+            bool renderFpsGiven = false;
 
             for (int i = 0; i < a.Raw.Length; i++)
             {
@@ -71,6 +78,7 @@ namespace EyeLabGates
                             case "g1": a.Gate = GateKind.G1; break;
                             case "g2": a.Gate = GateKind.G2; break;
                             case "g3": a.Gate = GateKind.G3; break;
+                            case "g4": a.Gate = GateKind.G4; break;
                             case "manual": a.Gate = GateKind.Manual; break;
                             case "cooldown": a.Gate = GateKind.Cooldown; break;
                             default: a.Warnings.Add($"unknown -gate '{value}', using manual"); break;
@@ -99,8 +107,18 @@ namespace EyeLabGates
                         break;
                     case "-renderfps":
                         i++;
-                        if (value == "30" || value == "60") a.RenderFps = value == "30" ? 30 : 60;
+                        if (value == "30" || value == "60") { a.RenderFps = value == "30" ? 30 : 60; renderFpsGiven = true; }
                         else a.Warnings.Add($"bad -renderFps '{value}', using 60");
+                        break;
+                    case "-burstevery":
+                        i++;
+                        if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double be) && be >= 0) a.BurstEvery = be;
+                        else a.Warnings.Add($"bad -burstEvery '{value}', using 2");
+                        break;
+                    case "-burstframes":
+                        i++;
+                        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int bf) && bf >= 1 && bf <= 30) a.BurstFrames = bf;
+                        else a.Warnings.Add($"bad -burstFrames '{value}', using 3");
                         break;
                     case "-flushlag":
                         i++;
@@ -124,6 +142,7 @@ namespace EyeLabGates
             }
 
             a.Duration = duration ?? DefaultDuration(a.Gate);
+            if (a.Gate == GateKind.G4 && !renderFpsGiven) a.RenderFps = 30;
             if (string.IsNullOrEmpty(a.LogRoot))
                 a.LogRoot = Path.Combine(Application.persistentDataPath, "GateRuns");
             return a;

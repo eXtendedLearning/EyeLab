@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional
 
-RUN_RE = re.compile(r"^(?P<ts>\d{8}_\d{6})_(?P<gate>G1|G2|G3|manual|Cooldown)_(?P<label>.+?)(?:_\d+)?$")
+RUN_RE = re.compile(r"^(?P<ts>\d{8}_\d{6})_(?P<gate>G1|G2|G3|G4|manual|Cooldown)_(?P<label>.+?)(?:_\d+)?$")
 LOG_RE = re.compile(r"^player_(?P<label>.+)_(?P<ts>\d{8}_\d{6})\.log$")
 
 #: The launcher starts the player, which creates its run folder this many seconds later at most.

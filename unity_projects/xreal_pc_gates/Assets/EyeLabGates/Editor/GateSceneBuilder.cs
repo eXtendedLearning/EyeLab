@@ -87,6 +87,10 @@ namespace EyeLabGates.EditorTools
             drainSo.FindProperty("m_Preview").objectReferenceValue = preview;
             drainSo.ApplyModifiedPropertiesWithoutUndo();
             Log($"wired vendor source -> {texture.gameObject.name}, drain preview -> {(preview != null ? preview.gameObject.name : "null")}");
+            var overlaySo = new SerializedObject(go.GetComponent<GateOverlay>());
+            overlaySo.FindProperty("m_Material").objectReferenceValue = OverlayMaterial();
+            overlaySo.ApplyModifiedPropertiesWithoutUndo();
+            Log($"wired G4 overlay material {OverlayMaterialPath}");
             Log($"added GateHarness: components [{string.Join(",", go.GetComponents<Component>().Select(c => c.GetType().Name))}]");
 
             if (!EditorSceneManager.SaveScene(scene))
@@ -97,6 +101,28 @@ namespace EyeLabGates.EditorTools
 
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(HarnessScene, true) };
             Log("EditorBuildSettings.scenes = [GateHarness] (Play-mode convenience; BuildGates passes scenes explicitly)");
+        }
+
+        public const string OverlayMaterialPath = "Assets/EyeLabGates/Materials/OverlayGrid.mat";
+
+        /// <summary>
+        /// Unlit green material for the G4 grid. A scene reference is what puts the shader in the
+        /// player; Shader.Find alone would return null for a shader no asset uses.
+        /// </summary>
+        static Material OverlayMaterial()
+        {
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(OverlayMaterialPath);
+            if (mat != null) return mat;
+            if (!AssetDatabase.IsValidFolder("Assets/EyeLabGates/Materials"))
+                AssetDatabase.CreateFolder("Assets/EyeLabGates", "Materials");
+            var shader = Shader.Find("Unlit/Color");
+            if (shader == null)
+                throw new Exception($"{k_Tag} shader Unlit/Color not found");
+            mat = new Material(shader) { name = "OverlayGrid", color = new Color(0.2f, 1f, 0.35f) };
+            AssetDatabase.CreateAsset(mat, OverlayMaterialPath);
+            AssetDatabase.SaveAssets();
+            Log($"created {OverlayMaterialPath}");
+            return mat;
         }
 
         static void Verify()
@@ -111,8 +137,12 @@ namespace EyeLabGates.EditorTools
                 throw new Exception($"{k_Tag} VERIFY failed: VendorCameraSource texture not wired");
             if (drain == null || drain.Preview == null)
                 throw new Exception($"{k_Tag} VERIFY failed: DrainingCameraSource preview not wired");
-            if (controller.GetComponent<PerfProbe>() == null || controller.GetComponent<CameraProbe>() == null)
+            if (controller.GetComponent<PerfProbe>() == null || controller.GetComponent<CameraProbe>() == null
+                || controller.GetComponent<DisplayProbe>() == null)
                 throw new Exception($"{k_Tag} VERIFY failed: probes missing");
+            var overlay = controller.GetComponent<GateOverlay>();
+            if (overlay == null || overlay.Material == null)
+                throw new Exception($"{k_Tag} VERIFY failed: GateOverlay or its material missing");
             var example = UnityEngine.Object.FindAnyObjectByType<RGBCameraExample>(FindObjectsInactive.Include);
             var exampleSo = new SerializedObject(example);
             foreach (var name in new[] { "m_PlayButton", "m_StopButton" })

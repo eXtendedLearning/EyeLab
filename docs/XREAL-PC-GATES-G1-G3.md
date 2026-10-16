@@ -827,6 +827,9 @@ Three findings:
    This is the cause of the G3 latency on this host; the camera path itself is
    not slow. Whether it is thermal or power limiting is not separated (mains
    power and Windows power mode to be confirmed).
+   **Corrected in §16:** throttling makes it much worse, but it is not the only
+   cause. With 6DoF running, the host-side decoder falls behind even at full
+   clock (24-28 fps).
 3. **The Eye image buffer is bottom-up.** On a G1 snapshot, ArUco detection
    (DICT_4X4_50) finds 16 markers after a vertical flip, 2 spurious ones as
    stored and after a 180° rotation. So the preview's flip was backwards (the
@@ -891,3 +894,171 @@ upright on its kickstand in a cool spot (a desk fan on its back helps), and
 run the cool-down check (`K`) between XR runs and start the next run when it
 says "Cool enough". Order: **G1** (sanity: colour, upright preview), **G3c**,
 **G3c-30fps**, **G3c-flush**, then G2 and the rest if time allows.
+(Superseded by §16.)
+
+## 16. Afternoon runs of 2026-10-14 (radiator) and the light-overlay gate G4
+
+### Results (build `2026-10-14T10:03:14Z`, aluminium radiator on the Surface's back)
+
+`python -m xreal_gates summary` now also prints the seconds at full CPU clock after
+Enter XR (until the clock stays below 150 % of nominal for 3 s), the rate at which
+the SDK *received* Eye frames, the hottest thermal zone and the G4 bursts.
+
+| Run (in order) | Rest before | Full clock after XR | Decoded camera fps | Lag at end |
+|---|---|---|---|---|
+| G3c (after a 2 h rest) | 2 h | **96 s**, then ~140 % | 24-25 while at full clock, 16-18 after | 45 s |
+| G3c-30fps | ~1 min | 47 s | 27-28, then 13-19 | 47 s |
+| G3c-flush | ~1 min | 9 s | 8-11 | bounded at 2-3 s (27 restarts) |
+| G2 | ~1 min | 7 s | – | – |
+| G3-3DoF | ~1 min | throttled from the start | 7-8 | 105 s |
+| G3c-drain | 7.5 min | 12 s | 7 | 101 s |
+
+Same morning without the radiator: G2 49 s. Findings:
+
+1. **The Eye stream is decoded on the host CPU, and the decoder is the
+   bottleneck.** The SDK's native log counts frames received over USB (`rgb recv`):
+   **29.8 fps in every run**, including the throttled ones, at 60-77 KB per
+   1280x720 frame (a compressed stream). What reaches the application is the
+   decoder's output:
+   - 30 fps with no XR (G1);
+   - 24-25 fps next to 6DoF at full clock;
+   - 27-28 fps at a 30 fps render rate;
+   - 7-10 fps when throttled.
+
+   Every frame is delivered in order, so the lag grows whenever the decoder is
+   slower than 30 fps. This corrects §15, which blamed throttling alone: on this
+   host a continuous Eye stream next to 6DoF never stays real time.
+2. **No application-side reader can skip the backlog.** The drain reader never
+   found more than one frame waiting (`drained` = 0 in all 1088 rows), and its
+   frames arrived exactly 33.5 ms apart. The queue sits inside the SDK, before
+   the acquisition API.
+3. **Restarting the camera empties that queue.** In G3c-flush, the lag after each
+   restart fell back to 0.0-0.2 s, and the first frame arrived 0.1-1.1 s after
+   the start. So a fresh frame on demand costs about 1 s and leaves the decoder
+   idle in between. G4 is built on this.
+4. **The radiator helps once, then saturates.** It doubled the first run's
+   full-clock time (49 → 96 s), and the throttled clock stayed near 140 % instead
+   of 60 %. After that the stored heat dominates: 7.5 min of rest gave only 12 s.
+5. **The cool-down check (K) of 0.2.006 was wrong.**
+   - Its 3.5 s probe read 205-233 % every time, even straight after a run that
+     ended at 60 %. The CPU's short turbo budget refills within seconds of idling.
+   - So it said "Cool enough" after 23 s, and the next runs throttled within
+     7-15 s.
+   - Fixed: the probe now lasts 20 s and is judged on its last 5 s, and the
+     thermal zones are logged.
+6. **6DoF is good when it runs.** In G2 the 90° turns read as 85-88°. The
+   side-steps between floor marks 500 mm apart read as 0.36-0.47 m, but the
+   operator may have missed slides because of the flipped view (item 8). So this
+   is not yet a scale result; the camera is the better scale check later.
+7. **The tracker wants motion while it scans.** Both tracking timeouts sat in
+   `Scanning` while the operator held still. G2 became ready only at t = 96 s (89 s after Enter
+   XR), during a side-step, so its 30 s "hold still" phase was recorded untracked.
+   The wait now prompts "Step slowly side to side" every 8 s while not ready.
+8. **G2 showed the whole XR view upside down in the glasses** (operator). None of
+   the recorded data is flipped:
+   - All camera snapshots of all seven camera runs are upright, by ArUco count
+     as stored versus flipped.
+   - The G2 head pose stayed level throughout.
+
+   The flip therefore happened after the app. The suspect is Windows rotating
+   the display (the Surface sits against the radiator, and auto-rotate follows
+   its accelerometer). The new build logs every display's rotation at start and
+   after Enter XR, and again whenever it changes. It also saves screenshots of
+   what the app drew. Turn on Rotation lock on the Surface.
+
+### Direction (Jack, 2026-10-14)
+
+- **The target is the Beam Pro, so the pipeline must get lighter.** No desktop
+  DP-in card will be bought (`HARDWARE.md`): it would be personal money, could
+  not be reproduced, and could not be shown outside the lab.
+- **The glasses show only an outline or grid with points**, calibrated and
+  world-locked on the target, and no video.
+- **Camera frames are only analysed**, not displayed.
+- **Continuous 6DoF is not a requirement.**
+
+### G4 — light overlay (build `2026-10-14T20:21:48Z`)
+
+G4 starts the "rendering + calibration" gate that §1 and §9 left for later. Its
+first part measures whether a light enough runtime is sustainable on the
+Surface. Its burst snapshots of the board feed the remaining G4 items offline:
+vendor intrinsics against ChArUco, and capture-time pose.
+
+- **Display.** XR rendered at 30 fps (`-renderFps 60` overrides). After tracking
+  is ready, the operator looks at the board and a **world-locked 60 x 40 cm
+  grid** appears 1 m along the gaze:
+  - 10 cm cells, 4 mm lines, 2 cm points at the corners and the centre;
+  - one static mesh, one draw call per eye;
+  - `P` re-places it.
+
+  The HUD shrinks to a banner at the top, with no camera preview and no YUV
+  conversion.
+- **Camera bursts.** Every `-burstEvery` s (default 2) the camera starts. It
+  stops after `-burstFrames` unique frames (default 3), or after 3 s without
+  them. The last frame is saved as an upright PGM, and a `burst` event records
+  the frames, the time to the first frame and the time on. `-burstEvery 0`
+  never starts the camera (control).
+- **Tracking.** `-order tracked` is 6DoF and waits for READY (continuing after
+  30 s if needed). `-order 3dof` is 3DoF: the grid follows head rotation only,
+  so it slides when you step. That is the case where camera registration would
+  correct it later.
+- **Protocol, 293 s:**
+
+  | Step | Seconds |
+  |---|---|
+  | hold still on the board | 30 |
+  | move head slowly | 30 |
+  | translation A→B→A | 23 |
+  | look away and back | 20 |
+  | walk a slow loop, end on A | 40 |
+  | hold still | 30 |
+  | move head | 30 |
+  | **sustain** hold | 60 |
+  | look around, end on the board | 30 |
+
+  The questions are whether the grid stays on the board and whether the clock
+  holds over 5 minutes.
+- **Launcher.**
+
+  | Key | Option |
+  |---|---|
+  | 2 | G4-6DoF |
+  | 3 | G4-3DoF |
+  | 4 | G4-nocam |
+  | 1 | G1 |
+  | 5 | G2 |
+  | 6-9, D | G3 variants (kept for comparing cooling) |
+  | M | manual |
+  | K | cool-down |
+
+Also in this build:
+
+- **Cool-down check.** Each check runs 2 busy threads for 20 s, judges the mean
+  clock of the last 5 s against 150 %, then rests 20 s. One passing check is
+  enough. Gives up after 10 min.
+- **Tracking wait.** A movement prompt every 8 s while the tracker reports
+  Scanning or Initializing.
+- **Diagnostics.** `display` events (each display's mode, position and rotation;
+  `CHANGED` when it changes). Screenshots in `screens/`: the first step, every
+  30 s at a step change, tracking ready, and grid placed.
+- **Logging.** `perf.csv` gains `temp_max_c,temps` (ACPI thermal zones; empty
+  where Windows exposes none). `run.json` args gain `burst_every_s` and
+  `burst_frames`.
+
+### Next Surface session (fan instead of radiator)
+
+Before running: Rotation lock on, mains power, Best performance, fan on the
+back, and the new build (the launcher shows `[OK]`). Order:
+
+1. **1 G1**: sanity check.
+2. **K**.
+3. **2 G4-6DoF**: does the grid stay on the board, and does the clock hold?
+4. **K**.
+5. **3 G4-3DoF**.
+6. **K**.
+7. **4 G4-nocam**.
+8. **K**.
+9. **6 G3c**: the full-video comparison with the radiator's 96 s.
+
+Then **Z**. In each G4 run, note whether the grid slid, jumped or stayed put.
+If any view is upside down, note which run and whether the Surface's own screen
+was flipped too.

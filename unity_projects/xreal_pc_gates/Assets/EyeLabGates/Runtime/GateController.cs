@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Unity.XR.XREAL;
@@ -13,7 +14,7 @@ using UnityEngine.XR;
 namespace EyeLabGates
 {
     /// <summary>
-    /// Gate state machine (G1/G2/G3/manual) and guided protocol: timed steps announced by voice and
+    /// Gate state machine (G1/G2/G3/G4/manual/cool-down) and guided protocol: timed steps announced by voice and
     /// beep and shown large by <see cref="GateHud"/>. Keyboard control and lifecycle event log. XR is
     /// entered and exited only through the scene's <see cref="HelloMR.OnClickSwitchXRButton"/>, i.e.
     /// the vendor flow. In the Editor, XR is refused: entering XR on the desktop changes its EDID and
@@ -21,7 +22,7 @@ namespace EyeLabGates
     /// </summary>
     [RequireComponent(typeof(CameraProbe), typeof(PoseProbe), typeof(DeviceInfoProbe))]
     [RequireComponent(typeof(PerfProbe), typeof(VendorCameraSource), typeof(DrainingCameraSource))]
-    [RequireComponent(typeof(GateHud))]
+    [RequireComponent(typeof(GateHud), typeof(GateOverlay), typeof(DisplayProbe))]
     public sealed class GateController : MonoBehaviour
     {
         const float GlassesTimeout = 30f;
@@ -29,9 +30,17 @@ namespace EyeLabGates
         const float ExitXRTimeout = 10f;
         const float TrackingReadyTimeout = 30f;      // was 60 s; 6DoF was ready in 1.4-24 s on the Surface
         const double CoolEnoughPct = 150.0;          // CPU clock under load, % of nominal (cool: ~220, throttled: 45-60)
-        const float CooldownProbeLoadSeconds = 3.5f;
-        const float CooldownProbeEverySeconds = 10f;
+        // 14 Oct: a 3.5 s probe always read 205-233 % (the short turbo budget refills within seconds),
+        // even right after a run that ended at 60 %. The probe now outlasts that budget: 20 s of load,
+        // judged on the mean clock of its last 5 s.
+        const float CooldownProbeLoadSeconds = 20f;
+        const float CooldownJudgeSeconds = 5f;
+        const float CooldownRestSeconds = 20f;
         const double CooldownMaxSeconds = 600.0;
+        const float ScanPromptSeconds = 8f;          // repeat the movement prompt while the tracker scans
+        const float ScreenshotEverySeconds = 30f;
+        const float OverlayDistance = 1.0f;
+        const float BurstTimeoutSeconds = 3f;
         const float TrackingReadyHold = 1f;
         const float NoReportFallbackSeconds = 15f;
         const float TickFromStepSeconds = 8f;   // 3-2-1 ticks only on steps at least this long
@@ -47,6 +56,8 @@ namespace EyeLabGates
         PoseProbe m_Pose;
         DeviceInfoProbe m_Device;
         PerfProbe m_Perf;
+        DisplayProbe m_Display;
+        GateOverlay m_Overlay;
         CameraSource m_Source;
         Speaker m_Speaker;
 
@@ -59,6 +70,9 @@ namespace EyeLabGates
         int m_LastReason = NativeTracking.NoValue;
         double m_LastLostCue = double.NegativeInfinity;
         double m_LastFlush = double.NegativeInfinity;
+        double m_LastScreenshot = double.NegativeInfinity;
+        int m_Bursts;
+        bool m_Bursting;
         int m_LastTick = -1;
         float m_StepSeconds;
         bool m_Quitting;
@@ -86,6 +100,9 @@ namespace EyeLabGates
         public double StepStart { get; private set; } = double.NegativeInfinity;
         public double StepEnd { get; private set; } = double.NaN;
         public bool IsCooldown => m_Args != null && m_Args.Gate == GateKind.Cooldown;
+        /// <summary>G4: banner at the top, no camera preview, so the overlay in the middle stays clear.</summary>
+        public bool IsLight => m_Args != null && m_Args.Gate == GateKind.G4;
+        public int Bursts => m_Bursts;
 
         void Awake()
         {
@@ -95,6 +112,8 @@ namespace EyeLabGates
             m_Pose = GetComponent<PoseProbe>();
             m_Device = GetComponent<DeviceInfoProbe>();
             m_Perf = GetComponent<PerfProbe>();
+            m_Display = GetComponent<DisplayProbe>();
+            m_Overlay = GetComponent<GateOverlay>();
             if (m_CameraTexture == null) m_CameraTexture = FindAnyObjectByType<XREALRGBCameraTexture>();
             if (m_HelloMR == null) m_HelloMR = FindAnyObjectByType<HelloMR>();
 
@@ -112,9 +131,11 @@ namespace EyeLabGates
                 drain.Preview = null;
             }
 
-            m_Camera.Attach(m_Log, m_Source, m_Args.SnapshotEvery);
+            // G4 saves exactly one snapshot per burst (its last frame) instead of one every 2 s.
+            m_Camera.Attach(m_Log, m_Source, m_Args.Gate == GateKind.G4 ? double.PositiveInfinity : m_Args.SnapshotEvery);
             m_Pose.Attach(m_Log);
             m_Device.Attach(m_Log);
+            m_Display.Attach(m_Log);
             m_Perf.Attach(m_Log, m_Camera, m_Pose, () => m_StepId);
             GateTitle = MakeGateTitle();
             GetComponent<GateHud>().Attach(this, m_Camera, m_Pose, m_Perf, BuildStamp());
@@ -173,12 +194,15 @@ namespace EyeLabGates
                 $"label={m_Args.Label} dir={m_Log.Directory}");
             if (m_HelloMR == null) m_Log.Event("setup_warning", "", "HelloMR not found in scene");
             if (m_CameraTexture == null) m_Log.Event("setup_warning", "", "XREALRGBCameraTexture not found in scene");
+            if (m_Overlay.Material == null) m_Log.Event("setup_warning", "", "GateOverlay material not assigned");
+            m_Display.Log("start");
 
             switch (m_Args.Gate)
             {
                 case GateKind.G1: m_Sequence = StartCoroutine(RunG1()); break;
                 case GateKind.G2: m_Sequence = StartCoroutine(RunG2()); break;
                 case GateKind.G3: m_Sequence = StartCoroutine(RunG3()); break;
+                case GateKind.G4: m_Sequence = StartCoroutine(RunG4()); break;
                 case GateKind.Cooldown: m_Sequence = StartCoroutine(RunCooldown()); break;
                 default:
                     Show("manual", "MANUAL MODE", "Keys: C camera, X XR, 3/6 DoF, R recenter, M mark, Esc quit", "");
@@ -317,28 +341,157 @@ namespace EyeLabGates
         }
 
         /// <summary>
+        /// G4 light overlay (guide §16): XR at 30 fps, 6DoF (<c>-order tracked</c>) or 3DoF
+        /// (<c>-order 3dof</c>), a world-locked grid placed on the board, no video on the glasses, and the
+        /// camera started only for short bursts (<c>-burstEvery</c>, <c>-burstFrames</c>; 0 = never).
+        /// Restarting the camera empties the SDK's decode queue (14 Oct G3c-flush: lag back to 0-0.2 s
+        /// after every restart), so each burst frame is fresh and the decoder idles in between.
+        /// </summary>
+        IEnumerator RunG4()
+        {
+            bool sixDof = m_Args.Order != "3dof";
+            Say(sixDof ? "Gate four. Light overlay, six degrees of freedom." : "Gate four. Light overlay, three degrees of freedom.");
+            string connect = null;
+            yield return Connect(r => connect = r);
+            if (connect != "OK") { yield return Quit(connect); yield break; }
+
+            string xr = null;
+            yield return StartXR(r => xr = r);
+            if (xr != "OK") { yield return Quit(xr); yield break; }
+
+            yield return SwitchTracking(sixDof ? TrackingType.MODE_6DOF : TrackingType.MODE_3DOF);
+            if (sixDof)
+            {
+                bool ready = false;
+                yield return WaitTrackingReady(r => ready = r);
+                if (!ready) Say("Continuing without tracking ready");
+            }
+
+            Show("place", "LOOK AT THE BOARD", "The grid will appear on it", "");
+            Say("Look at the board. The grid appears in three seconds.");
+            StepEnd = StepStart + 3.0;
+            yield return new WaitForSecondsRealtime(3f);
+            PlaceOverlay("start");
+
+            if (m_Args.BurstEvery > 0)
+                StartCoroutine(BurstLoop());
+            else
+                m_Log.Event("burst", "DISABLED", "burstEvery=0: camera never started");
+
+            yield return RunProtocol(GateProtocol.G4());
+            m_Bursting = false;
+            if (m_Source.IsCapturing) StopCapture("end");
+            m_Log.Event("burst_summary", m_Bursts, $"every={m_Args.BurstEvery.ToString(CultureInfo.InvariantCulture)}s frames={m_Args.BurstFrames}");
+            yield return Quit("COMPLETED");
+        }
+
+        void PlaceOverlay(string why)
+        {
+            Transform head = Camera.main != null ? Camera.main.transform : null;
+            if (head == null)
+            {
+                var cam = FindAnyObjectByType<Camera>();
+                head = cam != null ? cam.transform : null;
+            }
+            if (head == null) { m_Log.Event("overlay", "NO_CAMERA", why); return; }
+            m_Overlay.PlaceInFront(head, OverlayDistance);
+            Vector3 p = m_Overlay.Position;
+            m_Log.Event("overlay", "PLACED",
+                $"{why} pos={p.x.ToString("F3", CultureInfo.InvariantCulture)},{p.y.ToString("F3", CultureInfo.InvariantCulture)},{p.z.ToString("F3", CultureInfo.InvariantCulture)} " +
+                $"yaw={m_Overlay.YawDeg.ToString("F1", CultureInfo.InvariantCulture)} size={GateOverlay.Width.ToString(CultureInfo.InvariantCulture)}x" +
+                $"{GateOverlay.Height.ToString(CultureInfo.InvariantCulture)}m cell={GateOverlay.Cell.ToString(CultureInfo.InvariantCulture)}m");
+            Screenshot("overlay_" + why, force: true);
+        }
+
+        /// <summary>
+        /// One burst every <c>BurstEvery</c> s: start the camera, wait for <c>BurstFrames</c> unique
+        /// frames (or <see cref="BurstTimeoutSeconds"/>), save the last one, stop. Logged per burst:
+        /// time to the first frame, time on, and the lag growth of the last frame.
+        /// </summary>
+        IEnumerator BurstLoop()
+        {
+            m_Bursting = true;
+            while (m_Bursting && !m_Quitting)
+            {
+                double start = Time.realtimeSinceStartupAsDouble;
+                m_Bursts++;
+                if (!StartCapture($"burst_{m_Bursts}"))
+                {
+                    yield return new WaitForSecondsRealtime((float)m_Args.BurstEvery);
+                    continue;
+                }
+                bool requested = false;
+                if (m_Args.BurstFrames <= 1)
+                {
+                    m_Camera.SnapshotNextFrame();
+                    requested = true;
+                }
+                double first = double.NaN;
+                while (m_Camera.FramesThisCapture < m_Args.BurstFrames
+                       && Time.realtimeSinceStartupAsDouble - start < BurstTimeoutSeconds && m_Bursting && !m_Quitting)
+                {
+                    if (double.IsNaN(first) && m_Camera.FramesThisCapture > 0) first = Time.realtimeSinceStartupAsDouble - start;
+                    if (!requested && m_Camera.FramesThisCapture >= m_Args.BurstFrames - 1)
+                    {
+                        m_Camera.SnapshotNextFrame();
+                        requested = true;
+                    }
+                    yield return null;
+                }
+                if (double.IsNaN(first) && m_Camera.FramesThisCapture > 0) first = Time.realtimeSinceStartupAsDouble - start;
+                int frames = m_Camera.FramesThisCapture;
+                double on = Time.realtimeSinceStartupAsDouble - start;
+                if (m_Source.IsCapturing) StopCapture($"burst_{m_Bursts}");
+                m_Log.Event("burst", frames >= m_Args.BurstFrames ? "OK" : frames > 0 ? "SHORT" : "NO_FRAMES",
+                    $"n={m_Bursts} frames={frames} first_s={GateRunLog.F(first, "F3")} on_s={on.ToString("F3", CultureInfo.InvariantCulture)} " +
+                    $"lag_growth_s={GateRunLog.F(m_Camera.LagGrowth, "F3")} cam_ts={m_Camera.LastTimestamp}");
+                double wait = m_Args.BurstEvery - (Time.realtimeSinceStartupAsDouble - start);
+                if (wait > 0) yield return new WaitForSecondsRealtime((float)wait);
+                else yield return null;
+            }
+        }
+
+        /// <summary>
         /// Between XR runs: is the Surface cool again? An idle CPU clocks down by itself, so the clock is
-        /// read under a short load (two busy threads for 3.5 s) every 10 s. Two probes at or above
-        /// <see cref="CoolEnoughPct"/> end the check ("Cool enough"); the glasses are not needed.
+        /// read under load: two busy threads for 20 s, judged on the mean clock of the last 5 s, then
+        /// 20 s of rest. One probe at or above <see cref="CoolEnoughPct"/> ends the check ("Cool enough").
+        /// A short probe is not enough: the CPU's turbo budget refills within seconds of idling, so
+        /// even a hot Surface reads full clock for the first ~10 s (14 Oct, build 0.2.006). Every
+        /// probe also logs the hottest thermal zone, to compare cooling methods and recalibrate.
         /// </summary>
         IEnumerator RunCooldown()
         {
-            Say("Cool-down check");
+            Say("Cool-down check. Leave the Surface alone.");
             double t0 = Time.realtimeSinceStartupAsDouble;
-            int probe = 0, good = 0;
+            int probe = 0;
             while (true)
             {
                 probe++;
-                Show("cool_load", $"MEASURING (check {probe})", "Short CPU load to read the clock", "");
+                Show("cool_load", $"MEASURING (check {probe})", "20 s CPU load to read the sustained clock", "");
                 StepEnd = StepStart + CooldownProbeLoadSeconds;
+                m_StepSeconds = CooldownProbeLoadSeconds;
                 var stop = new ManualResetEventSlim(false);
                 var load = new[] { new Thread(() => Spin(stop)), new Thread(() => Spin(stop)) };
                 foreach (var th in load) { th.IsBackground = true; th.Start(); }
-                yield return new WaitForSecondsRealtime(CooldownProbeLoadSeconds);
-                double clock = m_Perf.CpuPerformancePct;
+                double loadStart = Time.realtimeSinceStartupAsDouble, sum = 0;
+                int n = 0;
+                while (Time.realtimeSinceStartupAsDouble - loadStart < CooldownProbeLoadSeconds)
+                {
+                    yield return new WaitForSecondsRealtime(1f);
+                    double c = m_Perf.CpuPerformancePct;
+                    if (!double.IsNaN(c) && Time.realtimeSinceStartupAsDouble - loadStart >= CooldownProbeLoadSeconds - CooldownJudgeSeconds)
+                    {
+                        sum += c;
+                        n++;
+                    }
+                }
                 stop.Set();
+                double clock = n > 0 ? sum / n : double.NaN;
+                string temp = double.IsNaN(m_Perf.TempMaxC) ? "n/a" : m_Perf.TempMaxC.ToString("F1", CultureInfo.InvariantCulture);
                 m_Log.Event("cooldown_probe", double.IsNaN(clock) ? "n/a" : clock.ToString("F0", CultureInfo.InvariantCulture),
-                            $"probe={probe} threshold={CoolEnoughPct.ToString(CultureInfo.InvariantCulture)}");
+                            $"probe={probe} threshold={CoolEnoughPct.ToString(CultureInfo.InvariantCulture)} " +
+                            $"load={CooldownProbeLoadSeconds.ToString(CultureInfo.InvariantCulture)}s judged_last={CooldownJudgeSeconds.ToString(CultureInfo.InvariantCulture)}s " +
+                            $"temp_max_c={temp} temps={m_Perf.Temps}");
 
                 if (double.IsNaN(clock))
                 {
@@ -348,17 +501,17 @@ namespace EyeLabGates
                     yield return Quit("NO_COUNTERS");
                     yield break;
                 }
-                good = clock >= CoolEnoughPct ? good + 1 : 0;
                 string pct = clock.ToString("F0", CultureInfo.InvariantCulture);
-                if (good >= 2)
+                double elapsed = Time.realtimeSinceStartupAsDouble - t0;
+                if (clock >= CoolEnoughPct)
                 {
-                    Show("cool_ready", "COOL ENOUGH", $"CPU clock {pct}% under load. Start the next gate.", "");
+                    Show("cool_ready", "COOL ENOUGH",
+                         $"Sustained CPU clock {pct}% after {(elapsed / 60).ToString("F1", CultureInfo.InvariantCulture)} min. Start the next gate.", "");
                     Say("Cool enough. Start the next gate.");
                     yield return new WaitForSecondsRealtime(4f);
                     yield return Quit("COOL");
                     yield break;
                 }
-                double elapsed = Time.realtimeSinceStartupAsDouble - t0;
                 if (elapsed > CooldownMaxSeconds)
                 {
                     Say("Still hot after ten minutes");
@@ -366,11 +519,11 @@ namespace EyeLabGates
                     yield break;
                 }
                 Show("cool_wait", $"COOLING: CLOCK {pct}%",
-                     $"Ready at {CoolEnoughPct.ToString("F0", CultureInfo.InvariantCulture)}% under load, twice in a row. " +
-                     $"Waiting {(elapsed / 60).ToString("F0", CultureInfo.InvariantCulture)} min so far.", "");
-                StepEnd = StepStart + CooldownProbeEverySeconds;
-                Say(clock >= CoolEnoughPct ? $"{pct} percent. One more check." : $"{pct} percent. Still cooling.");
-                yield return new WaitForSecondsRealtime(CooldownProbeEverySeconds);
+                     $"Ready at {CoolEnoughPct.ToString("F0", CultureInfo.InvariantCulture)}% sustained. " +
+                     $"Waiting {(elapsed / 60).ToString("F1", CultureInfo.InvariantCulture)} min so far. Hottest zone {temp} C.", "");
+                StepEnd = StepStart + CooldownRestSeconds;
+                Say($"{pct} percent. Still warm.");
+                yield return new WaitForSecondsRealtime(CooldownRestSeconds);
             }
         }
 
@@ -418,6 +571,7 @@ namespace EyeLabGates
             m_Log.Event("enter_xr_wait", started ? "STARTED" : "TIMEOUT", $"timeout={EnterXRTimeout}s");
             if (!started) { result("XR_TIMEOUT"); yield break; }
             m_Device.Probe("xr");
+            m_Display.Log("xr");
             if (m_Args.RenderFps == 30)
             {
                 // HelloMR.OnEnterXR sets vSyncCount = 1 after this callback; override a few frames later.
@@ -439,17 +593,30 @@ namespace EyeLabGates
             m_Log.Event("tracking_ready", "WAIT", $"timeout={TrackingReadyTimeout}s");
             double t0 = Time.realtimeSinceStartupAsDouble;
             double readySince = double.NaN;
+            double lastPrompt = t0;
             StepStart = t0;
             StepEnd = t0 + TrackingReadyTimeout;
             while (true)
             {
                 double now = Time.realtimeSinceStartupAsDouble;
+                // 14 Oct: both timeouts sat in Scanning while the operator held still; G2 became ready
+                // only during a side-step. The tracker needs parallax, so ask for movement.
+                int r = m_Pose.LastTrackingReason;
+                if (r != NativeTracking.Ready && r != NativeTracking.NoValue && now - lastPrompt >= ScanPromptSeconds)
+                {
+                    lastPrompt = now;
+                    StepTitle = "STEP SIDE TO SIDE SLOWLY";
+                    StepDetail = $"Tracker: {NativeTracking.Name(r)}. Small side-steps, look at the room, not at a blank wall";
+                    m_Log.Event("tracking_ready", "PROMPT", NativeTracking.Name(r));
+                    Say("Still scanning. Step slowly side to side.");
+                }
                 if (m_Pose.LastTrackingReason == NativeTracking.Ready)
                 {
                     if (double.IsNaN(readySince)) readySince = now;
                     if (now - readySince >= TrackingReadyHold)
                     {
                         m_Log.Event("tracking_ready", "READY", $"after={(now - t0).ToString("F1", CultureInfo.InvariantCulture)}s");
+                        Screenshot("tracking_ready", force: true);
                         m_Audio.PlayOneShot(m_ReadyBeep);
                         Say("Tracking ready");
                         yield return new WaitForSecondsRealtime(1.5f); // let the cue finish before step 1
@@ -509,12 +676,38 @@ namespace EyeLabGates
                 m_Log.Event("step", step.Id, $"{step.Seconds.ToString(CultureInfo.InvariantCulture)}s {step.Title}: {step.Detail}");
                 m_Audio.PlayOneShot(m_Beep);
                 Say(step.Speech);
+                Screenshot(step.Id, force: i == 0);
                 yield return new WaitForSecondsRealtime(step.Seconds);
             }
             m_InProtocol = false;
             m_Log.Event("protocol", "end", "");
             Show("done", "DONE", "Protocol complete, finishing", "");
             Say("Done");
+        }
+
+        /// <summary>
+        /// Saves what the app drew (eye views + HUD) to screens/. In XR only, at most every
+        /// <see cref="ScreenshotEverySeconds"/> s unless forced. If the glasses show the view upside down
+        /// while the screenshot is upright, the flip happens after the app (Windows display rotation).
+        /// </summary>
+        void Screenshot(string why, bool force = false)
+        {
+            if (!XRActive || m_Log == null) return;
+            double now = Time.realtimeSinceStartupAsDouble;
+            if (!force && now - m_LastScreenshot < ScreenshotEverySeconds) return;
+            m_LastScreenshot = now;
+            try
+            {
+                string dir = Path.Combine(m_Log.Directory, "screens");
+                Directory.CreateDirectory(dir);
+                string file = $"{now.ToString("F1", CultureInfo.InvariantCulture)}_{why}.png";
+                ScreenCapture.CaptureScreenshot(Path.Combine(dir, file));
+                m_Log.Event("screenshot", file, $"{Screen.width}x{Screen.height}");
+            }
+            catch (Exception e)
+            {
+                m_Log.Event("screenshot", "EXCEPTION", e.GetType().Name + ": " + e.Message);
+            }
         }
 
         void Show(string id, string title, string detail, string next)
@@ -706,6 +899,11 @@ namespace EyeLabGates
                 m_Log.Event("key", "R", "");
                 Recenter();
             }
+            if (Input.GetKeyDown(KeyCode.P) && XRActive)
+            {
+                m_Log.Event("key", "P", "");
+                PlaceOverlay("key");
+            }
             if (Input.GetKeyDown(KeyCode.Escape))
             {
                 m_Log.Event("key", "Esc", m_StepId);
@@ -798,6 +996,11 @@ namespace EyeLabGates
                 case GateKind.G1: return "G1 camera only";
                 case GateKind.G2: return "G2 6DoF";
                 case GateKind.Cooldown: return "Cool-down check";
+                case GateKind.G4:
+                    string burst = m_Args.BurstEvery > 0
+                        ? $"camera {m_Args.BurstFrames} fr every {m_Args.BurstEvery.ToString(CultureInfo.InvariantCulture)} s"
+                        : "no camera";
+                    return $"G4 light overlay {(m_Args.Order == "3dof" ? "3DoF" : "6DoF")}, {burst}, {m_Args.RenderFps} fps";
                 case GateKind.G3:
                     string reader = m_Source.SourceName == "drain" ? " +drain" : "";
                     string flush = (m_Args.FlushLag > 0 ? " +flush" : "") + (m_Args.RenderFps == 30 ? " @30fps" : "");

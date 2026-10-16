@@ -10,7 +10,7 @@ An XR spatial-localization aid for Experimental Modal Analysis impact-hammer tes
 
 ## Hardware in hand — read before any XREAL work
 
-**`docs/HARDWARE.md`** is the single source for the machines and the glasses, and what each can do. In short: XREAL One Pro + Eye; desktop `lagann-0526` (RTX 5060, no iGPU) has USB data to the glasses but **cannot drive them as a display**; the **Surface Pro 7** drives them as a display (USB-C DP Alt Mode) and has a built-in webcam. A Thunderbolt DP-in card for the desktop is an open purchase decision (ADR-003, open question 6). Update that file whenever hardware or a verified capability changes.
+**`docs/HARDWARE.md`** is the single source for the machines and the glasses, and what each can do. In short: XREAL One Pro + Eye; desktop `lagann-0526` (RTX 5060, no iGPU) has USB data to the glasses but **cannot drive them as a display**; the **Surface Pro 7** drives them as a display (USB-C DP Alt Mode) and has a built-in webcam. A Thunderbolt DP-in card for the desktop was an open purchase decision (ADR-003, open question 6); **decided 2026-10-14: not buying** — the pipeline is made light enough for the Surface and the Beam Pro instead (`docs/HARDWARE.md`). Update that file whenever hardware or a verified capability changes.
 
 ## Document precedence
 

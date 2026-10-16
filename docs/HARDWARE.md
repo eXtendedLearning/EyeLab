@@ -5,7 +5,7 @@
 > each machine can and cannot do with the glasses. Update it whenever hardware is
 > bought, lent, or a capability is verified or refuted.
 >
-> Last updated: 2026-10-14 (Surface throttles under sustained XR load; Eye buffer is bottom-up. Earlier: 2026-10-13 Surface runs of the PC beta 3.1.2 gate harness: Smart App Control must be off; Eye frames and 6DoF each observed, concurrent use degrades. Earlier: 2026-10-09 desktop USB/NCM and TCP preflight; PC beta sample inspected; emulator assessment corrected).
+> Last updated: 2026-10-14 (afternoon: Eye stream arrives at 30 fps over USB but is decoded on the host CPU, which falls behind with 6DoF even unthrottled; radiator doubles the first run's full-clock time; desktop DP-in card not to be bought. Earlier the same day: Surface throttles under sustained XR load; Eye buffer is bottom-up. Earlier: 2026-10-13 Surface runs of the PC beta 3.1.2 gate harness: Smart App Control must be off; Eye frames and 6DoF each observed, concurrent use degrades. Earlier: 2026-10-09 desktop USB/NCM and TCP preflight; PC beta sample inspected; emulator assessment corrected).
 
 ## Glasses
 
@@ -51,7 +51,7 @@ Two machines, with complementary limits:
 | Glasses as a display (USB-C DP Alt Mode) | **no** — on a desktop board the Type-C DP Alt Mode is sourced by the iGPU, which this CPU lacks; the RTX 5060's outputs are not USB-C | **yes** — S1 display smoke test passed 2026-09-22 |
 | Cameras | desktop USB webcam (model to record) | built-in cameras |
 | Windows security | – | **Smart App Control must be off** for the XREAL PC SDK: it blocked the unsigned `libnr_api.dll` (error 4551) on 2026-10-10; turned off by Jack 2026-10-13 |
-| Sustained XR load | – | **throttles**: CPU clock falls from ~220 % to 45-60 % of nominal about 50 s after XR starts and stays low across runs (2026-10-14, `perf.csv`); the Eye stream then decodes at 7-9 fps. Thermal vs power limit not separated; CPU/RAM variant still to record |
+| Sustained XR load | – | **throttles**: CPU clock falls from ~220 % to 45-60 % of nominal about 50 s after XR starts and stays low across runs (2026-10-14, `perf.csv`); the Eye stream then decodes at 7-9 fps. With an aluminium radiator on the back the first run kept full clock for 96 s and then ~140 %, but the radiator saturates: later runs after 1-7.5 min rest got 9-47 s. The Eye stream always *arrives* at 30 fps (compressed, ~70 KB/frame) and is decoded on the CPU: even at full clock it decodes at only 24-28 fps next to 6DoF, so a continuous video stream lags on this host regardless of cooling (`XREAL-PC-GATES-G1-G3.md` §16). CPU/RAM variant still to record |
 | Current role | native-SDK probing (S0–S5), compute-heavy work | display path (S1; S6 candidate), PC beta gate runs, portable demos |
 
 The glasses have a single USB-C connector, so the host must deliver video
@@ -68,6 +68,13 @@ does today.
 - **Decision gate:** buy only if S6 has to run on the desktop, i.e. once S6 is
   close and the Surface's compute has been measured as insufficient. S2–S5 need
   USB data only, which the desktop already has.
+- **Decided 2026-10-14 (Jack): not buying.** The target host is the Beam Pro
+  (mobile, not much faster than the Surface), a desktop-only setup could not be
+  reproduced or demonstrated elsewhere, and it would be personal money. The
+  pipeline is made lighter instead (no video on the glasses, camera frames only
+  analysed, short camera bursts, 6DoF only where needed: G4 in
+  `XREAL-PC-GATES-G1-G3.md` §16). Recorded here and in AGENTS.md; ADR-003's open
+  question 6 is answered by this decision, not by editing the ADR.
 
 ## Optional dual-camera webcam setup
 
@@ -105,5 +112,6 @@ Gate harness `unity_projects/xreal_pc_gates/`, procedure and analysis in
 In short: with Smart App Control off, the Surface runs an XREAL PC-beta session
 that presents on the glasses; the Eye delivers 1280x720 frames at 30 Hz without
 XR, and 6DoF tracking works on its own. Camera and 6DoF together degrade on this
-host (growing camera latency, tracking never initialises or fails). Whether the
-Surface's CPU is the cause has not been measured.
+host (growing camera latency, tracking never initialises or fails). Measured on
+2026-10-14 (§15, §16): the host CPU decodes the Eye stream and falls behind both
+when throttled (7-10 fps) and, with 6DoF running, even at full clock (24-28 fps).

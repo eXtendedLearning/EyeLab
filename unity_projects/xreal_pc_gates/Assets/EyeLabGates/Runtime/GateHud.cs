@@ -11,7 +11,8 @@ namespace EyeLabGates
     /// is side by side (3840x1080). Per view: a large centred banner with the step title, a countdown
     /// and a progress bar (flashes bright on every step change); a large tracking line; a throttling
     /// warning when the CPU clock falls below 80 % of nominal; a colour camera preview at the bottom
-    /// (only while frames arrive); diagnostics in small print.
+    /// (only while frames arrive); diagnostics in small print. G4 (light): a smaller banner at the top,
+    /// no preview (and no YUV conversion), so the world-locked grid in the middle stays clear.
     /// On the glasses black is transparent, so dark panels read as see-through.
     /// </summary>
     public sealed class GateHud : MonoBehaviour
@@ -52,7 +53,7 @@ namespace EyeLabGates
         void Update()
         {
             CameraSource src = m_Gate != null ? m_Gate.Source : null;
-            if (src == null || !src.IsCapturing) return;
+            if (src == null || !src.IsCapturing || m_Gate.IsLight) return;
             Texture2D luma = src.LumaTexture;
             double now = Time.realtimeSinceStartupAsDouble;
             if (luma == null || src.Timestamp == m_PreviewTs || now - m_LastPreview < PreviewInterval) return;
@@ -140,14 +141,15 @@ namespace EyeLabGates
 
             // ---- banner
             bool flash = now - m_Gate.StepStart < FlashSeconds;
-            var header = Style(Mathf.RoundToInt(h / 36f), TextAnchor.UpperCenter, false);
-            var title = Style(Mathf.RoundToInt(h / 12f), TextAnchor.MiddleCenter, true);
-            var detail = Style(Mathf.RoundToInt(h / 30f), TextAnchor.UpperCenter, false);
-            var count = Style(Mathf.RoundToInt(h / 10f), TextAnchor.MiddleRight, true);
+            bool light = m_Gate.IsLight;
+            var header = Style(Mathf.RoundToInt(h / (light ? 44f : 36f)), TextAnchor.UpperCenter, false);
+            var title = Style(Mathf.RoundToInt(h / (light ? 20f : 12f)), TextAnchor.MiddleCenter, true);
+            var detail = Style(Mathf.RoundToInt(h / (light ? 40f : 30f)), TextAnchor.UpperCenter, false);
+            var count = Style(Mathf.RoundToInt(h / (light ? 18f : 10f)), TextAnchor.MiddleRight, true);
 
-            float bw = v.width * 0.84f;
+            float bw = v.width * (light ? 0.7f : 0.84f);
             float bx = v.x + (v.width - bw) / 2f;
-            float by = v.y + h * 0.05f;
+            float by = v.y + h * (light ? 0.02f : 0.05f);
             string stepNo = m_Gate.StepCount > 0 && m_Gate.StepIndex > 0 ? $"step {m_Gate.StepIndex}/{m_Gate.StepCount}" : "";
             string headerText = $"{m_Gate.GateTitle}   {stepNo}";
             string next = string.IsNullOrEmpty(m_Gate.NextTitle) ? "" : $"   next: {m_Gate.NextTitle}";
@@ -181,7 +183,7 @@ namespace EyeLabGates
             }
 
             // ---- tracking line
-            var big = Style(Mathf.RoundToInt(h / 20f), TextAnchor.MiddleCenter, true);
+            var big = Style(Mathf.RoundToInt(h / (light ? 34f : 20f)), TextAnchor.MiddleCenter, true);
             int reason = m_Pose.LastTrackingReason;
             string trackText;
             Color trackColor;
@@ -242,7 +244,8 @@ namespace EyeLabGates
                 $"head mm {p.x.ToString("F0", Inv)} {p.y.ToString("F0", Inv)} {p.z.ToString("F0", Inv)}  yaw {Wrap(e.y).ToString("F0", Inv)}\n" +
                 $"cpu {m_Perf.CpuCoresBusy.ToString("F1", Inv)} cores  sys {Pct(m_Perf.SystemCpuPct)}  clock {Pct(m_Perf.CpuPerformancePct)}\n" +
                 $"glasses {(m_Gate.GlassesConnected ? "ok" : "-")}  XR {(m_Gate.XRActive ? "on" : "off")}  marks {m_Gate.Marks}  build {m_Build}\n" +
-                "Esc abort   M mark";
+                (light ? $"bursts {m_Gate.Bursts}  temp {(double.IsNaN(m_Perf.TempMaxC) ? "-" : m_Perf.TempMaxC.ToString("F0", Inv) + " C")}\n" : "") +
+                (light ? "Esc abort   M mark   P place grid" : "Esc abort   M mark");
             float dw = v.width * 0.32f;
             float dh = diag.CalcHeight(new GUIContent(diagText), dw);
             Label(new Rect(v.x + pad * 2, v.yMax - dh - pad * 2, dw, dh), diagText, diag, Grey);

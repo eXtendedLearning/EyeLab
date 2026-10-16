@@ -33,6 +33,13 @@ namespace EyeLabGates
         public long DrainedFrames { get; private set; }
         public ulong LastTimestamp { get; private set; }
         public Vector2Int LastResolution { get; private set; }
+        /// <summary>Unique frames since the last <see cref="NotifyCaptureStarted"/> (G4 bursts).</summary>
+        public int FramesThisCapture { get; private set; }
+
+        bool m_SnapshotNext;
+
+        /// <summary>Saves the next unique frame as a snapshot regardless of <c>snapshotEvery</c>.</summary>
+        public void SnapshotNextFrame() => m_SnapshotNext = true;
 
         /// <summary>
         /// How much further behind the newest frame is than the first frame of the run, in s:
@@ -75,6 +82,7 @@ namespace EyeLabGates
         {
             m_HasPrevSub = false;
             m_HasPrevTs = false;
+            FramesThisCapture = 0;
         }
 
         void OnFrame()
@@ -97,6 +105,7 @@ namespace EyeLabGates
             if (!dup)
             {
                 UniqueFrames++;
+                FramesThisCapture++;
                 m_UniqueTimes.Enqueue(t);
             }
 
@@ -119,9 +128,10 @@ namespace EyeLabGates
                     Buffer.BlockCopy(m_Sub, 0, m_PrevSub, 0, m_Sub.Length);
                     m_HasPrevSub = true;
 
-                    if (!dup && t - m_LastSnapshot >= m_SnapshotEvery)
+                    if (!dup && (m_SnapshotNext || t - m_LastSnapshot >= m_SnapshotEvery))
                     {
                         m_LastSnapshot = t;
+                        m_SnapshotNext = false;
                         var copy = new byte[w * h];
                         NativeArray<byte>.Copy(data, copy, w * h);
                         m_Log.SavePgmAsync(ts.ToString(Inv), w, h, copy);

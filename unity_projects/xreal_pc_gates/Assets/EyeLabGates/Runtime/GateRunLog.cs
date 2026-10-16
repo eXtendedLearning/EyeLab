@@ -23,7 +23,7 @@ namespace EyeLabGates
                                          "cam_pos_x,cam_pos_y,cam_pos_z,cam_rot_x,cam_rot_y,cam_rot_z,cam_rot_w,tracking_type,loader_active,tracking_reason";
         public const string EventsHeader = "t_unity,frame,event,result,detail";
         public const string PerfHeader = "t_unity,frame,unity_fps,cpu_process_pct,cpu_cores_busy,cpu_system_utility_pct,cpu_performance_pct," +
-                                         "gc_mb,cam_fps,cam_lag_growth_s,tracking_reason,step";
+                                         "gc_mb,cam_fps,cam_lag_growth_s,tracking_reason,step,temp_max_c,temps";
 
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 

@@ -1,5 +1,5 @@
 @echo off
-rem EyeLab XREAL PC-beta gate launcher (docs/XREAL-PC-GATES-G1-G3.md sections 13-15).
+rem EyeLab XREAL PC-beta gate launcher (docs/XREAL-PC-GATES-G1-G3.md sections 13-16).
 rem Copied into Builds\Win64\ by BuildGates.BuildAll. Every gate is guided by voice, beeps and a
 rem large banner in the glasses; do not click in the app.
 setlocal EnableExtensions
@@ -39,38 +39,45 @@ if not defined REPO (
 )
 echo  Check: the same build time is shown small at the bottom left of the app.
 echo  Before each run: Nebula and XREAL apps closed, glasses on the Surface USB-C, mains power,
-echo  Windows power mode "Best performance", Surface standing in a cool place, sound on.
-echo  Between XR runs use K (cool-down check): it says "Cool enough" when the next run can start.
+echo  Windows power mode "Best performance", Surface standing in a cool place, sound on,
+echo  Rotation lock ON (Settings, System, Display): the 14 Oct G2 showed the XR view upside down.
+echo  Between XR runs use K (cool-down check): 20 s load + 20 s rest per check, "Cool enough" when ready.
 echo  Run folder: %RUNROOT%
 echo.
-echo  1  G1         camera only, no XR                          (about 2 min)
-echo  2  G3c        camera + 6DoF, camera after TRACKING READY  (about 3 min)
-echo  3  G3c-30fps  as 2, XR rendered at 30 fps (lighter load)  (about 3 min)
-echo  4  G3c-flush  as 2, camera restarts when lag exceeds 1 s  (about 3 min)
-echo  5  G2         6DoF tracking only                          (about 4.5 min)
-echo  6  G3-3DoF    camera + XR in 3DoF (no 6DoF tracking)      (about 3 min)
-echo  7  G3c-drain  as 2, latest-frame reader                   (about 3 min)
-echo  8  Manual     keyboard control
-echo  K  Cool-down  CPU clock check, run between XR gates      (until cool, max 10 min)
+echo  1  G1           camera only, no XR                                 (about 2 min)
+echo  2  G4-6DoF      light: grid on the board, camera burst every 2 s   (about 6 min)
+echo  3  G4-3DoF      as 2 in 3DoF (lightest tracking)                   (about 6 min)
+echo  4  G4-nocam     as 2, camera never started (control)               (about 6 min)
+echo  5  G2           6DoF tracking only                                 (about 4.5 min)
+echo  6  G3c          camera + 6DoF, full video, after TRACKING READY    (about 3 min)
+echo  7  G3c-30fps    as 6, XR rendered at 30 fps                        (about 3 min)
+echo  8  G3c-flush    as 6, camera restarts when lag exceeds 1 s         (about 3 min)
+echo  9  G3-3DoF      full video + XR in 3DoF                            (about 3 min)
+echo  D  G3c-drain    as 6, latest-frame reader
+echo  M  Manual       keyboard control
+echo  K  Cool-down    sustained CPU clock check, run between XR gates   (until cool, max 10 min)
 echo  V  Vendor     XREAL RGBCamera sample (control, unmodified)
 echo  O  Open run folder
 echo  Z  Zip NEW runs for transfer (exported runs move to _exported)
 echo  Q  Quit
 echo.
-choice /c 12345678KVOZQ /n /m "Select: "
+choice /c 123456789DMKVOZQ /n /m "Select: "
 set "SEL=%errorlevel%"
 if "%SEL%"=="1" call :gate G1 g1 & goto menu
-if "%SEL%"=="2" call :gate G3 g3c -order tracked & goto menu
-if "%SEL%"=="3" call :gate G3 g3c_30fps -order tracked -renderFps 30 & goto menu
-if "%SEL%"=="4" call :gate G3 g3c_flush -order tracked -flushLag 1 & goto menu
+if "%SEL%"=="2" call :gate G4 g4_6dof -order tracked -burstEvery 2 & goto menu
+if "%SEL%"=="3" call :gate G4 g4_3dof -order 3dof -burstEvery 2 & goto menu
+if "%SEL%"=="4" call :gate G4 g4_nocam -order tracked -burstEvery 0 & goto menu
 if "%SEL%"=="5" call :gate G2 g2 & goto menu
-if "%SEL%"=="6" call :gate G3 g3_3dof -order 3dof & goto menu
-if "%SEL%"=="7" call :gate G3 g3c_drain -order tracked -reader drain & goto menu
-if "%SEL%"=="8" call :gate manual manual & goto menu
-if "%SEL%"=="9" call :gate cooldown cooldown & goto menu
-if "%SEL%"=="10" call :vendor & goto menu
-if "%SEL%"=="11" start "" explorer "%RUNROOT%" & goto menu
-if "%SEL%"=="12" call :zipruns & goto menu
+if "%SEL%"=="6" call :gate G3 g3c -order tracked & goto menu
+if "%SEL%"=="7" call :gate G3 g3c_30fps -order tracked -renderFps 30 & goto menu
+if "%SEL%"=="8" call :gate G3 g3c_flush -order tracked -flushLag 1 & goto menu
+if "%SEL%"=="9" call :gate G3 g3_3dof -order 3dof & goto menu
+if "%SEL%"=="10" call :gate G3 g3c_drain -order tracked -reader drain & goto menu
+if "%SEL%"=="11" call :gate manual manual & goto menu
+if "%SEL%"=="12" call :gate cooldown cooldown & goto menu
+if "%SEL%"=="13" call :vendor & goto menu
+if "%SEL%"=="14" start "" explorer "%RUNROOT%" & goto menu
+if "%SEL%"=="15" call :zipruns & goto menu
 goto :eof
 
 rem %1 gate, %2 label, %3..%6 optional extra args
