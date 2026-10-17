@@ -1062,3 +1062,167 @@ back, and the new build (the launcher shows `[OK]`). Order:
 Then **Z**. In each G4 run, note whether the grid slid, jumped or stayed put.
 If any view is upside down, note which run and whether the Surface's own screen
 was flipped too.
+
+## 17. G4 with the fan (2026-10-16), markers in the burst frames, and 0.3.000: Eye calibration + G5 locked overlay
+
+### Results (build `2026-10-14T20:21:48Z`, fan on the Surface's back)
+
+| Run | CPU clock median / min | Full clock after Enter XR | Camera |
+|---|---|---|---|
+| G1 | 229 / 99 % | – (no XR) | 27 fps |
+| G4-6DoF | 222 / 182 % | **whole run (315 s)** | 144/144 bursts complete, first frame 1.15 s after start |
+| G4-3DoF | 223 / 135 % | **whole run (308 s)** | 145/145 bursts complete |
+| G4-nocam | 212 / 126 % | 248 s | – |
+| G3c (last, full video) | 111 / 73 % | 14 s | 12 fps, lag +72 s |
+
+- **The light runtime is sustainable on the Surface with a fan.** Camera bursts cost
+  nothing measurable against no camera, and the operator judged the 6DoF grid very
+  stable. Full video still throttles.
+- **Every burst frame is current.** The lag growth stays within 0.04 s, because each
+  burst restarts the decoder's queue.
+- **The camera is on about 60 % of the time.** Each burst lasts about 1.2 s, almost
+  all of it waiting for the first frame.
+- **The display and screenshots behaved.** Every display reported rotation 0 for
+  the whole session (Rotation lock was on). The screenshots show the grid in both
+  eyes and the HUD, so screenshots work in XR.
+- **Temperature zones are logged.** The hottest one rose from 40 °C to 53 °C over
+  the session.
+- **K is still optimistic for full video.** It passed every time, and G3c then
+  throttled after 14 s. For G4 and G5 it is adequate.
+
+### Markers in the burst frames (offline, `python -m xreal_gates anchor`)
+
+The burst snapshots were never shown; the camera only took them. Detecting the 25 mm
+ChArUco board in them (IDs 0-16) and chaining each pose with the 6DoF head pose and the
+vendor's RGB-camera-from-head pose (§16, frame chain in `python/xreal_gates/anchor.py`):
+
+- **Detection.** The board was found in 59 % of the 6DoF run's frames (48 % in
+  3DoF); the misses are mostly frames where the operator looked away. Markers are
+  11-22 px wide at 0.7-0.9 m: the Eye's lens is wide, about 93° across, so 1 px is
+  about 1.3 mm at that distance. The PnP reprojection error is 0.4 px.
+- **Within a still phase the board holds.** Its world position varies by 6.6 mm
+  (median) within a still phase.
+- **Between phases it does not.** Its position differs by 10-110 mm between phases,
+  with the largest offsets when the board sits off-centre in the image. This is the
+  signature of an uncalibrated lens: the SDK supplies fx, fy, cx and cy but no
+  distortion.
+- **Duplicate IDs cause outliers.** A cluster 0.5 m to the side is almost certainly
+  the 20 mm board, which carries the same IDs. **Only one marker set per ID may be in
+  view.**
+- **The board's size is not observable from its image** (a pure scale error
+  reprojects perfectly); 25 mm is assumed.
+
+### What 0.3.000 adds
+
+**Eye calibration (launcher `C`, `-gate calib`).** Camera only, no XR, one snapshot
+every 0.5 s for about 2 minutes. Wearing the glasses with the head still, the operator
+holds the **25 mm board** and moves it into the zone outlined in yellow on the large
+preview (Surface screen): centre at arm's length, close, the four corners, the four
+edges, and tilted both ways, then a slow sweep.
+
+The launcher then runs `python -m xreal_gates calibrate --latest-in <runs>` on the
+Surface:
+
+- **View selection.** It detects the board in every snapshot and picks up to 60 views
+  spread over image position and board size.
+- **Model.** It fits OpenCV's standard 5-coefficient model, and the rational model
+  if that lowers the RMS by more than 15 %.
+- **Output.** It writes `eye_calibration.yaml` with a JSON report: coverage,
+  comparison with the vendor values, and the worst views. The YAML goes into the run
+  folder and into
+  `%USERPROFILE%\AppData\LocalLow\EyeLab\XrealPcGates\calibration\`, where G5 reads it.
+- **Refusals.** It writes nothing below 35 % image coverage, or when fx or fy is more
+  than 25 % from the vendor's. The 16 Oct G1 snapshots, with the board in one place,
+  gave RMS 0.37 px and fx 4344 px, which would have scaled every pose by about 7.
+
+**G5 locked overlay (launcher `A` plate A, `L` plate L, `B` 25 mm board).** G4's light
+runtime plus ADR-001's pose bridge.
+
+- **Pose service.** The launcher starts `python -m xreal_gates serve --target ...` in
+  a minimised window: Step C on the same machine, `ws://127.0.0.1:8765`, stdlib only.
+- **Connection.** The gate connects before entering XR; a missing service ends the
+  run as `NO_SERVICE`.
+- **Overlay geometry.** The service answers with the camera model it uses (the
+  calibration, else the vendor values, which the gate announces as a warning) and the
+  target's geometry from the single definitions:
+  - plates: `config/targets/plate_*.target.json`, the measured file when present,
+    giving saddle grid, markers and page outline;
+  - board: `calibrate.make_charuco_board`, giving squares and inner corners.
+- **Sending frames.** The last frame of each 2 s burst is sent, as a raw Y plane,
+  only while the head turns slower than 10°/s and moves slower than 8 cm/s. The head
+  pose at receipt then stands in for the unmeasured pose at exposure.
+- **Pose.** The service locates the target:
+  - plates: markers plus the printed saddles, found by the validation detector, with
+    at least **two markers** in view (saddles seeded from one 20 mm marker are often
+    wrong; validation B1b, 15 Oct);
+  - board: ChArUco corners.
+
+  It solves PnP with IPPE plus LM refinement for planar targets, and refuses an RMS
+  above 2 px or an ambiguous planar solution. It logs every frame to
+  `pose_service.csv` in the run folder. Each (session, sequence) is processed once.
+- **Placing the overlay.** The gate chains each pose into the world frame (`F R F`,
+  then the RGB-camera-from-head pose, then the head pose). `LockAnchor` filters it:
+  - the first lock places the overlay;
+  - a pose within 3 cm and 3° joins an 8-pose mean;
+  - three consistent outliers relock;
+  - while **frozen**, poses are compared and logged but not applied.
+- **Logging.** Every pose is a `lock` event: kind, jump in mm and degrees, markers,
+  points, RMS, service and round-trip ms, world position. The burst frames are saved
+  for `anchor`.
+- **Protocol (220 s), target about 70 cm in front of A:**
+
+  | Step | Seconds |
+  |---|---|
+  | acquire | 20 |
+  | hold still: do the points sit on the printed crosses? | 30 |
+  | move head | 20 |
+  | step left | 15 |
+  | step right | 15 |
+  | closer, about 40 cm | 15 |
+  | back to A | 15 |
+  | **frozen**: walk around and come back | 40 |
+  | **frozen**: hold still, has it drifted? | 20 |
+  | live again, hold still | 30 |
+
+Verified on the desktop:
+
+- **Python.** Synthetic renders of each target give the pose within 0.5-5 mm and 1°
+  (`test_g5.py`). Calibration recovers known intrinsics from synthetic views and
+  refuses a one-place capture (`test_calib.py`).
+- **Transport.** The real .NET `ClientWebSocket` exchanged hello and a 1280x720
+  frame with the service: plate A at 599.9 mm for 600 mm, in 40 ms round trip.
+- **Unity.** The players compile with 0 errors.
+- **Not yet run on the glasses:** the Unity player's bridge, the drawn target
+  overlay, and the frozen/live logic.
+
+Known limits:
+
+- **Timing.** The head pose is taken at frame receipt, not exposure. Capture-time
+  pose (`GetHeadPoseAtTime`) is still open.
+- **Extrinsic.** The RGB-camera-from-head pose is the vendor's, uncalibrated.
+- **Eye-to-display calibration.** What the operator sees also depends on XREAL's
+  display calibration; the frozen phase and "points on the crosses" check that end
+  to end. It is not a camera-only measurement (ADR-003).
+
+### Session order (Surface, fan, Rotation lock on, `git pull` first)
+
+The calibration and G5 need the repo's Python with OpenCV on the Surface (the launcher
+looks for `venv\Scripts\python.exe` in the repo, then `python` on PATH).
+
+1. **C** (calibration): the 20 mm board out of sight.
+   - Fill each yellow zone, holding each position still.
+   - The console prints RMS, coverage and the comparison with the vendor values. If
+     it refuses, repeat C, reaching further into the corners.
+2. **B** (G5 on the 25 mm board): the board fixed upright on a table or wall, about
+   70 cm from A.
+3. **A** (G5 on plate A).
+4. **L** (G5 on plate L): its fold at the front, both faces visible.
+5. **K** between runs if the Surface feels warm.
+6. **Z**.
+
+For each G5 run, note:
+
+- whether the points sat on the printed crosses, and by how much they missed (mm by
+  eye);
+- whether the overlay drifted during the frozen steps;
+- whether the relock snapped it back.

@@ -203,6 +203,11 @@ and SD across sessions). `--every k` analyses every k-th frame image.
 - **QA.** If `homography_residual_px` is not well below the `err_px` being
   reported, or many nodes are undetected, fix the image (focus, blur, glare)
   before interpreting anything.
+- **Ground-truth review.** A residual of 1 px or more, or missing nodes, can
+  also mean the saddle search locked onto the wrong junction (B1b seeds it from
+  one small marker). Check and correct with the ground-truth review
+  (`validation-campaign.md`, section 9); `ground_truth_points_reviewed` in
+  `summary.json` counts the corrected points used.
 
 ## Not covered yet
 

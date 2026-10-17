@@ -29,6 +29,8 @@ namespace EyeLabGates
                 .Set("render_fps", args.RenderFps)
                 .Set("burst_every_s", args.BurstEvery)
                 .Set("burst_frames", args.BurstFrames)
+                .Set("target", args.Target)
+                .Set("port", args.Port)
                 .Set("duration_s", args.Duration)
                 .Set("snapshot_every_s", args.SnapshotEvery)
                 .Set("label", args.Label)

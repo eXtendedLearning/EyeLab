@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from collections import defaultdict
 from dataclasses import asdict
@@ -11,9 +12,9 @@ import numpy as np
 
 from .metrics import (FIELDS, detection_stats, overlay_jitter_mm, per_node, pose_jitter,
                       projected_jitter_px, registration_errors)
-from .session import load_session
+from .session import Session, load_session
 from .stats import across_units, summarize
-from .target import load_target, target_digest
+from .target import Target, load_target, target_digest, target_to_dict
 from .uncertainty import expanded, tur
 
 NAN = float("nan")
@@ -57,10 +58,18 @@ def achieved_setup(records) -> dict:
 
 
 def analyze_session(session_path, target_path, out_dir, search_radius: float = 5.0,
-                    every: int = 1, plots: bool = True) -> dict:
-    s = load_session(session_path)
-    t = load_target(target_path)
-    digest = target_digest(target_path)
+                    every: int = 1, plots: bool = True, overrides=None) -> dict:
+    """``session_path``/``target_path`` may also be a loaded ``Session``/``Target`` (a
+    session read from a campaign zip, a target rebuilt from the caliper readings).
+    ``overrides``: reviewed ground truth of this session (``gt_review.load_overrides``)."""
+    s = session_path if isinstance(session_path, Session) else load_session(session_path)
+    if isinstance(target_path, Target):
+        t = target_path
+        digest = "rebuilt:" + hashlib.sha256(json.dumps(_builtin(target_to_dict(t)), sort_keys=True)
+                                             .encode()).hexdigest()[:16]
+    else:
+        t = load_target(target_path)
+        digest = target_digest(target_path)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     summary = {"session": str(s.path), "platform": s.meta.get("platform"),
@@ -79,7 +88,7 @@ def analyze_session(session_path, target_path, out_dir, search_radius: float = 5
             summary[f"jitter_{which}"], jit[which] = r
     summary["projected_jitter_px"] = summarize(projected_jitter_px(s.records))
 
-    rows, qa = registration_errors(s, t, search_radius, every)
+    rows, qa = registration_errors(s, t, search_radius, every, overrides=overrides)
     with open(out / "registration.csv", "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=list(FIELDS))
         w.writeheader()
@@ -109,9 +118,11 @@ def analyze_session(session_path, target_path, out_dir, search_radius: float = 5
         "max_node_bias_mm": max((n["bias_mm"] for n in nodes), default=float("nan")),
         "qa": {"frames_analysed": qa["frames_analysed"], "frames_no_marker": qa["frames_no_marker"],
                "homography_residual_px": summarize(qa["homography_residual_px"]),
+               "ground_truth_points_reviewed": qa["points_overridden"],
                "seed_offset_px": summarize([r.seed_offset_px for r in det])},
     }
-    if digest != s.meta.get("target_digest") and s.meta.get("target_digest"):
+    if digest != s.meta.get("target_digest") and s.meta.get("target_digest") \
+            and not digest.startswith("rebuilt:"):
         summary["warning"] = ("target file differs from the one used at capture "
                               "(expected after apply-measurements; check it is the same plate)")
     (out / "summary.json").write_text(json.dumps(_builtin(summary), indent=2), encoding="utf-8")

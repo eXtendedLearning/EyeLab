@@ -42,6 +42,77 @@ namespace EyeLabGates
             if (m_Grid != null) m_Grid.SetActive(false);
         }
 
+        // ---------------------------------------------------------------- G5 target overlay
+
+        const float TargetLine = 0.0025f, TargetPoint = 0.008f;
+        GameObject m_Target;
+
+        public bool TargetBuilt => m_Target != null;
+        public bool TargetVisible => m_Target != null && m_Target.activeSelf;
+
+        /// <summary>
+        /// Builds the G5 overlay from the pose service's geometry (target frame, OpenCV-handed, metres):
+        /// each segment as two crossed 2.5 mm strips and each point as three crossed 8 mm squares, so
+        /// they read from any angle. Vertices are converted with F = diag(1, -1, 1); the object's
+        /// rotation is then F R F (see <see cref="SetTargetPose"/>). Hidden until the first lock.
+        /// </summary>
+        public void BuildTarget(TargetOverlayGeometry geometry)
+        {
+            if (m_Target != null) Destroy(m_Target);
+            var verts = new List<Vector3>();
+            var tris = new List<int>();
+            float[] s = geometry.Segments;
+            for (int i = 0; i + 5 < s.Length; i += 6)
+                Strip(verts, tris, Flip(s[i], s[i + 1], s[i + 2]), Flip(s[i + 3], s[i + 4], s[i + 5]), TargetLine);
+            float[] p = geometry.Points;
+            for (int i = 0; i + 2 < p.Length; i += 3)
+            {
+                Vector3 c = Flip(p[i], p[i + 1], p[i + 2]);
+                float h = TargetPoint / 2f;
+                Strip(verts, tris, c - Vector3.right * h, c + Vector3.right * h, TargetPoint);
+                Strip(verts, tris, c - Vector3.up * h, c + Vector3.up * h, TargetPoint);
+            }
+            var mesh = new Mesh { name = "GateTargetOverlay", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+            mesh.SetVertices(verts);
+            mesh.SetTriangles(tris, 0);
+            mesh.RecalculateBounds();
+            m_Target = new GameObject("GateTargetOverlay");
+            m_Target.AddComponent<MeshFilter>().sharedMesh = mesh;
+            var renderer = m_Target.AddComponent<MeshRenderer>();
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            renderer.sharedMaterial = m_Material != null ? m_Material : new Material(Shader.Find("Unlit/Color"));
+            m_Target.SetActive(false);
+        }
+
+        public void SetTargetPose(Vector3 position, Quaternion rotation)
+        {
+            if (m_Target == null) return;
+            m_Target.transform.SetPositionAndRotation(position, rotation);
+            m_Target.SetActive(true);
+        }
+
+        static Vector3 Flip(float x, float y, float z) => new Vector3(x, -y, z);
+
+        /// <summary>Segment a-b as two crossed quads of the given width (double-sided).</summary>
+        static void Strip(List<Vector3> v, List<int> t, Vector3 a, Vector3 b, float width)
+        {
+            Vector3 d = b - a;
+            if (d.sqrMagnitude < 1e-12f) return;
+            d.Normalize();
+            Vector3 u = Vector3.Cross(d, Mathf.Abs(d.y) < 0.9f ? Vector3.up : Vector3.right).normalized * (width / 2f);
+            Vector3 w = Vector3.Cross(d, u).normalized * (width / 2f);
+            foreach (Vector3 off in new[] { u, w })
+            {
+                int i = v.Count;
+                v.Add(a - off);
+                v.Add(a + off);
+                v.Add(b + off);
+                v.Add(b - off);
+                t.AddRange(new[] { i, i + 1, i + 2, i, i + 2, i + 3, i, i + 2, i + 1, i, i + 3, i + 2 });
+            }
+        }
+
         GameObject Build()
         {
             var verts = new List<Vector3>();

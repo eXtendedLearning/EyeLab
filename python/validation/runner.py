@@ -98,6 +98,9 @@ MENU = """ Setup                               Measure
   3  Calibrate camera                Results
   4  Plate measurements                8  Analyse
   5  Visual check in the EyeLab GUI    9  Step-error table (B3)
+                                      10  Ground-truth review (GUI; also
+                                          campaigns zipped into
+                                          validation_runs/imports/)
                                        0  Quit"""
 
 
@@ -462,8 +465,12 @@ def analyse(c: Campaign) -> None:
             continue
         plate = next(s["plate"] for s in c.plan if s["test"] == t)
         out = c.reports_dir / t
+        gt = c.root / "gt_review"
+        extra = ["--gt-review", str(gt)] if gt.exists() else []
         run(PY + ["-m", "validation", "analyze", *map(str, sessions), "--target",
-                  c.target_for(plate), "--out", str(out), "--every", str(int(every))])
+                  c.target_for(plate), "--out", str(out), "--every", str(int(every)), *extra])
+        if extra:
+            print(f"{t}: ground truth corrected with the review in {gt}")
         print(f"{t}: reports in {out} (conditions.csv, sessions.csv, one folder per session)")
     pause()
 
@@ -500,8 +507,14 @@ def step_table(c: Campaign) -> None:
     pause()
 
 
+def ground_truth_review(c: Campaign) -> None:
+    from .gt_review_run import defaults, main as review_main
+    review_main(defaults(), Path(__file__).resolve().parent.parent)
+
+
 ACTIONS = {"1": self_test, "2": camera_and_focus, "3": calibrate, "4": plate_measurements,
-           "5": visual_check, "6": next_session, "7": pick_session, "8": analyse, "9": step_table}
+           "5": visual_check, "6": next_session, "7": pick_session, "8": analyse, "9": step_table,
+           "10": ground_truth_review}
 
 
 def main(root: str = "validation_runs") -> int:

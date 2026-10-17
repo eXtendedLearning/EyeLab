@@ -8,12 +8,19 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.2.007<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.3.000<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
+
+## [0.3.000] — 2026-10-17
+
+Milestone: the validation scripts are usable end to end (a partial campaign was
+captured, reviewed and analysed with them), and the XREAL PC-beta path reaches a
+sustainable light overlay on the Surface with camera-locked registration (G5)
+ready for its first glasses run. Everything below up to `[0.2.0]` ships in this cut.
 
 ### Fixed
 
@@ -24,6 +31,35 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
   run 38044386232 and the additional Windows version errors in run 38058570706.
 
 ### Added
+
+- (0.3.000) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §17).
+  - **16 Oct G4 runs with a fan.** The light runtime held full CPU clock for the
+    whole 5 minutes in 6DoF and 3DoF, and the burst frames are current.
+  - **Markers in the burst frames, offline.** The 25 mm board was detected in 59 % of
+    the frames. Its world position holds about 7 mm within a still phase, but moves
+    10-110 mm between phases without a lens calibration.
+  - **Eye calibration capture** (launcher `C`, `-gate calib`), followed by
+    `python -m xreal_gates calibrate`. It refuses a capture with low image coverage or
+    an implausible focal length.
+  - **G5 locked overlay** on plate A, plate L or the 25 mm board (launcher `A`/`L`/`B`).
+    ADR-001 `IArucoPoseBridge` with a stdlib WebSocket pose service on the Surface
+    (`python -m xreal_gates serve`) and a world anchor filter with frozen/live phases.
+    Plates need two markers in view.
+  - **Offline lock test**: `python -m xreal_gates anchor`.
+  - Capability rows 19-20.
+  - Rebuilt: `LATEST_BUILD.txt` 2026-10-16T16:19:31Z.
+- (0.3.000) Validation: ground-truth review (campaign menu 10, `python -m validation gt-review`).
+  A zoomed GUI to audit or correct the saddles the analysis uses as ground truth:
+  fixed-seed random audits, a per-session review that carries a decision to the
+  following frames (static scene) and re-snaps it, a list of every point with no
+  automatic truth, and a re-analysis with the corrected points. Campaigns from
+  another machine are read as zips from `python/validation_runs/imports/`; decisions
+  and reports go next to the source (`docs/validation-campaign.md`, section 9). The
+  analysis takes the corrections through `analyze --gt-review` (menu 8 does this
+  when the local campaign has a review); `ground_truth_points_reviewed` in
+  `summary.json` counts them. Motivated by the B1b sessions of 15 Oct, where the
+  saddles seeded from a single 20 mm marker were often wrong (seed offsets up to
+  the 5 px search radius, plane residuals 1–5 px).
 
 - (0.2.007) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §16). The radiator runs of
   14 Oct show the Eye stream arriving at 30 fps over USB but decoded on the

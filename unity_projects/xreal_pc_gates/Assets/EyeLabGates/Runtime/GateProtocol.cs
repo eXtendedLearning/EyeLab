@@ -1,8 +1,9 @@
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace EyeLabGates
 {
-    public enum StepAction { None, CameraStart, CameraStop, Track3DoF, Track6DoF }
+    public enum StepAction { None, CameraStart, CameraStop, Track3DoF, Track6DoF, AnchorFreeze, AnchorLive }
 
     /// <summary>
     /// One guided step. <see cref="Title"/> is shown large in the middle of each eye and spoken;
@@ -17,10 +18,13 @@ namespace EyeLabGates
         public readonly string Speech;
         public readonly float Seconds;
         public readonly StepAction Action;
+        /// <summary>Calibration: where the board should be in the camera image (normalised, y down); null = anywhere.</summary>
+        public readonly Rect? Zone;
 
         public ProtocolStep(string id, string title, string detail, float seconds,
-                            StepAction action = StepAction.None, string speech = null)
+                            StepAction action = StepAction.None, string speech = null, Rect? zone = null)
         {
+            Zone = zone;
             Id = id;
             Title = title;
             Detail = detail;
@@ -118,6 +122,60 @@ namespace EyeLabGates
             s.Add(new ProtocolStep("sustain", "HOLD STILL, RELAX", "Long hold: is the Surface keeping up?", 60, speech: "Hold still and relax"));
             s.Add(new ProtocolStep("look_around", "LOOK AROUND SLOWLY", "Slowly scan the room, end on the board", 30, speech: "Look around slowly, end on the board"));
             return s;
+        }
+
+        /// <summary>
+        /// Eye calibration capture, camera only: the operator wears the glasses, keeps the head still
+        /// and moves the 25 mm ChArUco board so that it fills each zone of the camera image in turn
+        /// (the large preview on the Surface screen shows the zone). Snapshots every 0.5 s.
+        /// </summary>
+        public static List<ProtocolStep> Calib()
+        {
+            const float t = 8f;
+            const string hold = "Move the board there, then hold it still for a moment";
+            var s = new List<ProtocolStep>
+            {
+                new ProtocolStep("centre_far", "BOARD IN THE CENTRE, ARM'S LENGTH", hold, t, speech: "Board in the centre, at arm's length", zone: Z(0.3f, 0.25f, 0.4f, 0.5f)),
+                new ProtocolStep("centre_near", "BOARD CLOSE, ABOUT 25 CM", "Fill most of the picture", t, speech: "Board close, filling the picture", zone: Z(0.1f, 0.1f, 0.8f, 0.8f)),
+                new ProtocolStep("top_left", "TOP LEFT", hold, t, speech: "Top left", zone: Z(0f, 0f, 0.4f, 0.45f)),
+                new ProtocolStep("top_right", "TOP RIGHT", hold, t, speech: "Top right", zone: Z(0.6f, 0f, 0.4f, 0.45f)),
+                new ProtocolStep("bottom_right", "BOTTOM RIGHT", hold, t, speech: "Bottom right", zone: Z(0.6f, 0.55f, 0.4f, 0.45f)),
+                new ProtocolStep("bottom_left", "BOTTOM LEFT", hold, t, speech: "Bottom left", zone: Z(0f, 0.55f, 0.4f, 0.45f)),
+                new ProtocolStep("left", "LEFT EDGE", hold, t, speech: "Left edge", zone: Z(0f, 0.25f, 0.35f, 0.5f)),
+                new ProtocolStep("right", "RIGHT EDGE", hold, t, speech: "Right edge", zone: Z(0.65f, 0.25f, 0.35f, 0.5f)),
+                new ProtocolStep("top", "TOP EDGE", hold, t, speech: "Top edge", zone: Z(0.3f, 0f, 0.4f, 0.4f)),
+                new ProtocolStep("bottom", "BOTTOM EDGE", hold, t, speech: "Bottom edge", zone: Z(0.3f, 0.6f, 0.4f, 0.4f)),
+                new ProtocolStep("tilt_lr", "CENTRE, TILT LEFT AND RIGHT", "Turn the board about 30 degrees each way, slowly", t, speech: "Centre, tilt left and right", zone: Z(0.25f, 0.2f, 0.5f, 0.6f)),
+                new ProtocolStep("tilt_ud", "CENTRE, TILT UP AND DOWN", "Tip the board about 30 degrees each way, slowly", t, speech: "Centre, tilt up and down", zone: Z(0.25f, 0.2f, 0.5f, 0.6f)),
+                new ProtocolStep("sweep", "SWEEP SLOWLY EVERYWHERE", "Slow loops through the whole picture, corners included", 20, speech: "Sweep slowly through the whole picture"),
+            };
+            return s;
+        }
+
+        static Rect Z(float x, float y, float w, float h) => new Rect(x, y, w, h);
+
+        /// <summary>
+        /// G5 locked grid, about 4 min: the target (plate A, plate L or the 25 mm board) stands about
+        /// 70 cm in front of A. The overlay locks on the first good camera pose, then follows 6DoF and
+        /// is corrected by every new pose. During the frozen steps corrections are logged, not applied,
+        /// which shows how far 6DoF alone drifts from the camera.
+        /// </summary>
+        public static List<ProtocolStep> G5()
+        {
+            return new List<ProtocolStep>
+            {
+                new ProtocolStep("acquire", "LOOK AT THE TARGET, HOLD STILL", "From A, about 70 cm away, until LOCKED", 20, speech: "Look at the target and hold still"),
+                new ProtocolStep("static", "HOLD STILL", "Do the points sit on the printed crosses?", 30, speech: "Hold still. Check the points on the crosses"),
+                new ProtocolStep("move_head", "MOVE HEAD SLOWLY", "Small nods and turns, target in view", 20, speech: "Move your head slowly"),
+                new ProtocolStep("side_left", "STEP LEFT, LOOK AT THE TARGET", "One step left, view it from the side", 15, speech: "Step left and look at the target"),
+                new ProtocolStep("side_right", "STEP RIGHT, LOOK AT THE TARGET", "Two steps right, view it from the other side", 15, speech: "Step right and look at the target"),
+                new ProtocolStep("closer", "COME CLOSER, ABOUT 40 CM", "Look at the target from close up", 15, speech: "Come closer"),
+                new ProtocolStep("back_to_a", "BACK TO A, HOLD STILL", "Target in view", 15, speech: "Back to A and hold still"),
+                new ProtocolStep("frozen_walk", "FROZEN: WALK AROUND, COME BACK", "Corrections paused; end on A facing the target", 40, StepAction.AnchorFreeze,
+                                 "Lock frozen. Walk around and come back to A"),
+                new ProtocolStep("frozen_check", "FROZEN: HOLD STILL ON A", "Has the overlay drifted off the target?", 20, speech: "Hold still. Has it drifted?"),
+                new ProtocolStep("live", "LIVE AGAIN: HOLD STILL", "Corrections back on", 30, StepAction.AnchorLive, "Corrections back on. Hold still"),
+            };
         }
 
         static void AddTranslation(List<ProtocolStep> s, string id, string label)

@@ -180,3 +180,31 @@ def _pnp_from_markers(markers, detected, K, dist):
         return (rvec, tvec) if ok else None
     except cv2.error:
         return None
+
+
+def apply_overrides(loc: Located, target, K, dist, overrides) -> Located:
+    """Replace automatic saddles with reviewed ones (``gt_review``; ``None`` removes a
+    point) and refit each touched face's homography from the resulting saddles, as
+    ``locate_points`` does for its final fit. ``loc`` is changed in place."""
+    touched = set()
+    for pid, uv in (overrides or {}).items():
+        if pid not in target.point_face:
+            continue
+        touched.add(target.point_face[pid])
+        if uv is None:
+            loc.points.pop(pid, None)
+        else:
+            loc.points[pid] = np.asarray(uv, float)
+        loc.seed_offset_px.pop(pid, None)
+    for face in touched:
+        ids = [p for p in target.face_ids(face) if p in loc.points]
+        src = target.face_coords(ids) if ids else np.zeros((0, 2))
+        dst = undistort(np.array([loc.points[p] for p in ids]), K, dist) if ids else np.zeros((0, 2))
+        H = fit_homography(src, dst) if len(ids) >= 4 else None
+        if H is None:
+            loc.homographies.pop(face, None)
+            loc.residual_px.pop(face, None)
+            continue
+        loc.homographies[face] = H
+        loc.residual_px[face] = np.linalg.norm(apply_h(H, src) - dst, axis=1)
+    return loc

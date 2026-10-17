@@ -79,6 +79,8 @@ def build_parser() -> argparse.ArgumentParser:
     z.add_argument("--search-radius", type=float, default=5.0, help="px, around the independent seed")
     z.add_argument("--every", type=int, default=1, help="analyse every k-th posed frame image")
     z.add_argument("--no-plots", action="store_true")
+    z.add_argument("--gt-review", default=None,
+                   help="review folder (gt-review) whose corrected ground truth replaces the automatic one")
 
     s = sub.add_parser("step", help="B3: step error between two static sessions")
     s.add_argument("session_a")
@@ -88,6 +90,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = sub.add_parser("campaign", help="guided measurement campaign (menu)")
     g.add_argument("--root", default="validation_runs", help="campaign folder (default: %(default)s)")
+
+    r = sub.add_parser("gt-review", help="GUI: audit or correct the automatic ground truth")
+    r.add_argument("--source", default=None,
+                   help="campaign folder or zip (default: choose; zips go in validation_runs/imports/)")
+    r.add_argument("--out", default=None, help="review folder (default: gt_review.review_dir)")
+    r.add_argument("--mode", default=None,
+                   choices=["audit", "session", "missing", "reanalyse", "summary"],
+                   help="omit for the menu")
+    r.add_argument("--tests", nargs="+", default=["B1"], help="audit: tests to sample")
+    r.add_argument("--n", type=int, default=300, help="audit: number of points (B1 menu entry)")
+    r.add_argument("--n-b1b", type=int, default=120, help="B1b audit menu entry: number of points")
+    r.add_argument("--seed", type=int, default=20261016, help="audit: sample seed")
+    r.add_argument("--session", default=None, help="session mode: session id")
+    r.add_argument("--tol-px", type=float, default=0.5,
+                   help="carry-over agreement and failure threshold, px")
+    r.add_argument("--show-all", action="store_true", help="session mode: show every point")
+    r.add_argument("--strict", action="store_true",
+                   help="session mode: also show frames where the automatic point disagrees")
+    r.add_argument("--tests-missing", nargs="+", default=["B1", "B1b", "B2L"],
+                   help="missing mode: tests to scan")
+    r.add_argument("--max-residual-px", type=float, default=float("inf"),
+                   help="missing mode: also show automatic points this far from their face plane")
+    r.add_argument("--reports", default=None, help="reanalyse: output folder")
+    r.add_argument("--no-plots", action="store_true", help="reanalyse: skip the plots")
 
     y = sub.add_parser("synth", help="synthetic session with a known injected error")
     y.add_argument("--layout", default="A", choices=["A", "L"])
@@ -157,13 +183,15 @@ def main(argv=None) -> int:
         print(f"{n} frames -> {args.out}")
 
     elif args.cmd == "analyze":
+        from .gt_review import load_overrides
         from .report import aggregate, analyze_session
         out = Path(args.out)
+        ov = load_overrides(args.gt_review) if args.gt_review else {}
         sums = []
         for sp in args.sessions:
             name = "_".join(Path(sp).resolve().parts[-2:])
             sm = analyze_session(sp, args.target, out / name, args.search_radius, args.every,
-                                 not args.no_plots)
+                                 not args.no_plots, overrides=ov.get(Path(sp).resolve().name))
             sums.append(sm)
             r, d = sm["registration"], sm["detection"]
             print(f"{name}: measured {d.get('measured_rate', float('nan')):.3f} | err_mm rmse "
@@ -194,6 +222,10 @@ def main(argv=None) -> int:
     elif args.cmd == "campaign":
         from .runner import main as campaign_main
         return campaign_main(args.root)
+
+    elif args.cmd == "gt-review":
+        from .gt_review_run import main as review_main
+        return review_main(args, Path(__file__).resolve().parents[1])
 
     elif args.cmd == "synth":
         from .synth import generate_session, view_pose

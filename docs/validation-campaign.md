@@ -281,6 +281,49 @@ continuing.
 How to read them (bias vs noise, single-marker vs three, raw vs filtered):
 `docs/validation.md`, "Reading the results".
 
+## 9. Ground-truth review (menu 10)
+
+The analysis finds the printed saddles on its own; they are the ground truth.
+When that detection is wrong (B1b, where one 20 mm marker seeds the search) or
+missing, menu 10 lets you look at each point in a zoomed window and fix it.
+Also available as `python -m validation gt-review` (`--help` for flags).
+
+**Sources.** The local campaign (`python/validation_runs/`), or a campaign
+recorded on another machine: zip that machine's whole `validation_runs`
+folder and copy the `.zip` into **`python/validation_runs/imports/`**. It is
+read straight from the zip, no need to extract it. Everything the review
+writes goes next to the source:
+
+| Source | Decisions | Re-analysis (entry 5) |
+|---|---|---|
+| local campaign | `validation_runs/gt_review/` | `validation_runs/reports_reviewed/` |
+| `imports/<name>.zip` | `imports/<name>/gt_review/` | `imports/<name>/reports/` |
+
+`session.csv` holds the session and missing-point decisions, `audit.csv` the
+random audits, `scan.csv` a cache of the automatic detection. All of
+`validation_runs/` is git-ignored.
+
+**Entries.**
+
+1. *Random audit B1* (300 points) and 2. *B1b* (120): a fixed-seed random
+   sample. Zero failures in 300 points bound the failure rate below 1 % at 95 %
+   (Clopper-Pearson; Hanley & Lippman-Hand, JAMA 249(13), 1983). Where a
+   session was reviewed, the audit checks the reviewed truth instead.
+3. *Review one session*: fix the first frame; each point is carried to the
+   following frames and snapped there, and a frame comes back only when the
+   carried point no longer snaps in place. A session is frames x points
+   (100 x 20 = 2000 points), so the counter shows points, not images.
+4. *Points without a truth*: every point the analysis did not find, in all
+   sessions, proposed at its position in the session's other frames.
+5. *Re-analyse with the reviewed truth*: the usual reports, with the corrected
+   points. Menu 8 also uses the local campaign's review when it exists.
+6. *Summary*: failure rate of the automatic truth per test, with its bound.
+
+**Keys.** Click sets the truth (snapped to the X-junction; `s` toggles snap),
+arrows nudge 0.25 px (Shift: 1 px), Space confirms and moves on, `x` marks a
+point that cannot be judged, `r` returns to the automatic point, Backspace
+goes back, Esc returns to the menu. Every decision is saved at once.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |

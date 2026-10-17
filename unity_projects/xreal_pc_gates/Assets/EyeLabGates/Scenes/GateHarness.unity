@@ -712,6 +712,172 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1862624459}
   m_CullTransparentMesh: 1
+--- !u!1 &1982012908
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1982012919}
+  - component: {fileID: 1982012918}
+  - component: {fileID: 1982012917}
+  - component: {fileID: 1982012916}
+  - component: {fileID: 1982012915}
+  - component: {fileID: 1982012914}
+  - component: {fileID: 1982012913}
+  - component: {fileID: 1982012912}
+  - component: {fileID: 1982012911}
+  - component: {fileID: 1982012910}
+  - component: {fileID: 1982012909}
+  m_Layer: 0
+  m_Name: GateHarness
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1982012909
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1982012908}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a4e5bf1d9161cd041b50a5a72a403446, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.GateController
+  m_HelloMR: {fileID: 9149810005748168776}
+  m_CameraTexture: {fileID: 2102668727}
+--- !u!114 &1982012910
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1982012908}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b3c3cf26f2fab0c44b928a78e18edea3, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.DisplayProbe
+--- !u!114 &1982012911
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1982012908}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 522376999d6c46c44a0a0b5e7774d9b7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.GateOverlay
+  m_Material: {fileID: 2100000, guid: 44712d542a368dd48bcb67f38b9e69fa, type: 2}
+--- !u!114 &1982012912
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1982012908}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cee1d42df08ed8848bd8688e588046f8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.GateHud
+--- !u!114 &1982012913
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1982012908}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 676eb2f02f2bd5e41ad86f77101c34a5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.DrainingCameraSource
+  m_Preview: {fileID: 2030575792}
+--- !u!114 &1982012914
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1982012908}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ef840a6d6b67cba45a345c951bf7388f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.VendorCameraSource
+  m_Texture: {fileID: 2102668727}
+--- !u!114 &1982012915
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1982012908}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 15736620963c9424eb00d2b4af817d43, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.PerfProbe
+--- !u!114 &1982012916
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1982012908}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 69e2a2d630fe7394a848135ce06e93dd, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.DeviceInfoProbe
+--- !u!114 &1982012917
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1982012908}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a334c447594a75a4399d0eb62d06b1af, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.PoseProbe
+--- !u!114 &1982012918
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1982012908}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a584479987dbe384d8ce19c361b24dd8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.CameraProbe
+--- !u!4 &1982012919
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1982012908}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2030575790
 GameObject:
   m_ObjectHideFlags: 0
@@ -784,172 +950,6 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 2030575790}
   m_CullTransparentMesh: 1
---- !u!1 &2031316846
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 2031316857}
-  - component: {fileID: 2031316856}
-  - component: {fileID: 2031316855}
-  - component: {fileID: 2031316854}
-  - component: {fileID: 2031316853}
-  - component: {fileID: 2031316852}
-  - component: {fileID: 2031316851}
-  - component: {fileID: 2031316850}
-  - component: {fileID: 2031316849}
-  - component: {fileID: 2031316848}
-  - component: {fileID: 2031316847}
-  m_Layer: 0
-  m_Name: GateHarness
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &2031316847
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2031316846}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: a4e5bf1d9161cd041b50a5a72a403446, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.GateController
-  m_HelloMR: {fileID: 9149810005748168776}
-  m_CameraTexture: {fileID: 2102668727}
---- !u!114 &2031316848
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2031316846}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: b3c3cf26f2fab0c44b928a78e18edea3, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.DisplayProbe
---- !u!114 &2031316849
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2031316846}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 522376999d6c46c44a0a0b5e7774d9b7, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.GateOverlay
-  m_Material: {fileID: 2100000, guid: 44712d542a368dd48bcb67f38b9e69fa, type: 2}
---- !u!114 &2031316850
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2031316846}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: cee1d42df08ed8848bd8688e588046f8, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.GateHud
---- !u!114 &2031316851
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2031316846}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 676eb2f02f2bd5e41ad86f77101c34a5, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.DrainingCameraSource
-  m_Preview: {fileID: 2030575792}
---- !u!114 &2031316852
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2031316846}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: ef840a6d6b67cba45a345c951bf7388f, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.VendorCameraSource
-  m_Texture: {fileID: 2102668727}
---- !u!114 &2031316853
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2031316846}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 15736620963c9424eb00d2b4af817d43, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.PerfProbe
---- !u!114 &2031316854
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2031316846}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 69e2a2d630fe7394a848135ce06e93dd, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.DeviceInfoProbe
---- !u!114 &2031316855
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2031316846}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: a334c447594a75a4399d0eb62d06b1af, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.PoseProbe
---- !u!114 &2031316856
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2031316846}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: a584479987dbe384d8ce19c361b24dd8, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::EyeLabGates.CameraProbe
---- !u!4 &2031316857
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2031316846}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2102668722
 GameObject:
   m_ObjectHideFlags: 0
@@ -1355,4 +1355,4 @@ SceneRoots:
   - {fileID: 834124601157159510}
   - {fileID: 9149810005748168774}
   - {fileID: 1543881888}
-  - {fileID: 2031316857}
+  - {fileID: 1982012919}

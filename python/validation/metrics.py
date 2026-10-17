@@ -13,13 +13,13 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 
 from .camera import apply_h, undistort
-from .detect import locate_points
+from .detect import apply_overrides, locate_points
 from .target import M_TO_MM
 
 NAN = float("nan")
@@ -117,15 +117,23 @@ def _to_face(H, uv_raw, K, dist) -> np.ndarray:
 
 
 def registration_errors(session, target, search_radius: float = 5.0, every: int = 1,
-                        subpix_win: int = 3) -> Tuple[List[RegistrationRow], dict]:
+                        subpix_win: int = 3, overrides: Optional[Dict[int, dict]] = None
+                        ) -> Tuple[List[RegistrationRow], dict]:
+    """``overrides``: reviewed ground truth of this session, ``{frame index: {point id:
+    raw px or None}}`` (``gt_review.load_overrides``); it replaces the automatic saddles
+    of those frames before the face homographies are fitted."""
     K, dist = session.camera_matrix, session.dist_coeffs
     rows: List[RegistrationRow] = []
-    qa = {"homography_residual_px": [], "frames_analysed": 0, "frames_no_marker": 0}
+    qa = {"homography_residual_px": [], "frames_analysed": 0, "frames_no_marker": 0,
+          "points_overridden": 0}
     posed = [r for r in session.records
              if r.frame is not None and (r.pose is not None or r.measured is not None)]
     for rec in posed[::max(1, every)]:
         gray = session.read_gray(rec)
         loc = locate_points(gray, target, K, dist, search_radius, subpix_win)
+        if overrides and rec.index in overrides:
+            apply_overrides(loc, target, K, dist, overrides[rec.index])
+            qa["points_overridden"] += len(overrides[rec.index])
         qa["frames_analysed"] += 1
         if not loc.markers:
             qa["frames_no_marker"] += 1

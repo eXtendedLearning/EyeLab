@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -81,23 +81,42 @@ def _pts(d) -> Dict[str, np.ndarray]:
     return {k: np.asarray(v, float) for k, v in (d or {}).items()}
 
 
+@dataclass
+class ArchivedSession(Session):
+    """A session read through another container (a campaign zip): frame images come
+    from ``reader(frame name)`` instead of ``path / frames``."""
+    reader: Optional[Callable[[str], np.ndarray]] = None
+
+    def read_gray(self, rec: FrameRecord) -> np.ndarray:
+        return self.reader(rec.frame)
+
+
+def check_meta(meta: dict, where) -> None:
+    if meta.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(f"{where}: unsupported schema_version {meta.get('schema_version')}")
+    if meta.get("length_unit") != "m":
+        raise ValueError(f"{where}: length_unit must be 'm'")
+
+
 def load_session(path) -> Session:
     path = Path(path)
     meta = json.loads((path / "meta.json").read_text(encoding="utf-8"))
-    if meta.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError(f"{path}: unsupported schema_version {meta.get('schema_version')}")
-    if meta.get("length_unit") != "m":
-        raise ValueError(f"{path}: length_unit must be 'm'")
-    records = []
+    check_meta(meta, path)
     with open(path / "log.jsonl", encoding="utf-8") as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            e = json.loads(line)
-            records.append(FrameRecord(
-                int(e["i"]), float(e["t"]), e.get("frame"), _pose(e.get("pose")),
-                _pose(e.get("measured")), e.get("lock_state"), tuple(e.get("markers_seen", [])),
-                _pts(e.get("projected")), _pts(e.get("projected_raw")), _pts(e.get("drawn")),
-                e.get("timings_ms", {}), e.get("extra", {}) or {},
-                e.get("source", {}) or {}))
-    return Session(path, meta, records)
+        return Session(path, meta, parse_records(fh))
+
+
+def parse_records(lines) -> List[FrameRecord]:
+    """Frame records from the lines of a ``log.jsonl``."""
+    records = []
+    for line in lines:
+        if not line.strip():
+            continue
+        e = json.loads(line)
+        records.append(FrameRecord(
+            int(e["i"]), float(e["t"]), e.get("frame"), _pose(e.get("pose")),
+            _pose(e.get("measured")), e.get("lock_state"), tuple(e.get("markers_seen", [])),
+            _pts(e.get("projected")), _pts(e.get("projected_raw")), _pts(e.get("drawn")),
+            e.get("timings_ms", {}), e.get("extra", {}) or {},
+            e.get("source", {}) or {}))
+    return records

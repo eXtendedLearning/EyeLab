@@ -211,6 +211,16 @@ namespace EyeLabGates
                 ty += th + pad;
             }
 
+            // ---- G5 lock status
+            if (m_Gate.IsG5 && m_Gate.LockStatus.Length > 0)
+            {
+                float lh = big.fontSize * 1.5f;
+                Color lc = m_Gate.LockState == 1 ? Green : m_Gate.LockState == 3 ? Amber : Red;
+                Fill(new Rect(bx, ty, bw, lh), Panel);
+                Label(new Rect(bx, ty, bw, lh), m_Gate.LockStatus, big, lc);
+                ty += lh + pad;
+            }
+
             // ---- host throttling warning (CPU clock well below nominal)
             double clock = m_Perf.CpuPerformancePct;
             if (!double.IsNaN(clock) && clock < 80.0 && !m_Gate.IsCooldown)
@@ -224,11 +234,23 @@ namespace EyeLabGates
             // ---- camera preview (colour, only while frames arrive)
             if (m_Gate.Source.IsCapturing && m_Preview != null)
             {
-                float pw = v.width * 0.45f;
+                // Calibration: a large preview with the zone where the board should go.
+                float pw = v.width * (m_Gate.IsCalib ? 0.62f : 0.45f);
                 float ph = pw * m_Preview.height / Mathf.Max(1, m_Preview.width);
+                if (m_Gate.IsCalib && ph > h * 0.62f) { ph = h * 0.62f; pw = ph * m_Preview.width / Mathf.Max(1, m_Preview.height); }
                 var pr = new Rect(v.x + (v.width - pw) / 2f, v.yMax - ph - h * 0.04f, pw, ph);
                 Fill(new Rect(pr.x - 2, pr.y - 2, pr.width + 4, pr.height + 4), Color.black);
                 GUI.DrawTexture(pr, m_Preview);
+                if (m_Gate.IsCalib && m_Gate.CalibZone.HasValue)
+                {
+                    Rect z = m_Gate.CalibZone.Value;
+                    var zr = new Rect(pr.x + z.x * pr.width, pr.y + z.y * pr.height, z.width * pr.width, z.height * pr.height);
+                    float t = Mathf.Max(3f, h * 0.006f);
+                    Fill(new Rect(zr.x, zr.y, zr.width, t), Amber);
+                    Fill(new Rect(zr.x, zr.yMax - t, zr.width, t), Amber);
+                    Fill(new Rect(zr.x, zr.y, t, zr.height), Amber);
+                    Fill(new Rect(zr.xMax - t, zr.y, t, zr.height), Amber);
+                }
                 double lag = m_Camera.LagGrowth;
                 var small = Style(Mathf.RoundToInt(h / 40f), TextAnchor.LowerCenter, false);
                 string lagText = double.IsNaN(lag) ? "" : $"   lag {(lag >= 0 ? "+" : "")}{lag.ToString("F1", Inv)} s";
