@@ -1337,3 +1337,96 @@ Note the following:
 - whether 3DoF looks steadier than 6DoF in the same room.
 
 The calibration of 21 Oct stays valid (same glasses, same resolution).
+
+## 19. G5 rev. 2 runs (22 Oct), the camera that died, stream mode and the view offset (0.3.002)
+
+### What ran (build `2026-10-22T09:52:28Z`)
+
+Plate A only: G5 6DoF (menu 5 → 1) and G5 3DoF (5 → 4).
+
+- **6DoF: a failure for the operator.** The overlay drifted until it left the field of
+  view, and the operator described a freeze. Unity itself held 26.5 fps throughout, so
+  the app did not freeze; the overlay stopped being corrected.
+  - **The camera died 11 s into the run.** With a burst every 1.2 s, the camera was
+    restarted 0.18 s after a stop. Burst 3 delivered no frames. From then on every start
+    failed: 138 attempts, `xreal_error Failure NativeRGBCamera+Start`.
+  - So only two locks ever arrived, and 6DoF drifted uncorrected for three minutes.
+  - Those two locks show the drift again: the head "moved" 9 cm in 2 s while plate A
+    stayed 0.723 m from the camera.
+- **3DoF: much better.**
+  - The camera survived (128 bursts, one empty), at a lock every 1.43 s (round trip
+    70 ms).
+  - Standing still, corrections were a median 2.6 mm (max 20 mm): per-lock noise of a
+    few mm.
+  - Frozen and standing, it drifted 6.8 mm.
+  - Stepping produced the expected 0.4-1 m jumps (3DoF has no position), each
+    confirmed and applied at the next lock.
+- **Operator:**
+  1. the corrections came too slowly;
+  2. the grid was steady in space but not on the plate as seen by the eyes. The camera
+     sees from a different point than the eyes, and the display model is generic.
+
+### Rev. 3 (build `2026-10-22T11:25:28Z`)
+
+- **Stream camera mode** (default for G5, the demo and align; `-camMode burst` restores
+  bursts).
+  - The camera stays on. The newest frame goes to the service whenever it is free and
+    the head is nearly still, up to 8 per second; about 70 ms per frame was measured.
+  - The camera restarts when its frames fall 0.3 s behind (the SDK decoder queue, §16)
+    or every 8 s.
+  - The overlay is corrected several times a second instead of every 1.4 s.
+  - **If the CPU clock stays below 110 % for 10 s**, the gate switches to bursts and
+    says so. Continuous decoding is what heated the Surface in G3.
+- **Camera rest and recovery.**
+  - At least 0.6 s between a stop and the next start.
+  - After a start that fails, or a start with no frames, it backs off 2, 4, 8 s, up to
+    10 s, and retries. The HUD shows `CAMERA RESTARTING`.
+  - Default burst period 1.5 s.
+- **View offset** (head frame, saved).
+  - The disagreement between where the camera puts the target and where the wearer sees
+    the drawing is a small rigid error fixed to the head. Its sources are the vendor's
+    RGB-camera-from-head pose and the display model against this wearer's eyes.
+  - The new `ViewOffset` sits between the head and the camera: a translation in mm plus
+    a rotation in degrees. The wearer sets it by eye and it is saved to
+    `%USERPROFILE%\AppData\LocalLow\EyeLab\XrealPcGates\calibration\view_offset.json`.
+  - G5, the demo and align load it. Because it lives in the head frame it stays valid
+    when the wearer moves.
+  - Keys, in any locking gate:
+
+    | Key | Action |
+    |---|---|
+    | arrows | move (2 mm; Shift 10 mm) |
+    | PgUp / PgDn | farther / nearer |
+    | Ctrl + arrows | yaw / pitch (0.25°; Shift 1°) |
+    | Ctrl + PgUp / PgDn | roll |
+    | Backspace | zero |
+    | Enter | save |
+
+  - A change re-places every target at once from its last camera pose; the HUD shows
+    the offset (amber while unsaved).
+- **Align gate** (G5 menu 7 plate A, 8 board): 3DoF, stream, no protocol, until Esc. Ends
+  with a warning if the offset was not saved.
+- **Demo `D` now runs in 3DoF**, the robust choice where 6DoF drifts; G5 menu 9 is the
+  6DoF demo. The demo's Eye view refreshes twice a second.
+- **Fewer log lines.** Motion-skipped frames are logged at most once a second, with a
+  count. One sent frame per second is kept as a snapshot for `anchor`.
+
+### Session 0.3.002
+
+Same room, plate A first.
+
+1. **5 → 7, ALIGN on plate A.**
+   - Stand on A, about 70 cm from the plate, look at it and hold still.
+   - Move the drawing with the arrows until the points sit on the printed crosses: first
+     left/right and up/down, then PgUp/PgDn for depth. Check by moving the head a little.
+   - Press **Enter**.
+2. **5 → 4, G5 plate A, 3DoF.** Does the drawing now sit on the crosses? Are corrections
+   fast enough?
+3. **5 → 1, G5 plate A, 6DoF.** Does the camera stay alive, and does the stream mode keep
+   up with the drift?
+4. **5 → 8, ALIGN on the 25 mm board.** Check that the saved offset also fits the board.
+   Do not save a different one unless it is clearly better.
+5. **D**, the demo.
+
+If the offset that fits at 70 cm is wrong at 40 cm, note it: that points to a rotation
+error, not a translation.

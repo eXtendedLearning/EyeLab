@@ -91,6 +91,14 @@ namespace EyeLabGates
             return r;
         }
 
+        /// <summary>Places the anchor directly (view-offset change); clears a pending jump.</summary>
+        public void Reset(Vector3 position, Quaternion rotation)
+        {
+            m_HasPending = false;
+            HasAnchor = true;
+            Set(position, rotation);
+        }
+
         void Set(Vector3 p, Quaternion q)
         {
             Position = p;

@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.3.001<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.3.002<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -17,6 +17,19 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.3.002) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §19).
+  - **22 Oct runs.** In G5 6DoF the RGB camera died 11 s in: it was restarted 0.18 s
+    after a stop and every later start failed. G5 3DoF held, with standing corrections
+    of a median 2.6 mm, but updated only every 1.4 s and was not aligned for the eyes.
+  - **Stream camera mode** for the locking gates: continuous capture, newest frame to the
+    service up to 8/s, restart when frames lag 0.3 s or every 8 s, fall back to bursts
+    when the Surface throttles.
+  - **Camera rest and recovery**: at least 0.6 s between stop and start, back-off and
+    retry after a failure.
+  - **Head-frame view offset**: set by eye with the keyboard, saved as
+    `calibration/view_offset.json`, used by G5, the demo and align.
+  - **Align gate** (G5 menu 7/8). The demo now runs in 3DoF; G5 menu 9 is the 6DoF demo.
+  - Rebuilt: `LATEST_BUILD.txt` 2026-10-22T11:25:28Z.
 - (0.3.001) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §18).
   - **First G5 runs (17-21 Oct, metroXRAINE).** The Eye calibration is good (98 % coverage,
     0.47 px; the vendor fx is 2.7 % short). The overlay floated because the headset's

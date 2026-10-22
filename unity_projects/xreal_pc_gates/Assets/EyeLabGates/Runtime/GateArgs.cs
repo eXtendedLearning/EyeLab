@@ -6,12 +6,12 @@ using UnityEngine;
 
 namespace EyeLabGates
 {
-    public enum GateKind { Manual, G1, G2, G3, G4, G5, Calib, Demo, Cooldown }
+    public enum GateKind { Manual, G1, G2, G3, G4, G5, Calib, Demo, Align, Cooldown }
 
     /// <summary>
     /// Command-line arguments of the gate player (docs/XREAL-PC-GATES-G1-G3.md §5):
-    /// <c>-gate G1|G2|G3|G4|G5|calib|demo|manual|cooldown -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60
-    /// -burstEvery s -burstFrames n -target plateA|plateL|board25[,...] -port n -duration s -snapshotEvery s -label text -logRoot dir</c>. G1-G4 follow the timed protocols in
+    /// <c>-gate G1|G2|G3|G4|G5|calib|demo|align|manual|cooldown -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60
+    /// -burstEvery s -burstFrames n -target plateA|plateL|board25[,...] -camMode stream|burst -port n -duration s -snapshotEvery s -label text -logRoot dir</c>. G1-G4 follow the timed protocols in
     /// <see cref="GateProtocol"/>; <c>-duration</c> only applies to manual (it is recorded otherwise). G4 (light overlay)
     /// renders at 30 fps unless <c>-renderFps 60</c> is given, and reads <c>-order tracked</c> as 6DoF, <c>3dof</c> as 3DoF.
     /// Unknown arguments (e.g. Unity's own <c>-logFile</c>) are ignored.
@@ -32,6 +32,12 @@ namespace EyeLabGates
         /// <summary>G5/demo: the targets the pose service locks onto (plateA, plateL, board25), comma-separated.</summary>
         public string Target = "plateA";
         public string[] TargetList => Target.Split(',');
+        /// <summary>
+        /// G5/demo/align camera use: "stream" (default; capture continuously, send the newest frame
+        /// whenever the service is free, restart the camera when its frames fall behind) or "burst"
+        /// (G4's start-grab-stop cycle; slower, lighter).
+        /// </summary>
+        public string CamMode = "stream";
         /// <summary>G5: pose service port on 127.0.0.1.</summary>
         public int Port = 8765;
 
@@ -90,6 +96,7 @@ namespace EyeLabGates
                             case "g4": a.Gate = GateKind.G4; break;
                             case "g5": a.Gate = GateKind.G5; break;
                             case "demo": a.Gate = GateKind.Demo; break;
+                            case "align": a.Gate = GateKind.Align; break;
                             case "calib": a.Gate = GateKind.Calib; break;
                             case "manual": a.Gate = GateKind.Manual; break;
                             case "cooldown": a.Gate = GateKind.Cooldown; break;
@@ -136,6 +143,11 @@ namespace EyeLabGates
                         if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int port) && port > 0 && port < 65536) a.Port = port;
                         else a.Warnings.Add($"bad -port '{value}', using 8765");
                         break;
+                    case "-cammode":
+                        i++;
+                        if (value == "stream" || value == "burst") a.CamMode = value;
+                        else a.Warnings.Add($"unknown -camMode '{value}', using stream");
+                        break;
                     case "-burstevery":
                         i++;
                         if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double be) && be >= 0) { a.BurstEvery = be; burstGiven = true; }
@@ -168,11 +180,13 @@ namespace EyeLabGates
             }
 
             a.Duration = duration ?? DefaultDuration(a.Gate);
-            bool locks = a.Gate == GateKind.G5 || a.Gate == GateKind.Demo;
+            bool locks = a.Gate == GateKind.G5 || a.Gate == GateKind.Demo || a.Gate == GateKind.Align;
             if ((a.Gate == GateKind.G4 || locks) && !renderFpsGiven) a.RenderFps = 30;
             // Locks follow the latest camera pose (LockAnchor), so update faster: a burst every 1.2 s
             // (the camera needs ~1.1 s to deliver its first frame) and use its second frame.
-            if (locks && !burstGiven) a.BurstEvery = 1.2;
+            // 22 Oct: at 1.2 s the camera was restarted 0.18 s after a stop and never started again;
+            // the burst loop now keeps at least MinCameraOffSeconds between stop and start.
+            if (locks && !burstGiven) a.BurstEvery = 1.5;
             if (locks && !burstFramesGiven) a.BurstFrames = 2;
             if (a.Gate == GateKind.Demo && !targetGiven) a.Target = "plateA,board25";
             if (a.Gate == GateKind.Calib && !snapshotGiven) a.SnapshotEvery = 0.5;

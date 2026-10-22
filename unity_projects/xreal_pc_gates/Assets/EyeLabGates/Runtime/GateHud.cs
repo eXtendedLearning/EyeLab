@@ -56,7 +56,9 @@ namespace EyeLabGates
             if (src == null || !src.IsCapturing || (m_Gate.IsLight && !m_Gate.ShowEyeView)) return;
             Texture2D luma = src.LumaTexture;
             double now = Time.realtimeSinceStartupAsDouble;
-            if (luma == null || src.Timestamp == m_PreviewTs || now - m_LastPreview < PreviewInterval) return;
+            // Demo: the Eye view is a glimpse, not video; 2 Hz keeps the YUV conversion cheap in stream mode.
+            double interval = m_Gate.IsDemo ? 0.5 : PreviewInterval;
+            if (luma == null || src.Timestamp == m_PreviewTs || now - m_LastPreview < interval) return;
 
             int w = luma.width, h = luma.height;
             NativeArray<byte> data = luma.GetRawTextureData<byte>();
@@ -219,6 +221,25 @@ namespace EyeLabGates
                 Fill(new Rect(bx, ty, bw, lh), Panel);
                 Label(new Rect(bx, ty, bw, lh), m_Gate.LockStatus, big, lc);
                 ty += lh + pad;
+            }
+            if (m_Gate.IsLocking)
+            {
+                // camera trouble (red) and the wearer's view offset (small, grey; amber while unsaved)
+                var small = Style(Mathf.RoundToInt(h / 44f), TextAnchor.MiddleCenter, false);
+                float sh = small.fontSize * 1.5f;
+                if (m_Gate.CameraStatus.Length > 0)
+                {
+                    Fill(new Rect(bx, ty, bw, sh), Panel);
+                    Label(new Rect(bx, ty, bw, sh), m_Gate.CameraStatus, small, Red);
+                    ty += sh + pad;
+                }
+                string off = m_Gate.OffsetStatus;
+                if (off.Length > 0)
+                {
+                    Fill(new Rect(bx, ty, bw, sh), Panel);
+                    Label(new Rect(bx, ty, bw, sh), off, small, off.Contains("unsaved") ? Amber : Grey);
+                    ty += sh + pad;
+                }
             }
 
             // ---- host throttling warning (CPU clock well below nominal)
