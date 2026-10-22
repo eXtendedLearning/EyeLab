@@ -1,0 +1,132 @@
+<article class="page" id="p-adr" data-group="decisions" data-en="Architecture decisions" data-it="Decisioni architetturali">
+<header>
+  <div class="eyebrow"><span class="l-en">Decisions</span><span class="l-it">Decisioni</span></div>
+  <h1><span class="l-en">Architecture decisions</span><span class="l-it">Decisioni architetturali</span></h1>
+  <p class="lede l-en">Decisions are recorded as ADRs in Nygard's format (context, decision, consequences) [29]. ADRs are append-only: a reversal is a new ADR that supersedes the old one.</p>
+  <p class="lede l-it">Le decisioni sono registrate come ADR nel formato di Nygard (contesto, decisione, conseguenze) [29]. Gli ADR si possono solo aggiungere: un ripensamento è un nuovo ADR che sostituisce il precedente.</p>
+</header>
+<section>
+  <div class="tbl"><table class="txt">
+    <thead><tr><th>ADR</th><th><span class="l-en">Decision</span><span class="l-it">Decisione</span></th><th><span class="l-en">Status</span><span class="l-it">Stato</span></th></tr></thead>
+    <tbody>
+      <tr><td>001 · 08/05/2026</td><td class="wrap"><span class="l-en">OpenCV on Unity as a staircase C → A → B: off-device Python service first, native Android plugin second, commercial binding last; quality-driven pivot criteria; everything behind <code>IArucoPoseBridge</code>. Detail in <a href="#arch">Architecture</a>.</span><span class="l-it">OpenCV su Unity come scala C → A → B: prima un servizio Python esterno, poi un plugin Android nativo, per ultimo un binding commerciale; criteri di passaggio basati sulla qualità; tutto dietro <code>IArucoPoseBridge</code>. Dettagli in <a href="#arch">Architettura</a>.</span></td><td><span class="pill good"><span class="l-en">accepted</span><span class="l-it">accettato</span></span></td></tr>
+      <tr><td>002 · 18/09/2026</td><td class="wrap"><span class="l-en">Board solve is the only live pose; Kabsch becomes the roll-recovery bootstrap and placement QA, and is repaired. Detail in <a href="#reg">Registration</a>.</span><span class="l-it">Il solve sul board è l'unica posa in tempo reale; Kabsch diventa l'inizializzazione per il recupero del roll e il controllo del posizionamento, e viene corretto. Dettagli in <a href="#reg">Registrazione</a>.</span></td><td><span class="pill warn"><span class="l-en">proposed</span><span class="l-it">proposto</span></span></td></tr>
+      <tr><td>003 · 22/09/2026</td><td class="wrap"><span class="l-en">The pose camera must be rigidly coupled to the display (the glasses' camera); single viewpoint for now; pose-age compensation on the critical path. Amended 08/10/2026: video and optical see-through gates separated; raw IMU no longer a prerequisite. Detail in <a href="#ost">Optical see-through</a>.</span><span class="l-it">La camera di posa deve essere solidale al display (la camera degli occhiali); per ora un solo punto di vista; compensazione dell'età della posa sul percorso critico. Emendato l'08/10/2026: separati i criteri per video e ottico see-through; l'IMU grezza non è più un prerequisito. Dettagli in <a href="#ost">Ottico see-through</a>.</span></td><td><span class="pill warn"><span class="l-en">proposed</span><span class="l-it">proposto</span></span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Decisions recorded outside ADRs</span><span class="l-it">Decisioni registrate fuori dagli ADR</span></h2>
+  <div class="tbl"><table class="txt">
+    <thead><tr><th><span class="l-en">Date</span><span class="l-it">Data</span></th><th><span class="l-en">Decision</span><span class="l-it">Decisione</span></th><th><span class="l-en">Where</span><span class="l-it">Dove</span></th></tr></thead>
+    <tbody>
+      <tr><td>08/05/2026</td><td class="wrap"><span class="l-en">Build target is a generic Android APK, not Beam-Pro-specific. iOS out of scope.</span><span class="l-it">Il target di build è un APK Android generico, non specifico per Beam Pro. iOS escluso.</span></td><td>CONTEXT.md</td></tr>
+      <tr><td>09/05/2026</td><td class="wrap"><span class="l-en">Pose application in Unity: an EWMA-filtered structure anchor composed with the head pose at capture time; times not bracketed by the head-pose buffer are rejected. AR Foundation anchors reserved as the upgrade path.</span><span class="l-it">Applicazione della posa in Unity: un'ancora della struttura filtrata EWMA composta con la posa della testa all'istante di acquisizione; gli istanti non coperti dal buffer delle pose della testa vengono rifiutati. Le ancore AR Foundation restano come evoluzione futura.</span></td><td>CONTEXT.md, T2.6</td></tr>
+      <tr><td>06/10/2026</td><td class="wrap"><span class="l-en">Lock acquisition from 2 markers by default, 1 marker as an opt-in preset.</span><span class="l-it">Aggancio del lock con 2 marker di default, 1 marker come preset opzionale.</span></td><td><code>pose_lock.py</code></td></tr>
+      <tr><td>06/10/2026</td><td class="wrap"><span class="l-en">One shared configuration tree for cameras, markers, geometry and targets.</span><span class="l-it">Un unico albero di configurazione condiviso per camere, marker, geometrie e target.</span></td><td><code>eyelab_paths.py</code></td></tr>
+      <tr><td>14/10/2026</td><td class="wrap"><span class="l-en">No desktop DP-in card; lighter pipeline for the Beam Pro: grid only in the glasses, camera frames analysed not shown, camera bursts, 6DoF only where needed.</span><span class="l-it">Nessuna scheda DP-in per il desktop; pipeline più leggera per il Beam Pro: solo griglia negli occhiali, frame della camera analizzati e non mostrati, raffiche della camera, 6DoF solo dove serve.</span></td><td>HARDWARE.md</td></tr>
+      <tr><td>16/10/2026</td><td class="wrap"><span class="l-en">Campaign 1 is preliminary; the full validation campaign is to be repeated in the university laboratory.</span><span class="l-it">La campagna 1 è preliminare; la campagna di validazione completa va ripetuta nel laboratorio dell'università.</span></td><td><span class="l-en">validation report</span><span class="l-it">report di validazione</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+<p class="src"><code>docs/adr/</code>, <code>CONTEXT.md</code> "Resolved decisions", <code>docs/HARDWARE.md</code>. [29] Nygard 2011.</p>
+</article>
+
+<article class="page" id="p-audit" data-group="decisions" data-en="Audit findings" data-it="Risultati degli audit">
+<header>
+  <div class="eyebrow"><span class="l-en">Decisions · audit of 7–9 October 2026</span><span class="l-it">Decisioni · audit del 7–9 ottobre 2026</span></div>
+  <h1><span class="l-en">Audit findings and their status</span><span class="l-it">Rilievi dell'audit e loro stato</span></h1>
+  <p class="lede l-en">A code and documentation review reproduced defects before trusting any measurement. P1: address before trusting measurements or building the affected integration. P2: address before repeatable deployment or publication.</p>
+  <p class="lede l-it">Una revisione di codice e documentazione ha riprodotto i difetti prima di fidarsi di qualsiasi misura. P1: da risolvere prima di fidarsi delle misure o di costruire l'integrazione interessata. P2: da risolvere prima di una distribuzione ripetibile o di una pubblicazione.</p>
+</header>
+<section>
+  <div class="tbl"><table class="txt">
+    <thead><tr><th>ID</th><th>P</th><th><span class="l-en">Finding</span><span class="l-it">Rilievo</span></th><th><span class="l-en">Status</span><span class="l-it">Stato</span></th></tr></thead>
+    <tbody>
+      <tr><td>F01</td><td>1</td><td class="wrap"><span class="l-en">UNV dataset 2420 silently discarded; non-Cartesian systems read as Cartesian</span><span class="l-it">Dataset UNV 2420 scartato in silenzio; sistemi non cartesiani letti come cartesiani</span></td><td><span class="pill good"><span class="l-en">fixed</span><span class="l-it">corretto</span></span></td></tr>
+      <tr><td>F02</td><td>1</td><td class="wrap"><span class="l-en">Marker count bypassed pose-quality gates</span><span class="l-it">Il numero di marker scavalcava i controlli di qualità della posa</span></td><td><span class="pill good"><span class="l-en">fixed</span><span class="l-it">corretto</span></span></td></tr>
+      <tr><td>F03</td><td>1</td><td class="wrap"><span class="l-en">Cached images treated as fresh measurements</span><span class="l-it">Immagini in cache trattate come misure fresche</span></td><td><span class="pill good"><span class="l-en">fixed</span><span class="l-it">corretto</span></span></td></tr>
+      <tr><td>F04</td><td>1</td><td class="wrap"><span class="l-en">Uncertainty verdicts exceed their evidence (assumed budget terms)</span><span class="l-it">I giudizi di incertezza vanno oltre le evidenze (termini del bilancio ipotizzati)</span></td><td><span class="pill bad"><span class="l-en">open</span><span class="l-it">aperto</span></span></td></tr>
+      <tr><td>F05</td><td>1</td><td class="wrap"><span class="l-en">Spatial transform and time contract incomplete</span><span class="l-it">Contratto di trasformazioni spaziali e tempi incompleto</span></td><td><span class="pill good"><span class="l-en">docs fixed</span><span class="l-it">doc corretti</span></span></td></tr>
+      <tr><td>F06</td><td>2</td><td class="wrap"><span class="l-en">Kabsch rejected valid planar layouts</span><span class="l-it">Kabsch rifiutava disposizioni planari valide</span></td><td><span class="pill good"><span class="l-en">fixed</span><span class="l-it">corretto</span></span></td></tr>
+      <tr><td>F07</td><td>2</td><td class="wrap"><span class="l-en">Capture shutdown can release a device still being read</span><span class="l-it">La chiusura dell'acquisizione può rilasciare un dispositivo ancora in lettura</span></td><td><span class="pill bad"><span class="l-en">open</span><span class="l-it">aperto</span></span></td></tr>
+      <tr><td>F08</td><td>2</td><td class="wrap"><span class="l-en">Bridge specification internally inconsistent</span><span class="l-it">Specifica del bridge incoerente</span></td><td><span class="pill good"><span class="l-en">docs fixed</span><span class="l-it">doc corretti</span></span></td></tr>
+      <tr><td>F09</td><td>2</td><td class="wrap"><span class="l-en">Probe success and licence conclusions too weak</span><span class="l-it">Criteri di successo delle sonde e conclusioni sulla licenza troppo deboli</span></td><td><span class="pill bad"><span class="l-en">open</span><span class="l-it">aperto</span></span></td></tr>
+      <tr><td>F10</td><td>2</td><td class="wrap"><span class="l-en">Calibration profiles lack a compatibility contract (device, crop, focus, view diversity)</span><span class="l-it">I profili di calibrazione non hanno un contratto di compatibilità (dispositivo, ritaglio, fuoco, varietà delle viste)</span></td><td><span class="pill bad"><span class="l-en">open</span><span class="l-it">aperto</span></span></td></tr>
+      <tr><td>F11</td><td>2</td><td class="wrap"><span class="l-en">Two tests failed on the Windows development host</span><span class="l-it">Due test fallivano sull'host di sviluppo Windows</span></td><td><span class="pill good"><span class="l-en">fixed</span><span class="l-it">corretto</span></span></td></tr>
+      <tr><td>F12</td><td>2</td><td class="wrap"><span class="l-en">Recorded provenance cannot reconstruct a dirty experiment</span><span class="l-it">La provenienza registrata non permette di ricostruire un esperimento con modifiche non committate</span></td><td><span class="pill bad"><span class="l-en">open</span><span class="l-it">aperto</span></span></td></tr>
+      <tr><td>F13</td><td>2</td><td class="wrap"><span class="l-en">Video and optical see-through gates conflated</span><span class="l-it">Criteri video e ottico see-through confusi</span></td><td><span class="pill good"><span class="l-en">docs fixed</span><span class="l-it">doc corretti</span></span></td></tr>
+      <tr><td>F14</td><td>2</td><td class="wrap"><span class="l-en">Documentation mixed observations, assumptions and obsolete status</span><span class="l-it">La documentazione mescolava osservazioni, ipotesi e stati superati</span></td><td><span class="pill good"><span class="l-en">fixed</span><span class="l-it">corretto</span></span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="cap l-en">An earlier audit (18 September 2026, findings S1–S8, D1–D9) is kept for provenance; its Kabsch and status findings led to ADR-002 and to the capability matrix.</p>
+  <p class="cap l-it">Un audit precedente (18 settembre 2026, rilievi S1–S8, D1–D9) è conservato per tracciabilità; i suoi rilievi su Kabsch e sullo stato hanno portato all'ADR-002 e alla matrice delle capacità.</p>
+</section>
+<p class="src"><code>docs/AUDIT-2026-10-08.md</code> (<span class="l-en">revised 9/10/2026</span><span class="l-it">rivisto il 9/10/2026</span>), <code>docs/AUDIT-2026-09-18.md</code>.</p>
+</article>
+
+<article class="page" id="p-roadmap" data-group="decisions" data-en="Open questions and next steps" data-it="Questioni aperte e prossimi passi">
+<header>
+  <div class="eyebrow"><span class="l-en">Decisions · as of 18 October 2026</span><span class="l-it">Decisioni · al 18 ottobre 2026</span></div>
+  <h1><span class="l-en">Open questions and next steps</span><span class="l-it">Questioni aperte e prossimi passi</span></h1>
+  <p class="lede l-en">Ordered by what unblocks the most. Items 1–3 need no new hardware.</p>
+  <p class="lede l-it">Ordinati secondo ciò che sblocca di più. I punti 1–3 non richiedono nuovo hardware.</p>
+</header>
+<section>
+  <ol class="opts">
+    <li class="rec"><h3><span class="l-en">Fix planar-ambiguity handling and add an offline replay harness</span><span class="l-it">Correggere l'ambiguità planare e aggiungere uno strumento di rielaborazione offline</span></h3><p class="l-en">Removes the 900 mm oscillation; lets every later change be judged on campaign 1 data.</p><p class="l-it">Elimina l'oscillazione a 900 mm; permette di valutare ogni modifica successiva sui dati della campagna 1.</p></li>
+    <li class="rec"><h3><span class="l-en">Run Eye calibration and G5 on the Surface</span><span class="l-it">Eseguire calibrazione Eye e G5 sul Surface</span></h3><p class="l-en">First camera-locked overlay on plates A, L and the board; first end-to-end look at what the wearer sees.</p><p class="l-it">Primo overlay agganciato alla camera su plate A, L e board; prima verifica end-to-end di ciò che vede chi indossa gli occhiali.</p></li>
+    <li><h3><span class="l-en">Define the acceptance statistic</span><span class="l-it">Definire la statistica di accettazione</span></h3><p class="l-en">Per-axis, 3D radial, projected or display error; which percentile; static and dynamic separately (audit). Settle before the lab campaign.</p><p class="l-it">Errore per asse, radiale 3D, proiettato o sul display; quale percentile; statico e dinamico separati (audit). Da fissare prima della campagna in laboratorio.</p></li>
+    <li><h3><span class="l-en">Capture-time pose, camera–head extrinsic, per-eye display calibration</span><span class="l-it">Posa all'istante di acquisizione, estrinseco camera–testa, calibrazione del display per occhio</span></h3><p class="l-en">The three remaining terms of the optical chain (ADR-003); SPAAM-type procedure with held-out validation [23].</p><p class="l-it">I tre termini mancanti della catena ottica (ADR-003); procedura di tipo SPAAM con validazione su dati non usati [23].</p></li>
+    <li><h3><span class="l-en">Laboratory validation campaign</span><span class="l-it">Campagna di validazione in laboratorio</span></h3><p class="l-en">Rigid measured plates, instrument-set geometry, B1, B1b, B1c, B2-L, B3; closes audit F04.</p><p class="l-it">Plate rigidi e misurati, geometria imposta da strumenti, B1, B1b, B1c, B2-L, B3; chiude il rilievo F04.</p></li>
+    <li><h3><span class="l-en">Remaining audit findings F07, F09, F10, F12</span><span class="l-it">Rilievi residui F07, F09, F10, F12</span></h3><p class="l-en">Capture lifecycle, probe criteria, calibration profile contract, experiment provenance.</p><p class="l-it">Ciclo di vita dell'acquisizione, criteri delle sonde, contratto dei profili di calibrazione, provenienza degli esperimenti.</p></li>
+    <li><h3><span class="l-en">ADR-002 learn-board pass and decisions on ADR-002/003</span><span class="l-it">Passaggio learn-board dell'ADR-002 e decisione sugli ADR-002/003</span></h3><p class="l-en">Needed before real structures with markers glued at unknown roll.</p><p class="l-it">Necessario prima delle strutture reali con marker incollati a roll ignoto.</p></li>
+    <li><h3><span class="l-en">Android host and the generic APK</span><span class="l-it">Host Android e APK generico</span></h3><p class="l-en">When the Beam Pro (or a compatible phone) is available; the gate experience on the Surface sets the compute budget.</p><p class="l-it">Quando il Beam Pro (o un telefono compatibile) sarà disponibile; l'esperienza dei gate sul Surface fissa il budget di calcolo.</p></li>
+    <li><h3><span class="l-en">Phase C: hammer-tip tracking and Testlab bridge</span><span class="l-it">Fase C: tracciamento della punta del martello e collegamento con Testlab</span></h3><p class="l-en">After a validated static overlay.</p><p class="l-it">Dopo un overlay statico validato.</p></li>
+  </ol>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Open technical questions</span><span class="l-it">Questioni tecniche aperte</span></h2>
+  <ul class="find">
+    <li><span class="pill info">ADR-003</span><span class="l-en">How much residual error remains without per-user eye calibration?</span><span class="l-it">Quanto errore residuo resta senza una calibrazione dell'occhio per utente?</span></li>
+    <li><span class="pill info">ADR-003</span><span class="l-en">Is the electrochromic floor a UI or a hardware limit? (lux-meter readings off / level 1 / level 3)</span><span class="l-it">Il limite elettrocromico è dell'interfaccia o dell'hardware? (letture con luxmetro spento / livello 1 / livello 3)</span></li>
+    <li><span class="pill info">ADR-002</span><span class="l-en">How large is marker placement error on real structures? Not yet measured.</span><span class="l-it">Quanto è grande l'errore di posizionamento dei marker sulle strutture reali? Non ancora misurato.</span></li>
+    <li><span class="pill info"><span class="l-en">latency</span><span class="l-it">latenza</span></span><span class="l-en">Glass-to-glass latency and display-path latency are not measured; only processing time is logged.</span><span class="l-it">Latenza glass-to-glass e del percorso di display non misurate; si registra solo il tempo di elaborazione.</span></li>
+    <li><span class="pill info">B1c</span><span class="l-en">Calibrate the ambiguity thresholds (ρ = 3, Δθ = 10°) on real data.</span><span class="l-it">Tarare le soglie di ambiguità (ρ = 3, Δθ = 10°) su dati reali.</span></li>
+  </ul>
+</section>
+<p class="src"><code>CONTEXT.md</code> open issues, <code>docs/AUDIT-2026-10-08.md</code> (recommended order), ADR-002/003 open questions, <code>docs/validation.md</code> "Not covered yet".</p>
+</article>
+
+<article class="page" id="p-history" data-group="decisions" data-en="Timeline" data-it="Cronologia">
+<header>
+  <div class="eyebrow"><span class="l-en">Decisions</span><span class="l-it">Decisioni</span></div>
+  <h1><span class="l-en">Timeline</span><span class="l-it">Cronologia</span></h1>
+  <div class="legend"><span><i style="background:var(--accent)"></i><span class="l-en">pipeline and project</span><span class="l-it">pipeline e progetto</span></span><span><i style="background:var(--s2)"></i>XREAL</span><span><i style="background:var(--s3)"></i><span class="l-en">validation</span><span class="l-it">validazione</span></span></div>
+</header>
+<section>
+  <ol class="tl">
+    <li><time>2026-04</time><span class="dot"></span><div class="t"><span class="l-en">Webcam pipeline (Phase 1): UNV, ChArUco, ArUco, PnP, registration, overlay.</span><span class="l-it">Pipeline webcam (fase 1): UNV, ChArUco, ArUco, PnP, registrazione, overlay.</span></div></li>
+    <li><time>2026-05-08</time><span class="dot x"></span><div class="t"><span class="l-en">XREAL One Pro + Eye received; ADR-001 accepted; generic Android APK as build target.</span><span class="l-it">Ricevuti XREAL One Pro + Eye; ADR-001 accettato; APK Android generico come target.</span></div></li>
+    <li><time>2026-05-11</time><span class="dot x"></span><div class="t"><span class="l-en">Empty Android APK build passes (Unity 6000.4.5f1, SDK 3.1.0).</span><span class="l-it">Build di un APK Android vuoto riuscita (Unity 6000.4.5f1, SDK 3.1.0).</span></div></li>
+    <li><time>2026-07-08</time><span class="dot"></span><div class="t"><b>v0.1.0</b> · <span class="l-en">first tagged release.</span><span class="l-it">prima release con tag.</span></div></li>
+    <li><time>2026-07-11</time><span class="dot"></span><div class="t"><b>v0.2.0</b> · <span class="l-en">single-marker sustain via IPPE disambiguation; geometry editor; UNV writer.</span><span class="l-it">mantenimento con un marker tramite disambiguazione IPPE; editor di geometria; scrittura UNV.</span></div></li>
+    <li><time>2026-09-18</time><span class="dot"></span><div class="t"><span class="l-en">First code audit; ADR-002 proposed.</span><span class="l-it">Primo audit del codice; proposto l'ADR-002.</span></div></li>
+    <li><time>2026-09-19</time><span class="dot"></span><div class="t"><span class="l-en">GUI freeze traced to blocking camera opens and fixed; AR loop latency tier 1.</span><span class="l-it">Blocco della GUI ricondotto ad aperture camera bloccanti e corretto; primo livello di ottimizzazione della latenza.</span></div></li>
+    <li><time>2026-09-22</time><span class="dot x"></span><div class="t"><span class="l-en">S0 and S1 pass; ADR-003 proposed.</span><span class="l-it">S0 e S1 superati; proposto l'ADR-003.</span></div></li>
+    <li><time>2026-09-23</time><span class="dot x"></span><div class="t"><span class="l-en">S2 passes (native API standalone); S3 blocked by licensed feature.</span><span class="l-it">S2 superato (API nativa autonoma); S3 bloccato da una funzione su licenza.</span></div></li>
+    <li><time>2026-09-25</time><span class="dot x"></span><div class="t"><span class="l-en">S3b: fused pose chain complete but identity only. Validation package and protocol created.</span><span class="l-it">S3b: catena della posa fusa completa ma solo identità. Creati pacchetto e protocollo di validazione.</span></div></li>
+    <li><time>2026-10-05</time><span class="dot v"></span><div class="t"><span class="l-en">Campaign runner <code>validation.bat</code>; fixed focus.</span><span class="l-it">Gestore di campagna <code>validation.bat</code>; fuoco fisso.</span></div></li>
+    <li><time>2026-10-06</time><span class="dot"></span><div class="t"><span class="l-en">Shared config tree; ground-truth uncertainty and TUR; setup assistant; lock acquisition from 2 markers.</span><span class="l-it">Albero di configurazione condiviso; incertezza della verità e TUR; assistente di posizionamento; aggancio con 2 marker.</span></div></li>
+    <li><time>2026-10-08</time><span class="dot"></span><div class="t"><span class="l-en">Second audit (F01–F14); capability matrix; Quest feasibility study.</span><span class="l-it">Secondo audit (F01–F14); matrice delle capacità; studio di fattibilità Quest.</span></div></li>
+    <li><time>2026-10-09</time><span class="dot x"></span><div class="t"><span class="l-en">PC SDK 3.1.2 preview assessed; gate harness built on the desktop.</span><span class="l-it">Valutata l'anteprima PC SDK 3.1.2; harness dei gate compilato sul desktop.</span></div></li>
+    <li><time>2026-10-10</time><span class="dot"></span><div class="t"><span class="l-en">Build numbering MAJOR.MINOR.BUILD (0.2.001).</span><span class="l-it">Numerazione delle build MAJOR.MINOR.BUILD (0.2.001).</span></div></li>
+    <li><time>2026-10-13</time><span class="dot x"></span><div class="t"><span class="l-en">G1 Eye frames and G2 6DoF observed on the Surface.</span><span class="l-it">G1 frame Eye e G2 6DoF osservati sul Surface.</span></div></li>
+    <li><time>2026-10-14</time><span class="dot x"></span><div class="t"><span class="l-en">G3: CPU throttling and decode bottleneck; light-pipeline direction; no DP-in card.</span><span class="l-it">G3: riduzione del clock e collo di bottiglia nella decodifica; scelta della pipeline leggera; nessuna scheda DP-in.</span></div></li>
+    <li><time>2026-10-15</time><span class="dot v"></span><div class="t"><span class="l-en">Campaign 1: B1 (27 sessions) and B1b (6) on the Surface webcam.</span><span class="l-it">Campagna 1: B1 (27 sessioni) e B1b (6) con la webcam del Surface.</span></div></li>
+    <li><time>2026-10-16</time><span class="dot x"></span><div class="t"><span class="l-en">G4 sustained with a fan; board registered in burst frames offline. Validation report published.</span><span class="l-it">G4 sostenuto con ventola; board registrato offline nei frame delle raffiche. Pubblicato il report di validazione.</span></div></li>
+    <li><time>2026-10-17</time><span class="dot v"></span><div class="t"><b>v0.3.000</b> · <span class="l-en">ground-truth review tool and audits; Eye calibration capture; G5 camera-locked overlay ready.</span><span class="l-it">strumento di revisione e audit della verità; acquisizione per la calibrazione Eye; overlay G5 agganciato alla camera pronto.</span></div></li>
+  </ol>
+</section>
+<p class="src"><code>CHANGELOG.md</code>, <code>CONTEXT.md</code>, git log.</p>
+</article>

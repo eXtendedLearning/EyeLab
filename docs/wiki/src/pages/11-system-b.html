@@ -1,0 +1,213 @@
+<article class="page" id="p-pose" data-group="system" data-en="Pose estimation" data-it="Stima della posa">
+<header>
+  <div class="eyebrow"><span class="l-en">System</span><span class="l-it">Sistema</span></div>
+  <h1><span class="l-en">Pose estimation (PnP)</span><span class="l-it">Stima della posa (PnP)</span></h1>
+  <p class="lede l-en">All visible marker corners are solved together as one rigid board expressed in the structure frame. The board pose is the registration.</p>
+  <p class="lede l-it">Tutti gli spigoli dei marker visibili vengono risolti insieme come un unico board rigido espresso nel riferimento della struttura. La posa del board è la registrazione.</p>
+</header>
+<section>
+  <h2 class="col"><span class="l-en">Problem</span><span class="l-it">Problema</span></h2>
+  <div class="eq"><div class="tex" data-tex="(\hat{\mathbf{R}},\hat{\mathbf{t}})=\arg\min_{\mathbf{R}\in SO(3),\,\mathbf{t}}\sum_{i=1}^{4m}\left\lVert\mathbf{u}_i-\pi\!\left(\mathbf{K},\mathbf{d};\,\mathbf{R}\mathbf{X}_i+\mathbf{t}\right)\right\rVert^2"></div>
+  <p class="why l-en">Perspective-n-Point over the <span class="m" data-tex="4m">4m</span> corners of <span class="m" data-tex="m">m</span> markers, minimising reprojection error in the image, where the noise lives [2, 5]. <code>board.matchImagePoints</code> pairs detected corners with model points; the residual RMS <span class="m" data-tex="e_{\mathrm{rms}}">e_rms</span> is kept as a quality figure.</p>
+  <p class="why l-it">Perspective-n-Point sui <span class="m" data-tex="4m">4m</span> spigoli di <span class="m" data-tex="m">m</span> marker, minimizzando l'errore di riproiezione nell'immagine, dove si trova il rumore [2, 5]. <code>board.matchImagePoints</code> accoppia gli spigoli rilevati ai punti del modello; l'RMS del residuo <span class="m" data-tex="e_{\mathrm{rms}}">e_rms</span> è conservato come indice di qualità.</p></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Solver as implemented</span><span class="l-it">Risolutore implementato</span></h2>
+  <div class="flow">
+    <div class="st"><em>1</em><b><span class="l-en">planarity test</span><span class="l-it">test di planarità</span></b><span class="l-en">model points within 0.1 mm of a plane?</span><span class="l-it">punti del modello entro 0,1 mm da un piano?</span></div>
+    <div class="ar">→</div>
+    <div class="st"><em><span class="l-en">2 · planar</span><span class="l-it">2 · planare</span></em><b>SOLVEPNP_IPPE</b><span class="l-en">two solutions, sorted by error; keep the one closest to the Kalman prediction, else the lower error</span><span class="l-it">due soluzioni ordinate per errore; si tiene quella più vicina alla predizione di Kalman, altrimenti quella con errore minore</span></div>
+    <div class="ar">→</div>
+    <div class="st"><em><span class="l-en">2 · non-planar</span><span class="l-it">2 · non planare</span></em><b>SOLVEPNP_ITERATIVE</b><span class="l-en">DLT/homography initialisation</span><span class="l-it">inizializzazione DLT/omografia</span></div>
+    <div class="ar">→</div>
+    <div class="st"><em>3</em><b>solvePnPRefineLM</b><span class="l-en">Levenberg–Marquardt on reprojection error</span><span class="l-it">Levenberg–Marquardt sull'errore di riproiezione</span></div>
+  </div>
+  <p class="cap l-en">Without a structure board, a single marker is solved with <code>SOLVEPNP_IPPE_SQUARE</code>. Rotation vectors are aligned to the previous one (<span class="m" data-tex="(\theta,\mathbf{a})\equiv(2\pi-\theta,-\mathbf{a})">(θ, a) ≡ (2π − θ, −a)</span>) before filtering, so the Rodrigues representation does not jump between frames.</p>
+  <p class="cap l-it">Senza un board della struttura, un singolo marker si risolve con <code>SOLVEPNP_IPPE_SQUARE</code>. I vettori di rotazione vengono allineati al precedente (<span class="m" data-tex="(\theta,\mathbf{a})\equiv(2\pi-\theta,-\mathbf{a})">(θ, a) ≡ (2π − θ, −a)</span>) prima del filtraggio, così la rappresentazione di Rodrigues non salta tra un frame e l'altro.</p>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Planar two-fold ambiguity</span><span class="l-it">Ambiguità planare a due soluzioni</span></h2>
+  <div class="prose l-en">
+    <p>For a planar point set seen under weak perspective, two poses related by a reflection about the line of sight explain the image almost equally well [6, 7]. IPPE returns both. EyeLab measures how distinguishable they are:</p>
+  </div>
+  <div class="prose l-it">
+    <p>Per un insieme di punti planare visto in prospettiva debole, due pose legate da una riflessione attorno alla linea di vista spiegano l'immagine quasi allo stesso modo [6, 7]. IPPE le restituisce entrambe. EyeLab misura quanto sono distinguibili:</p>
+  </div>
+  <div class="eq"><div class="tex" data-tex="\rho=\frac{e_2}{e_1}\ge1,\qquad \Delta\theta=\angle\!\left(\mathbf{R}_1^{\top}\mathbf{R}_2\right),\qquad \text{ambiguous}\iff\rho&lt;3\;\wedge\;\Delta\theta&gt;10^{\circ}"></div>
+  <p class="why l-en"><span class="m" data-tex="e_1\le e_2">e1 ≤ e2</span> are the reprojection errors of the two IPPE solutions. An ambiguous candidate cannot start a lock. Thresholds come from a synthetic sweep (20 mm markers, 0.3 px corner noise, <span class="m" data-tex="f=800">f = 800</span> px) and are to be calibrated by test B1c.</p>
+  <p class="why l-it"><span class="m" data-tex="e_1\le e_2">e1 ≤ e2</span> sono gli errori di riproiezione delle due soluzioni IPPE. Un candidato ambiguo non può avviare un lock. Le soglie vengono da una simulazione (marker da 20 mm, rumore sugli spigoli 0,3 px, <span class="m" data-tex="f=800">f = 800</span> px) e vanno tarate con il test B1c.</p></div>
+  <div class="tbl col"><table class="txt">
+    <thead><tr><th><span class="l-en">Synthetic case</span><span class="l-it">Caso simulato</span></th><th><span class="l-en">Behaviour</span><span class="l-it">Comportamento</span></th></tr></thead>
+    <tbody>
+      <tr><td><span class="l-en">1 marker, 0.6–0.9 m</span><span class="l-it">1 marker, 0,6–0,9 m</span></td><td class="wrap"><span class="l-en">ρ ≈ 1–2 at any angle: single-marker acquisition mostly refused; usable near 0.3 m at ≥ 20° tilt.</span><span class="l-it">ρ ≈ 1–2 a ogni angolo: l'aggancio con un marker è quasi sempre rifiutato; diventa usabile verso 0,3 m con inclinazione ≥ 20°.</span></td></tr>
+      <tr><td><span class="l-en">2 coplanar markers, 100–150 mm apart</span><span class="l-it">2 marker complanari a 100–150 mm</span></td><td class="wrap"><span class="l-en">Unambiguous at 0.6 m from 20–30° tilt; face-on, median rotation error 3–8°.</span><span class="l-it">Non ambiguo a 0,6 m da 20–30° di inclinazione; in vista frontale l'errore di rotazione mediano è 3–8°.</span></td></tr>
+      <tr><td><span class="l-en">Markers on non-coplanar faces</span><span class="l-it">Marker su facce non complanari</span></td><td class="wrap"><span class="l-en">No planar ambiguity: on real structures, spread markers over different faces.</span><span class="l-it">Nessuna ambiguità planare: sulle strutture reali conviene distribuire i marker su facce diverse.</span></td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><b class="h"><span class="l-en">Known defect</span><span class="l-it">Difetto noto</span></b>
+  <p class="l-en">With three 20 mm markers at 900 mm face-on (about 24 px each), ρ was 1.7–2.0. Picking the IPPE solution closest to the Kalman prediction and refining it with LM lets a wrong mirror solution persist: rotation jitter 6.6° (p95) against 0.6° for a globally optimal solver (SQPnP [8] + LM) on the same corners. The ambiguity check acts only at acquisition; once locked, the solution nearest the prediction is kept, so a wrong branch reinforces itself. Proposed fix: SQPnP + LM for multi-marker boards, or LM on both IPPE solutions keeping the lower error and using the prediction only for near ties.</p>
+  <p class="l-it">Con tre marker da 20 mm a 900 mm in vista frontale (circa 24 px ciascuno), ρ valeva 1,7–2,0. Scegliere la soluzione IPPE più vicina alla predizione di Kalman e raffinarla con LM lascia persistere una soluzione speculare sbagliata: jitter di rotazione 6,6° (p95) contro 0,6° di un risolutore a ottimo globale (SQPnP [8] + LM) sugli stessi spigoli. Il controllo di ambiguità agisce solo all'aggancio; a lock acquisito si tiene la soluzione più vicina alla predizione, quindi un ramo sbagliato si autoalimenta. Correzione proposta: SQPnP + LM per board con più marker, oppure LM su entrambe le soluzioni IPPE tenendo l'errore minore e usando la predizione solo nei casi quasi equivalenti.</p></div>
+</section>
+<p class="src"><code>python/pose_estimator.py</code> (<code>LStructureDetector._solve_board_pose</code>, <code>estimate_pose</code>), <code>python/pose_lock.py</code> (<code>align_rvec</code>), project note "pose-lock acquisition" (6/10/2026), validation review 16/10/2026. [2] Hartley &amp; Zisserman; [5] Lepetit et al.; [6] Schweighofer &amp; Pinz; [7] Collins &amp; Bartoli; [8] Terzakis &amp; Lourakis.</p>
+</article>
+
+<article class="page" id="p-lock" data-group="system" data-en="Pose lock and filtering" data-it="Pose lock e filtraggio">
+<header>
+  <div class="eyebrow"><span class="l-en">System</span><span class="l-it">Sistema</span></div>
+  <h1><span class="l-en">Pose lock and filtering</span><span class="l-it">Pose lock e filtraggio</span></h1>
+  <p class="lede l-en">A state machine decides which measured poses become the drawn pose. It separates acquisition, sustained tracking and recovery, because each phase has different evidence available.</p>
+  <p class="lede l-it">Una macchina a stati decide quali pose misurate diventano la posa disegnata. Separa aggancio, tracciamento sostenuto e recupero, perché in ciascuna fase sono disponibili evidenze diverse.</p>
+</header>
+<section>
+  <h2 class="col"><span class="l-en">States</span><span class="l-it">Stati</span></h2>
+  <div class="fig" style="overflow-x:auto"><svg id="d-lock" style="min-width:560px" viewBox="0 0 700 230" role="img" aria-label="Pose lock state machine"></svg></div>
+  <div class="tbl"><table class="txt">
+    <thead><tr><th><span class="l-en">Phase</span><span class="l-it">Fase</span></th><th><span class="l-en">Checks on every candidate</span><span class="l-it">Controlli su ogni candidato</span></th></tr></thead>
+    <tbody>
+      <tr><td>SEARCHING</td><td class="wrap"><span class="l-en">Finite, positive depth; RMS ≤ 15 px ceiling; planar ambiguity check. ≥ 3 markers lock at once; 2 markers need 5 consecutive consistent poses (≤ 20 mm, ≤ 8°).</span><span class="l-it">Finito, profondità positiva; RMS ≤ 15 px; controllo dell'ambiguità planare. Con ≥ 3 marker l'aggancio è immediato; con 2 servono 5 pose consecutive coerenti (≤ 20 mm, ≤ 8°).</span></td></tr>
+      <tr><td>LOCKED</td><td class="wrap"><span class="l-en">Adaptive RMS gate <span class="m" data-tex="\max(3\,\mathrm{px},\,2.5\,e_{\mathrm{base}})">max(3 px, 2.5·baseline)</span>; time-aware jump gates against the prediction; 1 marker sustains the lock.</span><span class="l-it">Gate RMS adattivo <span class="m" data-tex="\max(3\,\mathrm{px},\,2.5\,e_{\mathrm{base}})">max(3 px, 2,5·baseline)</span>; gate sul salto rispetto alla predizione, dipendenti dal tempo; 1 marker mantiene il lock.</span></td></tr>
+      <tr><td>COASTING</td><td class="wrap"><span class="l-en">No acceptable measurement: prediction only, for 0.3 s. Then back to SEARCHING with a filter reset, so a moved specimen is reacquired, not chased.</span><span class="l-it">Nessuna misura accettabile: solo predizione, per 0,3 s. Poi ritorno a SEARCHING con reset del filtro, così un provino spostato viene riagganciato invece che inseguito.</span></td></tr>
+    </tbody>
+  </table></div>
+  <div class="eq"><div class="tex" data-tex="\Delta_{\max}=\max\!\left(\Delta_{\mathrm{floor}},\;v_{\max}\,\Delta t\right),\qquad \Delta_{\mathrm{floor}}=(50\,\mathrm{mm},\,15^{\circ}),\; v_{\max}=(1\,\mathrm{m/s},\,360^{\circ}/\mathrm{s})"></div>
+  <p class="why l-en">Motion gate: <span class="m" data-tex="\Delta t">Δt</span> is the time since the last accepted measurement, so a slow frame is not penalised and a fast one is not waved through.</p>
+  <p class="why l-it">Gate di movimento: <span class="m" data-tex="\Delta t">Δt</span> è il tempo dall'ultima misura accettata, così un frame lento non viene penalizzato e uno veloce non passa senza controllo.</p></div>
+  <div class="tbl col"><table class="txt">
+    <thead><tr><th>Preset</th><th><span class="l-en">acquire / sustain / trusted</span><span class="l-it">aggancio / mantenimento / affidabile</span></th><th><span class="l-en">Use</span><span class="l-it">Uso</span></th></tr></thead>
+    <tbody>
+      <tr><td><code>standard</code></td><td>2 / 1 / 3</td><td class="wrap"><span class="l-en">Default since 6 October 2026.</span><span class="l-it">Default dal 6 ottobre 2026.</span></td></tr>
+      <tr><td><code>single</code></td><td>1 / 1 / 3</td><td class="wrap"><span class="l-en">Opt-in single-marker acquisition.</span><span class="l-it">Aggancio con un marker, su richiesta.</span></td></tr>
+      <tr><td><code>legacy3</code></td><td>3 / 1 / 3</td><td class="wrap"><span class="l-en">Previous behaviour, for A/B comparison.</span><span class="l-it">Comportamento precedente, per confronto A/B.</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Kalman filter</span><span class="l-it">Filtro di Kalman</span></h2>
+  <div class="eq"><div class="tex" data-tex="\mathbf{x}=\begin{bmatrix}\mathbf{t}\\\mathbf{r}\\\dot{\mathbf{t}}\\\dot{\mathbf{r}}\end{bmatrix}\in\mathbb{R}^{12},\quad \mathbf{x}_{k+1}=\begin{bmatrix}\mathbf{I}_6&amp;\mathbf{I}_6\\\mathbf{0}&amp;\mathbf{I}_6\end{bmatrix}\mathbf{x}_k+\mathbf{w}_k,\quad \mathbf{z}_k=\begin{bmatrix}\mathbf{I}_6&amp;\mathbf{0}\end{bmatrix}\mathbf{x}_k+\mathbf{v}_k"></div>
+  <p class="why l-en">Constant-velocity model on translation <b>t</b> and rotation vector <b>r</b> [11, 12], with <span class="m" data-tex="\mathbf{Q}=10^{-4}\mathbf{I}">Q = 10⁻⁴ I</span>, <span class="m" data-tex="\mathbf{R}=10^{-2}\mathbf{I}">R = 10⁻² I</span>. The step is one frame, not a time in seconds, so the filter's dynamics change with frame rate. Filtering a rotation vector linearly is an approximation valid for small inter-frame rotations; the validation reports rotation jitter about the chordal mean instead [13].</p>
+  <p class="why l-it">Modello a velocità costante su traslazione <b>t</b> e vettore di rotazione <b>r</b> [11, 12], con <span class="m" data-tex="\mathbf{Q}=10^{-4}\mathbf{I}">Q = 10⁻⁴ I</span>, <span class="m" data-tex="\mathbf{R}=10^{-2}\mathbf{I}">R = 10⁻² I</span>. Il passo è un frame, non un tempo in secondi, quindi la dinamica del filtro cambia con la frequenza dei frame. Filtrare linearmente un vettore di rotazione è un'approssimazione valida per piccole rotazioni tra frame; la validazione riporta invece il jitter di rotazione attorno alla media cordale [13].</p></div>
+</section>
+<p class="src"><code>python/pose_lock.py</code> (<code>PoseLockConfig</code>, <code>PoseLock</code>, <code>POSE_LOCK_PRESETS</code>), <code>python/pose_estimator.py</code> (<code>PoseKalmanFilter</code>), <code>docs/AUDIT-2026-10-08.md</code> F02. [11] Kalman 1960; [12] Bar-Shalom et al. 2001; [13] Hartley et al. 2013.</p>
+</article>
+
+<article class="page" id="p-reg" data-group="system" data-en="Registration strategy" data-it="Strategia di registrazione">
+<header>
+  <div class="eyebrow"><span class="l-en">System · ADR-002 (proposed)</span><span class="l-it">Sistema · ADR-002 (proposta)</span></div>
+  <h1><span class="l-en">Registration: board solve and Kabsch</span><span class="l-it">Registrazione: solve sul board e Kabsch</span></h1>
+  <p class="lede l-en">Two routes compute the same structure-to-camera transform. Simulation shows the joint board solve is about ten times more accurate for the live pose; Kabsch keeps a role as a roll-free bootstrap and as an independent check of marker placement.</p>
+  <p class="lede l-it">Due percorsi calcolano la stessa trasformazione struttura-camera. La simulazione mostra che il solve congiunto sul board è circa dieci volte più accurato per la posa in tempo reale; Kabsch conserva un ruolo come inizializzazione indipendente dal roll e come verifica indipendente del posizionamento dei marker.</p>
+</header>
+<section>
+  <h2 class="col"><span class="l-en">Route A · Kabsch on marker centres</span><span class="l-it">Percorso A · Kabsch sui centri dei marker</span></h2>
+  <div class="eq"><div class="tex" data-tex="\mathbf{H}=\sum_i(\mathbf{p}_i-\bar{\mathbf{p}})(\mathbf{q}_i-\bar{\mathbf{q}})^{\top}=\mathbf{U}\boldsymbol{\Sigma}\mathbf{V}^{\top},\quad \mathbf{R}=\mathbf{V}\,\mathrm{diag}\!\left(1,1,\det(\mathbf{V}\mathbf{U}^{\top})\right)\mathbf{U}^{\top},\quad \mathbf{t}=\bar{\mathbf{q}}-\mathbf{R}\bar{\mathbf{p}}"></div>
+  <p class="why l-en">Least-squares rigid alignment of model centres <b>p</b> to per-marker PnP centres <b>q</b> [9, 10]. It needs only marker centres, so it is blind to marker roll, but it minimises an unweighted 3D cost while per-marker depth noise is much larger than lateral noise.</p>
+  <p class="why l-it">Allineamento rigido ai minimi quadrati dei centri del modello <b>p</b> sui centri <b>q</b> ottenuti con una PnP per marker [9, 10]. Servono solo i centri, quindi è insensibile al roll dei marker, ma minimizza un costo 3D non pesato mentre il rumore in profondità di ciascun marker è molto più grande di quello laterale.</p></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Simulation results (ADR-002)</span><span class="l-it">Risultati della simulazione (ADR-002)</span></h2>
+  <p class="cap l-en">4–5 markers on an 80–100 mm layout at 0.5 m, 0.2 px corner noise, 120–300 trials. RMS node error.</p>
+  <p class="cap l-it">4–5 marker su una disposizione di 80–100 mm a 0,5 m, rumore sugli spigoli 0,2 px, 120–300 prove. Errore RMS sui nodi.</p>
+  <div class="two">
+    <div class="tbl"><table class="data">
+      <thead><tr><th><span class="l-en">Marker roll error</span><span class="l-it">Errore di roll</span></th><th><span class="l-en">Board solve</span><span class="l-it">Solve sul board</span></th><th>Kabsch</th></tr></thead>
+      <tbody>
+        <tr><td>0°</td><td>0.43 mm</td><td>2.65 mm</td></tr>
+        <tr><td>15°</td><td>1.24 mm</td><td>2.79 mm</td></tr>
+        <tr><td>30°</td><td>2.60 mm</td><td>2.96 mm</td></tr>
+        <tr><td>45°</td><td class="b">4.03 mm</td><td>2.68 mm</td></tr>
+        <tr><td>90°</td><td class="b">10.36 mm</td><td>2.85 mm</td></tr>
+      </tbody>
+    </table></div>
+    <div class="tbl"><table class="data">
+      <thead><tr><th><span class="l-en">Arbitrary roll, none measured</span><span class="l-it">Roll arbitrario, non misurato</span></th><th>RMS</th></tr></thead>
+      <tbody>
+        <tr><td><span class="l-en">Board solve, model roll = 0</span><span class="l-it">Solve sul board, roll del modello = 0</span></td><td>9.85 mm</td></tr>
+        <tr><td><span class="l-en">Kabsch on centres</span><span class="l-it">Kabsch sui centri</span></td><td>2.75 mm</td></tr>
+        <tr><td><span class="l-en">Kabsch → roll recovery → board solve</span><span class="l-it">Kabsch → recupero del roll → solve sul board</span></td><td class="g">0.44 mm</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+  <div class="prose l-en">
+    <p>Proposed decision: the board solve is the only source of the live pose; a one-off "learn board" pass uses Kabsch plus each marker's own orientation to recover roll (to 0.59° in simulation) and writes it into the marker config; Kabsch residuals stay as placement QA. The Kabsch conditioning gate was repaired for planar layouts (audit F06). The pass itself is not implemented. Marker placement error is likely the dominant error source on real structures and is not yet measured; a bundle adjustment over many views is the principled endpoint.</p>
+  </div>
+  <div class="prose l-it">
+    <p>Decisione proposta: il solve sul board è l'unica fonte della posa in tempo reale; un passaggio "learn board" una tantum usa Kabsch e l'orientamento proprio di ciascun marker per recuperare il roll (entro 0,59° in simulazione) e lo scrive nella configurazione dei marker; i residui di Kabsch restano come controllo del posizionamento. Il gate di condizionamento di Kabsch è stato corretto per le disposizioni planari (audit F06). Il passaggio vero e proprio non è implementato. L'errore di posizionamento dei marker è probabilmente la principale sorgente di errore sulle strutture reali e non è ancora misurato; l'approdo naturale è un bundle adjustment su molte viste.</p>
+  </div>
+</section>
+<p class="src"><code>docs/adr/0002-registration-strategy.draft.md</code>, <code>python/registration.py</code>, <code>docs/audit_verify.py</code>, <code>docs/AUDIT-2026-10-08.md</code> F06. [9] Kabsch 1976; [10] Umeyama 1991.</p>
+</article>
+
+<article class="page" id="p-overlay" data-group="system" data-en="Overlay and error propagation" data-it="Overlay e propagazione dell'errore">
+<header>
+  <div class="eyebrow"><span class="l-en">System</span><span class="l-it">Sistema</span></div>
+  <h1><span class="l-en">Overlay and error propagation</span><span class="l-it">Overlay e propagazione dell'errore</span></h1>
+  <p class="lede l-en">What the operator judges is the drawn position of a grid node relative to the real one. Three mechanisms turn small pose errors into visible node errors.</p>
+  <p class="lede l-it">Ciò che l'operatore valuta è la posizione disegnata di un nodo della griglia rispetto a quella reale. Tre meccanismi trasformano piccoli errori di posa in errori visibili sui nodi.</p>
+</header>
+<section>
+  <h2 class="col"><span class="l-en">1 · Lever arm</span><span class="l-it">1 · Braccio di leva</span></h2>
+  <div class="eq"><div class="tex" data-tex="\delta_{\mathrm{node}}\approx L\,\delta\theta\quad(\delta\theta\ \text{in rad})"></div>
+  <p class="why l-en">A rotation error <span class="m" data-tex="\delta\theta">δθ</span> about the anchoring markers moves a node at distance <span class="m" data-tex="L">L</span> by <span class="m" data-tex="L\delta\theta">L·δθ</span>: 0.5° at 200 mm is 1.7 mm. This is why single-marker sustain degrades with distance from the marker (B1b), and why a 6° mirror-pose error moves a point 30 mm off the plate by about 3 mm.</p>
+  <p class="why l-it">Un errore di rotazione <span class="m" data-tex="\delta\theta">δθ</span> attorno ai marker di ancoraggio sposta un nodo a distanza <span class="m" data-tex="L">L</span> di <span class="m" data-tex="L\delta\theta">L·δθ</span>: 0,5° a 200 mm sono 1,7 mm. Per questo il mantenimento con un solo marker peggiora allontanandosi dal marker (B1b), e un errore di 6° della posa speculare sposta di circa 3 mm un punto a 30 mm dal plate.</p></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">2 · Depth and scale</span><span class="l-it">2 · Profondità e scala</span></h2>
+  <div class="prose l-en"><p>A depth error <span class="m" data-tex="\delta z">δz</span> on a plate at distance <span class="m" data-tex="d">d</span> rescales its projection by <span class="m" data-tex="-\delta z/d">−δz/d</span>. In campaign 1 the grid was drawn 2–5 ‰ small, consistent with the plate placed 0.5–2.9 mm too far: at 100 mm from the plate centre this is 0.2–0.5 mm.</p></div>
+  <div class="prose l-it"><p>Un errore di profondità <span class="m" data-tex="\delta z">δz</span> su un plate a distanza <span class="m" data-tex="d">d</span> ne riscala la proiezione di <span class="m" data-tex="-\delta z/d">−δz/d</span>. Nella campagna 1 la griglia era disegnata più piccola del 2–5 ‰, coerente con un plate collocato 0,5–2,9 mm troppo lontano: a 100 mm dal centro del plate sono 0,2–0,5 mm.</p></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">3 · Latency (optical see-through)</span><span class="l-it">3 · Latenza (ottico see-through)</span></h2>
+  <div class="eq"><div class="tex" data-tex="\varepsilon\approx\omega\,\Delta t,\qquad e_{\mathrm{lat}}\approx d\tan\varepsilon"></div>
+  <p class="why l-en">With the camera on the head, a head rate <span class="m" data-tex="\omega">ω</span> and a pose age <span class="m" data-tex="\Delta t">Δt</span> give an angular error <span class="m" data-tex="\varepsilon">ε</span>. In optical see-through the world is seen with no delay, so the mismatch is directly visible; delay is the largest registration error source in Holloway's analysis [20].</p>
+  <p class="why l-it">Con la camera sulla testa, una velocità di rotazione <span class="m" data-tex="\omega">ω</span> e un'età della posa <span class="m" data-tex="\Delta t">Δt</span> producono un errore angolare <span class="m" data-tex="\varepsilon">ε</span>. Nell'ottico see-through il mondo si vede senza ritardo, quindi lo scarto è direttamente visibile; il ritardo è la principale sorgente di errore di registrazione nell'analisi di Holloway [20].</p></div>
+  <div class="tbl col"><table class="data">
+    <thead><tr><th><span class="l-en">Head rate</span><span class="l-it">Velocità della testa</span></th><th>Δt = 100 ms</th><th><span class="l-en">lateral error at 1 m</span><span class="l-it">errore laterale a 1 m</span></th></tr></thead>
+    <tbody>
+      <tr><td><span class="l-en">10 °/s, holding still</span><span class="l-it">10 °/s, testa ferma</span></td><td>1.0°</td><td>17 mm</td></tr>
+      <tr><td><span class="l-en">30 °/s, slow look</span><span class="l-it">30 °/s, sguardo lento</span></td><td>3.0°</td><td class="w">52 mm</td></tr>
+      <tr><td><span class="l-en">100 °/s, glance</span><span class="l-it">100 °/s, occhiata</span></td><td>10°</td><td class="b">176 mm</td></tr>
+    </tbody>
+  </table></div>
+  <p class="cap l-en">Hence the glasses design anchors the overlay in the headset's world frame (6DoF tracking) and uses camera poses only to place and correct that anchor while the head is nearly still (<a href="#gates">G4/G5</a>).</p>
+  <p class="cap l-it">Per questo negli occhiali l'overlay è ancorato al riferimento mondo del visore (tracciamento 6DoF) e le pose della camera servono solo a collocare e correggere l'ancora quando la testa è quasi ferma (<a href="#gates">G4/G5</a>).</p>
+</section>
+<p class="src"><code>python/overlay.py</code>, <code>docs/adr/0003-eye-pov-rigid-coupling.draft.md</code> (latency table), validation review 16/10/2026. [20] Holloway 1997.</p>
+</article>
+
+<article class="page" id="p-code" data-group="system" data-en="Code map and tools" data-it="Mappa del codice e strumenti">
+<header>
+  <div class="eyebrow"><span class="l-en">System</span><span class="l-it">Sistema</span></div>
+  <h1><span class="l-en">Code map and tools</span><span class="l-it">Mappa del codice e strumenti</span></h1>
+  <p class="lede l-en">Repository <code>EyeLab</code>, Python 3.9+ in a virtual environment; CI on Python 3.11 runs the unit tests and a narrow <code>ruff</code> error set.</p>
+  <p class="lede l-it">Repository <code>EyeLab</code>, Python 3.9+ in ambiente virtuale; la CI su Python 3.11 esegue i test unitari e un insieme ristretto di controlli <code>ruff</code>.</p>
+</header>
+<section>
+  <div class="tbl"><table class="txt">
+    <thead><tr><th><span class="l-en">Module or folder</span><span class="l-it">Modulo o cartella</span></th><th><span class="l-en">Role</span><span class="l-it">Ruolo</span></th></tr></thead>
+    <tbody>
+      <tr><td><code>python/eyelab_gui.py</code>, <code>gui_*.py</code></td><td class="wrap"><span class="l-en">Tkinter GUI: calibration, markers, geometry editor, AR view.</span><span class="l-it">GUI Tkinter: calibrazione, marker, editor di geometria, vista AR.</span></td></tr>
+      <tr><td><code>pose_estimator.py</code></td><td class="wrap"><span class="l-en">Capture, CLAHE, detection, board PnP, Kalman, <code>ArucoPipeline</code>.</span><span class="l-it">Acquisizione, CLAHE, rilevamento, PnP sul board, Kalman, <code>ArucoPipeline</code>.</span></td></tr>
+      <tr><td><code>pose_lock.py</code></td><td class="wrap"><span class="l-en">Lock state machine, carry-over, ROI re-detection.</span><span class="l-it">Macchina a stati del lock, riporto, ri-rilevamento in ROI.</span></td></tr>
+      <tr><td><code>registration.py</code></td><td class="wrap">Kabsch / Procrustes, <span class="l-en">quality metrics</span><span class="l-it">metriche di qualità</span>.</td></tr>
+      <tr><td><code>calibrate.py</code>, <code>camera_utils.py</code></td><td class="wrap"><span class="l-en">ChArUco calibration, profiles, focus lock, non-blocking camera open.</span><span class="l-it">Calibrazione ChArUco, profili, blocco del fuoco, apertura camera non bloccante.</span></td></tr>
+      <tr><td><code>unv_to_json.py</code>, <code>unv_writer.py</code></td><td class="wrap"><span class="l-en">UNV parsing and authoring.</span><span class="l-it">Lettura e scrittura UNV.</span></td></tr>
+      <tr><td><code>overlay.py</code>, <code>frame_packet.py</code>, <code>eyelab_paths.py</code></td><td class="wrap"><span class="l-en">Projection and drawing; frame packets; path registry.</span><span class="l-it">Proiezione e disegno; pacchetti dei frame; registro dei percorsi.</span></td></tr>
+      <tr><td><code>python/validation/</code></td><td class="wrap"><span class="l-en">Plates, capture, independent ground truth, metrics, uncertainty, campaign runner, ground-truth review.</span><span class="l-it">Plate, acquisizione, verità a terra indipendente, metriche, incertezza, gestione campagna, revisione della verità a terra.</span></td></tr>
+      <tr><td><code>python/xreal_gates/</code></td><td class="wrap"><span class="l-en">Gate run import and summary, Eye calibration, offline lock test, WebSocket pose service.</span><span class="l-it">Import e riepilogo delle prove dei gate, calibrazione Eye, test offline del lock, servizio di posa WebSocket.</span></td></tr>
+      <tr><td><code>python/xreal_*.py</code></td><td class="wrap"><span class="l-en">Native-API probes of September 2026 (stages S0–S3b).</span><span class="l-it">Sonde dell'API nativa di settembre 2026 (stadi S0–S3b).</span></td></tr>
+      <tr><td><code>unity_projects/xreal_pc_gates/</code></td><td class="wrap"><span class="l-en">Unity gate harness for the XREAL PC SDK (Windows players, Surface launcher).</span><span class="l-it">Harness Unity dei gate per il PC SDK XREAL (player Windows, launcher per il Surface).</span></td></tr>
+      <tr><td><code>eyelab_xreal/</code></td><td class="wrap"><span class="l-en">Android Unity project (SDK 3.1.0), scaffold for the final app.</span><span class="l-it">Progetto Unity Android (SDK 3.1.0), base per l'applicazione finale.</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Launchers and conventions</span><span class="l-it">Launcher e convenzioni</span></h2>
+  <ul class="find">
+    <li><span class="pill info"><span class="l-en">run</span><span class="l-it">avvio</span></span><span><code>run_eyelab.bat</code> (GUI), <code>validation.bat</code> (<span class="l-en">campaign menu</span><span class="l-it">menu della campagna</span>), <code>Tools/run_gates.bat</code> (<span class="l-en">XREAL gates on the Surface</span><span class="l-it">gate XREAL sul Surface</span>).</span></li>
+    <li><span class="pill info"><span class="l-en">version</span><span class="l-it">versione</span></span><span class="l-en"><code>MAJOR.MINOR.BUILD</code>, single source <code>python/eyelab_version.py</code>, bumped by <code>tools/bump_version.py</code>; every commit subject starts with its build number; tags only at MINOR cuts.</span><span class="l-it"><code>MAJOR.MINOR.BUILD</code>, unica fonte <code>python/eyelab_version.py</code>, incrementata da <code>tools/bump_version.py</code>; ogni messaggio di commit inizia con il numero di build; tag solo ai cambi di MINOR.</span></li>
+    <li><span class="pill info"><span class="l-en">tests</span><span class="l-it">test</span></span><span><code>python -m unittest discover -p "test_*.py"</code> <span class="l-en">from <code>python/</code>; tests live beside their modules.</span><span class="l-it">da <code>python/</code>; i test stanno accanto ai moduli.</span></span></li>
+    <li><span class="pill info"><span class="l-en">docs</span><span class="l-it">doc</span></span><span class="l-en">Precedence: AGENTS.md → CONTEXT.md → ADRs (append-only) → task plans. When a document disagrees with observed runtime behaviour, the runtime wins and the document is corrected.</span><span class="l-it">Precedenza: AGENTS.md → CONTEXT.md → ADR (solo aggiunte) → piani di lavoro. Quando un documento contrasta con il comportamento osservato, vale l'osservazione e il documento va corretto.</span></li>
+  </ul>
+</section>
+<p class="src"><code>README.md</code>, <code>AGENTS.md</code>, <code>docs/README.md</code>, <code>docs/VERSIONING.md</code>.</p>
+</article>

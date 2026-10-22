@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -7,8 +8,8 @@ namespace EyeLabGates
 {
     /// <summary>
     /// ADR-001's pose-bridge contract (docs/adr/0001-opencv-bridging-staircase.md): the rest of the
-    /// app asks for a target pose in a camera frame and never knows how it was computed. The gate's
-    /// G5 uses <see cref="WebSocketPoseBridge"/> (Step C, Python on the same machine); a native or
+    /// app asks for target poses in a camera frame and never knows how they were computed. The gates
+    /// use <see cref="WebSocketPoseBridge"/> (Step C, Python on the same machine); a native or
     /// OpenCV-for-Unity implementation can replace it without touching the lock logic.
     /// </summary>
     public interface IArucoPoseBridge
@@ -31,15 +32,26 @@ namespace EyeLabGates
         public long Sequence;
     }
 
-    /// <summary>
-    /// Target pose in the OpenCV camera frame of the upright image (x right, y down, z forward),
-    /// metres. Unity converts with F = diag(1, -1, 1).
-    /// </summary>
+    /// <summary>The poses of every served target in one frame.</summary>
     public sealed class PoseResult
     {
+        public long Sequence;
+        public float ServiceMs;
+        public float RoundTripMs;
+        /// <summary>Set when the frame failed as a whole (transport, service error).</summary>
+        public string Error = "";
+        public readonly List<TargetPose> Targets = new List<TargetPose>();
+    }
+
+    /// <summary>
+    /// One target's pose in the OpenCV camera frame of the upright image (x right, y down, z forward),
+    /// metres. Unity converts with F = diag(1, -1, 1).
+    /// </summary>
+    public sealed class TargetPose
+    {
+        public string Target = "";
         public bool Ok;
         public string Reason = "";
-        public long Sequence;
         /// <summary>Row-major 3x3 rotation, target frame to camera frame.</summary>
         public float[] RotationRowMajor;
         public Vector3 TranslationCv;
@@ -47,11 +59,9 @@ namespace EyeLabGates
         public float Ambiguity = -1f;
         public int Markers;
         public int Points;
-        public float ServiceMs;
-        public float RoundTripMs;
     }
 
-    /// <summary>What the glasses draw on the target, in the target frame (OpenCV-handed, metres).</summary>
+    /// <summary>What the glasses draw on a target, in the target frame (OpenCV-handed, metres).</summary>
     public sealed class TargetOverlayGeometry
     {
         public string Target = "";
@@ -60,7 +70,5 @@ namespace EyeLabGates
         public float[] Segments = Array.Empty<float>();
         /// <summary>3 floats per point.</summary>
         public float[] Points = Array.Empty<float>();
-        public string CameraSource = "";
-        public string CameraDescription = "";
     }
 }

@@ -4,7 +4,7 @@ using UnityEngine;
 namespace EyeLabGates
 {
     /// <summary>
-    /// G4 overlay: a world-locked 60 x 40 cm grid (10 cm cells) with square points at the corners and
+    /// G4/demo world grid and G5/demo target overlays. The grid: a world-locked 60 x 40 cm grid (10 cm cells) with square points at the corners and
     /// the centre, the stand-in for the measurement wireframe. One static mesh of thin quads (4 mm
     /// lines, double-sided, unlit); nothing is updated per frame, so the cost is one draw call per eye.
     /// <see cref="PlaceInFront"/> puts it on the gaze line at a fixed distance, upright and facing the
@@ -42,23 +42,24 @@ namespace EyeLabGates
             if (m_Grid != null) m_Grid.SetActive(false);
         }
 
-        // ---------------------------------------------------------------- G5 target overlay
+        // ---------------------------------------------------------------- G5 / demo target overlays
 
         const float TargetLine = 0.0025f, TargetPoint = 0.008f;
-        GameObject m_Target;
+        static readonly Color[] TargetColours = { new Color(0.2f, 1f, 0.35f), new Color(0.3f, 0.8f, 1f), new Color(1f, 0.8f, 0.2f) };
+        readonly Dictionary<string, GameObject> m_Targets = new Dictionary<string, GameObject>();
 
-        public bool TargetBuilt => m_Target != null;
-        public bool TargetVisible => m_Target != null && m_Target.activeSelf;
+        public bool TargetVisible(string target) => m_Targets.TryGetValue(target, out var go) && go.activeSelf;
 
         /// <summary>
-        /// Builds the G5 overlay from the pose service's geometry (target frame, OpenCV-handed, metres):
-        /// each segment as two crossed 2.5 mm strips and each point as three crossed 8 mm squares, so
-        /// they read from any angle. Vertices are converted with F = diag(1, -1, 1); the object's
-        /// rotation is then F R F (see <see cref="SetTargetPose"/>). Hidden until the first lock.
+        /// Builds one target's overlay from the pose service's geometry (target frame, OpenCV-handed,
+        /// metres): each segment as two crossed 2.5 mm strips and each point as two crossed 8 mm squares,
+        /// so they read from any angle. Vertices are converted with F = diag(1, -1, 1); the object's
+        /// rotation is then F R F (see <see cref="SetTargetPose"/>). Each target gets its own colour
+        /// (green, blue, amber in hello order). Hidden until the first lock.
         /// </summary>
         public void BuildTarget(TargetOverlayGeometry geometry)
         {
-            if (m_Target != null) Destroy(m_Target);
+            if (m_Targets.TryGetValue(geometry.Target, out var old)) Destroy(old);
             var verts = new List<Vector3>();
             var tris = new List<int>();
             float[] s = geometry.Segments;
@@ -72,24 +73,32 @@ namespace EyeLabGates
                 Strip(verts, tris, c - Vector3.right * h, c + Vector3.right * h, TargetPoint);
                 Strip(verts, tris, c - Vector3.up * h, c + Vector3.up * h, TargetPoint);
             }
-            var mesh = new Mesh { name = "GateTargetOverlay", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+            var mesh = new Mesh { name = "GateTarget_" + geometry.Target, indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
             mesh.SetVertices(verts);
             mesh.SetTriangles(tris, 0);
             mesh.RecalculateBounds();
-            m_Target = new GameObject("GateTargetOverlay");
-            m_Target.AddComponent<MeshFilter>().sharedMesh = mesh;
-            var renderer = m_Target.AddComponent<MeshRenderer>();
+            var go = new GameObject("GateTarget_" + geometry.Target);
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            var renderer = go.AddComponent<MeshRenderer>();
             renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             renderer.receiveShadows = false;
-            renderer.sharedMaterial = m_Material != null ? m_Material : new Material(Shader.Find("Unlit/Color"));
-            m_Target.SetActive(false);
+            var mat = m_Material != null ? new Material(m_Material) : new Material(Shader.Find("Unlit/Color"));
+            mat.color = TargetColours[m_Targets.Count % TargetColours.Length];
+            renderer.sharedMaterial = mat;
+            go.SetActive(false);
+            m_Targets[geometry.Target] = go;
         }
 
-        public void SetTargetPose(Vector3 position, Quaternion rotation)
+        public void SetTargetPose(string target, Vector3 position, Quaternion rotation)
         {
-            if (m_Target == null) return;
-            m_Target.transform.SetPositionAndRotation(position, rotation);
-            m_Target.SetActive(true);
+            if (!m_Targets.TryGetValue(target, out var go)) return;
+            go.transform.SetPositionAndRotation(position, rotation);
+            go.SetActive(true);
+        }
+
+        public void HideTarget(string target)
+        {
+            if (m_Targets.TryGetValue(target, out var go)) go.SetActive(false);
         }
 
         static Vector3 Flip(float x, float y, float z) => new Vector3(x, -y, z);

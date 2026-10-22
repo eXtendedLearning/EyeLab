@@ -1,0 +1,182 @@
+<article class="page" id="p-arch" data-group="system" data-en="Architecture" data-it="Architettura">
+<header>
+  <div class="eyebrow"><span class="l-en">System</span><span class="l-it">Sistema</span></div>
+  <h1><span class="l-en">Architecture and data flow</span><span class="l-it">Architettura e flusso dei dati</span></h1>
+  <p class="lede l-en">One Python pipeline does all the measurement work. The webcam application calls it directly; the XREAL application reaches it through a narrow pose interface, so the same detection and pose code serves both.</p>
+  <p class="lede l-it">Tutto il lavoro di misura è svolto da un'unica pipeline Python. L'applicazione webcam la chiama direttamente; l'applicazione XREAL la raggiunge attraverso un'interfaccia di posa ridotta, così lo stesso codice di rilevamento e di posa serve entrambe.</p>
+</header>
+
+<section>
+  <h2 class="col"><span class="l-en">Per-frame pipeline</span><span class="l-it">Pipeline per frame</span></h2>
+  <div class="flow">
+    <div class="st"><em>frame_packet.py</em><b>FramePacket</b><span class="l-en">session id, strictly increasing sequence, host receipt time</span><span class="l-it">id di sessione, sequenza strettamente crescente, istante di ricezione</span></div>
+    <div class="ar">→</div>
+    <div class="st"><em>pose_estimator.py</em><b>CLAHE + ArUco</b><span class="l-en">contrast equalisation, detection, sub-pixel corners</span><span class="l-it">equalizzazione del contrasto, rilevamento, spigoli sub-pixel</span></div>
+    <div class="ar">→</div>
+    <div class="st"><em>pose_lock.py</em><b><span class="l-en">gap filling</span><span class="l-it">recupero lacune</span></b><span class="l-en">optical-flow carry-over, ROI re-detection</span><span class="l-it">riporto con flusso ottico, ri-rilevamento in ROI</span></div>
+    <div class="ar">→</div>
+    <div class="st"><em>LStructureDetector</em><b><span class="l-en">board solve</span><span class="l-it">solve sul board</span></b><span class="l-en">IPPE / iterative PnP + LM</span><span class="l-it">PnP IPPE / iterativa + LM</span></div>
+    <div class="ar">→</div>
+    <div class="st"><em>PoseLock</em><b><span class="l-en">accept / coast</span><span class="l-it">accetta / coasting</span></b><span class="l-en">gates, 12-state Kalman</span><span class="l-it">gate, Kalman a 12 stati</span></div>
+    <div class="ar">→</div>
+    <div class="st"><em>overlay.py</em><b>project_nodes</b><span class="l-en">UNV nodes and edges into the image</span><span class="l-it">nodi e lati UNV nell'immagine</span></div>
+  </div>
+  <div class="prose l-en">
+    <p><code>ArucoPipeline</code> processes each <code>(session, sequence)</code> pair once, drops packets older than <code>max_frame_age_s</code> independently of the reader's progress, and resets every filter when the session changes. This rule exists because a cached frame re-processed as new looked like a fresh measurement (audit finding F03, fixed 8 October 2026). Capture runs on its own thread (<code>ThreadedCapture</code>); camera opens run on worker threads with a delivery check and backend fallback, after a blocking DirectShow open froze the GUI for up to 32 s.</p>
+    <p>Each frame yields a <code>FrameResult</code> carrying both the raw solve (<code>measured_pose</code>) and the filtered pose drawn on screen. Validation logs both, so the filter's contribution can be separated from the measurement.</p>
+  </div>
+  <div class="prose l-it">
+    <p><code>ArucoPipeline</code> elabora ogni coppia <code>(sessione, sequenza)</code> una sola volta, scarta i pacchetti più vecchi di <code>max_frame_age_s</code> indipendentemente dall'avanzamento del lettore e azzera tutti i filtri al cambio di sessione. La regola nasce dal fatto che un frame in cache rielaborato come nuovo sembrava una misura fresca (rilievo F03 dell'audit, corretto l'8 ottobre 2026). L'acquisizione gira su un proprio thread (<code>ThreadedCapture</code>); l'apertura della camera avviene su thread di lavoro con verifica di consegna e backend alternativo, dopo che un'apertura DirectShow bloccante aveva congelato la GUI fino a 32 s.</p>
+    <p>Ogni frame produce un <code>FrameResult</code> che contiene sia la soluzione grezza (<code>measured_pose</code>) sia la posa filtrata disegnata a schermo. La validazione le registra entrambe, così il contributo del filtro si separa da quello della misura.</p>
+  </div>
+</section>
+
+<section>
+  <h2 class="col"><span class="l-en">Deployment: webcam and glasses</span><span class="l-it">Distribuzione: webcam e occhiali</span></h2>
+  <div class="two">
+    <div class="fig">
+      <h3><span class="l-en">Phase A · webcam</span><span class="l-it">Fase A · webcam</span></h3>
+      <p class="small l-en">Tkinter GUI (<code>eyelab_gui.py</code>) with calibration, marker, geometry-editor and AR tabs; standalone CLI (<code>webcam_pipeline.py</code>); optional UDP pose broadcast. Launcher <code>run_eyelab.bat</code> creates the virtual environment and starts the GUI.</p>
+      <p class="small l-it">GUI Tkinter (<code>eyelab_gui.py</code>) con schede per calibrazione, marker, editor di geometria e vista AR; pipeline CLI autonoma (<code>webcam_pipeline.py</code>); invio opzionale della posa via UDP. Il launcher <code>run_eyelab.bat</code> crea l'ambiente virtuale e avvia la GUI.</p>
+    </div>
+    <div class="fig">
+      <h3><span class="l-en">Phase B · glasses (ADR-001 Step C)</span><span class="l-it">Fase B · occhiali (ADR-001, passo C)</span></h3>
+      <p class="small l-en">A Unity client takes Eye frames, sends the Y plane to a Python pose service over WebSocket (<code>ws://127.0.0.1:8765</code> in the gate project) and receives <code>(rvec, tvec)</code> with quality fields. The client only depends on <code>IArucoPoseBridge</code>, so a native Android plugin (Step A) or a commercial OpenCV binding (Step B) can replace the service without touching the rest of the app.</p>
+      <p class="small l-it">Un client Unity prende i frame della Eye, invia il piano Y a un servizio di posa Python via WebSocket (<code>ws://127.0.0.1:8765</code> nel progetto dei gate) e riceve <code>(rvec, tvec)</code> con i campi di qualità. Il client dipende solo da <code>IArucoPoseBridge</code>, quindi un plugin Android nativo (passo A) o un binding OpenCV commerciale (passo B) possono sostituire il servizio senza toccare il resto dell'applicazione.</p>
+    </div>
+  </div>
+  <div class="tbl col"><table class="kv"><tbody>
+    <tr><td><span class="l-en">Uplink</span><span class="l-it">Andata</span></td><td><span class="l-en">WebSocket binary frame: 20-byte header <code>&lt;4sB3xIQ</code> (magic, version, reserved, sequence, <code>timestamp_ns</code>) followed by an 8-bit grey JPEG (q 85, 1280×720 baseline, 15 fps initial).</span><span class="l-it">Frame binario WebSocket: intestazione da 20 byte <code>&lt;4sB3xIQ</code> (magic, versione, riservati, sequenza, <code>timestamp_ns</code>) seguita da un JPEG in scala di grigi a 8 bit (q 85, 1280×720 di base, 15 fps iniziali).</span></td></tr>
+    <tr><td><span class="l-en">Downlink</span><span class="l-it">Ritorno</span></td><td><span class="l-en">JSON text frame: <code>pose</code> with session, sequence, timestamps, clock id, <code>rvec</code>, <code>tvec</code>, marker ids, reprojection RMS, registration RMS, latency, calibration and geometry hashes; an explicit <code>no_pose</code> replaces silence.</span><span class="l-it">Frame di testo JSON: <code>pose</code> con sessione, sequenza, timestamp, id dell'orologio, <code>rvec</code>, <code>tvec</code>, id dei marker, RMS di riproiezione, RMS di registrazione, latenza, hash di calibrazione e geometria; un <code>no_pose</code> esplicito sostituisce il silenzio.</span></td></tr>
+    <tr><td><span class="l-en">Handshake</span><span class="l-it">Handshake</span></td><td><span class="l-en">Client <code>hello</code>; service <code>ready</code> with intrinsics and target geometry, so the Unity side never owns a calibration file.</span><span class="l-it"><code>hello</code> del client; <code>ready</code> del servizio con intrinseci e geometria del target, così il lato Unity non possiede mai un file di calibrazione.</span></td></tr>
+    <tr><td><span class="l-en">Pivot rule</span><span class="l-it">Regola di passaggio</span></td><td><span class="l-en">Leave Step C if median end-to-end latency exceeds 150 ms, registration degrades beyond 10 mm RMS because of transport, or the network loses more than 5 % of packets in episodes over a 30-min session.</span><span class="l-it">Si abbandona il passo C se la latenza mediana end-to-end supera 150 ms, se la registrazione peggiora oltre 10 mm RMS per colpa del trasporto o se la rete perde oltre il 5 % dei pacchetti in episodi durante una sessione di 30 min.</span></td></tr>
+  </tbody></table></div>
+</section>
+
+<section>
+  <h2 class="col"><span class="l-en">Invariants every module keeps</span><span class="l-it">Invarianti rispettate da ogni modulo</span></h2>
+  <ul class="find">
+    <li><span class="pill info"><span class="l-en">units</span><span class="l-it">unità</span></span><span class="l-en">Metres everywhere past the UNV parser. Millimetres appear only in user-facing fields named <code>*_mm</code>.</span><span class="l-it">Metri ovunque dopo il parser UNV. I millimetri compaiono solo nei campi per l'utente con nome <code>*_mm</code>.</span></li>
+    <li><span class="pill info"><span class="l-en">scale</span><span class="l-it">scala</span></span><span class="l-en">Each physical constant (marker edge, ChArUco square and marker length, calibration resolution) is defined once. A pure scale error reprojects perfectly, so a reprojection residual never proves a scale is right (see <a href="#calib">Calibration</a>).</span><span class="l-it">Ogni costante fisica (lato del marker, lato del quadrato e del marker ChArUco, risoluzione di calibrazione) è definita una sola volta. Un errore di scala puro si riproietta perfettamente, quindi un residuo di riproiezione non dimostra mai che la scala è giusta (vedi <a href="#calib">Calibrazione</a>).</span></li>
+    <li><span class="pill info"><span class="l-en">frames</span><span class="l-it">frame</span></span><span class="l-en">Each camera frame is processed once; host receipt time is not exposure time.</span><span class="l-it">Ogni frame della camera è elaborato una sola volta; l'istante di ricezione non è l'istante di esposizione.</span></li>
+    <li><span class="pill info"><span class="l-en">gates</span><span class="l-it">gate</span></span><span class="l-en">Pose acceptance depends on the lock phase; marker count never bypasses validity, RMS or motion checks (audit F02).</span><span class="l-it">L'accettazione della posa dipende dalla fase del lock; il numero di marker non scavalca mai i controlli di validità, RMS o movimento (audit F02).</span></li>
+  </ul>
+</section>
+<p class="src"><code>AGENTS.md</code>, <code>CONTEXT.md</code> (frame transport protocol v0), <code>docs/adr/0001-opencv-bridging-staircase.md</code>, <code>python/pose_estimator.py</code>, <code>python/frame_packet.py</code>, <code>python/xreal_gates/pose_service.py</code>, <code>docs/ar-freeze-diagnostics.md</code>.</p>
+</article>
+
+<article class="page" id="p-geom" data-group="system" data-en="Geometry, frames, units" data-it="Geometria, riferimenti, unità">
+<header>
+  <div class="eyebrow"><span class="l-en">System</span><span class="l-it">Sistema</span></div>
+  <h1><span class="l-en">Geometry, reference frames and units</span><span class="l-it">Geometria, sistemi di riferimento e unità</span></h1>
+  <p class="lede l-en">The overlay is only as good as the chain of frames behind it. Four frames meet in EyeLab: the structure (UNV) frame, each marker's frame, the camera frame and, on the glasses, the head and world frames.</p>
+  <p class="lede l-it">L'overlay vale quanto la catena di riferimenti che lo sostiene. In EyeLab se ne incontrano quattro: il riferimento della struttura (UNV), quello di ciascun marker, quello della camera e, negli occhiali, quelli della testa e del mondo.</p>
+</header>
+<section>
+  <h2 class="col"><span class="l-en">UNV import</span><span class="l-it">Importazione UNV</span></h2>
+  <div class="prose l-en">
+    <p><code>unv_to_json.py</code> reads Universal File Format datasets 2411 (nodes), 82 (trace lines), 2420 (coordinate systems) and 164 (units) through <code>pyuff</code>, converts to metres and validates the displacement coordinate systems. Non-Cartesian systems are rejected rather than read as Cartesian: before audit fix F01, a cylindrical coordinate of 90° could be silently exposed as <code>y = 90</code>. <code>unv_writer.py</code> and the GUI geometry editor author synthetic UNV files for tests and validation plates.</p>
+  </div>
+  <div class="prose l-it">
+    <p><code>unv_to_json.py</code> legge i dataset Universal File Format 2411 (nodi), 82 (linee), 2420 (sistemi di riferimento) e 164 (unità) tramite <code>pyuff</code>, converte in metri e valida i sistemi di riferimento degli spostamenti. I sistemi non cartesiani vengono rifiutati invece di essere letti come cartesiani: prima della correzione F01 dell'audit, una coordinata cilindrica di 90° poteva essere esposta silenziosamente come <code>y = 90</code>. <code>unv_writer.py</code> e l'editor di geometria della GUI producono file UNV sintetici per i test e per i plate di validazione.</p>
+  </div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Transform chain</span><span class="l-it">Catena di trasformazioni</span></h2>
+  <div class="eq"><div class="tex" data-tex="\mathbf{X}_{\mathrm{cam}} = \mathbf{T}_{\mathrm{cam}\leftarrow\mathrm{unv}}\,\mathbf{X}_{\mathrm{unv}}, \qquad \mathbf{T}_{\mathrm{cam}\leftarrow\mathrm{unv}}=\begin{bmatrix}\mathbf{R} &amp; \mathbf{t}\\ \mathbf{0}^\top &amp; 1\end{bmatrix}\in SE(3)"></div>
+  <p class="why l-en">The vision pipeline estimates this one rigid transform per frame. Each marker contributes its four corners, expressed in the UNV frame from the marker's centre, normal, roll and edge length stored in the structure's marker configuration.</p>
+  <p class="why l-it">La pipeline di visione stima questa sola trasformazione rigida per frame. Ogni marker contribuisce con i suoi quattro spigoli, espressi nel riferimento UNV a partire da centro, normale, rotazione (roll) e lato del marker memorizzati nella configurazione dei marker della struttura.</p></div>
+  <div class="eq"><div class="tex" data-tex="\mathbf{T}_{\mathrm{world}\leftarrow\mathrm{unv}}(t_c)=\mathbf{T}_{\mathrm{world}\leftarrow\mathrm{head}}(t_c)\;\mathbf{T}_{\mathrm{head}\leftarrow\mathrm{cam}}\;\mathbf{F}\;\mathbf{T}_{\mathrm{cam}\leftarrow\mathrm{unv}}(t_c)"></div>
+  <p class="why l-en">On the glasses the pose is chained into the tracking (world) frame at the capture time <span class="m" data-tex="t_c">t_c</span>. <span class="m" data-tex="\mathbf{F}=\mathrm{diag}(1,-1,1)">F = diag(1,−1,1)</span> converts OpenCV's camera axes (x right, y down, z forward) to Unity's (y up); for quaternions the map is <span class="m" data-tex="(w,x,y,z)\mapsto(w,-x,y,-z)">(w,x,y,z)→(w,−x,y,−z)</span>. The head–camera term is the vendor's value today (unvalidated) and the head pose is taken at frame receipt, not exposure (see <a href="#gates">Gates</a>).</p>
+  <p class="why l-it">Negli occhiali la posa viene concatenata nel riferimento di tracciamento (mondo) all'istante di acquisizione <span class="m" data-tex="t_c">t_c</span>. <span class="m" data-tex="\mathbf{F}=\mathrm{diag}(1,-1,1)">F = diag(1,−1,1)</span> converte gli assi camera di OpenCV (x a destra, y in basso, z in avanti) in quelli di Unity (y in alto); per i quaternioni la mappa è <span class="m" data-tex="(w,x,y,z)\mapsto(w,-x,y,-z)">(w,x,y,z)→(w,−x,y,−z)</span>. Il termine testa–camera oggi è il valore del produttore (non validato) e la posa della testa è presa alla ricezione del frame, non all'esposizione (vedi <a href="#gates">Gate</a>).</p></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Configuration tree</span><span class="l-it">Albero di configurazione</span></h2>
+  <div class="tbl col"><table class="txt">
+    <thead><tr><th><span class="l-en">Path under <code>python/config/</code></span><span class="l-it">Percorso in <code>python/config/</code></span></th><th><span class="l-en">Content</span><span class="l-it">Contenuto</span></th></tr></thead>
+    <tbody>
+      <tr><td><code>cameras/&lt;profile&gt;.yaml</code></td><td class="wrap"><span class="l-en">One intrinsic calibration per camera profile, with backups in <code>cameras/history/</code>.</span><span class="l-it">Una calibrazione intrinseca per profilo camera, con copie in <code>cameras/history/</code>.</span></td></tr>
+      <tr><td><code>markers/*.markers.json</code></td><td class="wrap"><span class="l-en">Marker ids, edge size and pose on the structure (centre, normal, <code>rollDeg</code>).</span><span class="l-it">Id dei marker, lato e posa sulla struttura (centro, normale, <code>rollDeg</code>).</span></td></tr>
+      <tr><td><code>geometry/*.unv</code></td><td class="wrap"><span class="l-en">Structure geometry, including the validation plates.</span><span class="l-it">Geometria della struttura, compresi i plate di validazione.</span></td></tr>
+      <tr><td><code>targets/*.target.json</code></td><td class="wrap"><span class="l-en">Validation ground truth: faces, reference points, markers, measured scale.</span><span class="l-it">Verità a terra per la validazione: facce, punti di riferimento, marker, scala misurata.</span></td></tr>
+      <tr><td><code>active.json</code></td><td class="wrap"><span class="l-en">Active camera, marker set and geometry (not versioned).</span><span class="l-it">Camera, set di marker e geometria attivi (non versionato).</span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="cap l-en"><code>python/eyelab_paths.py</code> is the single source of every path, shared by the GUI, the validation tools and the XREAL pose service.</p>
+  <p class="cap l-it"><code>python/eyelab_paths.py</code> è l'unica fonte di tutti i percorsi, condivisa da GUI, strumenti di validazione e servizio di posa XREAL.</p>
+</section>
+<p class="src"><code>python/unv_to_json.py</code>, <code>python/registration.py</code>, <code>python/eyelab_paths.py</code>, <code>python/xreal_gates/anchor.py</code>, <code>AGENTS.md</code> (THEORY §6.3 correction), <code>docs/AUDIT-2026-10-08.md</code> F01.</p>
+</article>
+
+<article class="page" id="p-calib" data-group="system" data-en="Camera model and calibration" data-it="Modello di camera e calibrazione">
+<header>
+  <div class="eyebrow"><span class="l-en">System</span><span class="l-it">Sistema</span></div>
+  <h1><span class="l-en">Camera model and calibration</span><span class="l-it">Modello di camera e calibrazione</span></h1>
+  <p class="lede l-en">Every pose is computed through the intrinsic model of one specific camera at one resolution and focus. Calibration error enters every measurement as a systematic term.</p>
+  <p class="lede l-it">Ogni posa è calcolata attraverso il modello intrinseco di una specifica camera, a una risoluzione e a una messa a fuoco date. L'errore di calibrazione entra in ogni misura come termine sistematico.</p>
+</header>
+<section>
+  <h2 class="col"><span class="l-en">Projection model</span><span class="l-it">Modello di proiezione</span></h2>
+  <div class="eq"><div class="tex" data-tex="s\begin{bmatrix}u\\v\\1\end{bmatrix}=\mathbf{K}\,\mathcal{D}\!\left(\left[\mathbf{R}\;\mathbf{t}\right]\begin{bmatrix}\mathbf{X}\\1\end{bmatrix}\right),\qquad \mathbf{K}=\begin{bmatrix}f_x&amp;0&amp;c_x\\0&amp;f_y&amp;c_y\\0&amp;0&amp;1\end{bmatrix}"></div>
+  <p class="why l-en">Pinhole model with intrinsic matrix <b>K</b> [2]. <span class="m" data-tex="\mathcal{D}">D</span> applies lens distortion on normalised coordinates <span class="m" data-tex="(x,y)">(x,y)</span>, <span class="m" data-tex="r^2=x^2+y^2">r² = x² + y²</span>:</p>
+  <p class="why l-it">Modello pinhole con matrice intrinseca <b>K</b> [2]. <span class="m" data-tex="\mathcal{D}">D</span> applica la distorsione della lente sulle coordinate normalizzate <span class="m" data-tex="(x,y)">(x,y)</span>, <span class="m" data-tex="r^2=x^2+y^2">r² = x² + y²</span>:</p></div>
+  <div class="eq"><div class="tex" data-tex="\begin{aligned}x_d&amp;=x(1+k_1r^2+k_2r^4+k_3r^6)+2p_1xy+p_2(r^2+2x^2)\\ y_d&amp;=y(1+k_1r^2+k_2r^4+k_3r^6)+p_1(r^2+2y^2)+2p_2xy\end{aligned}"></div>
+  <p class="why l-en">OpenCV's 5-coefficient model <span class="m" data-tex="(k_1,k_2,p_1,p_2,k_3)">(k1,k2,p1,p2,k3)</span>. The Eye calibration tool also tries the rational model and keeps it only if it lowers the RMS by more than 15 %.</p>
+  <p class="why l-it">Modello OpenCV a 5 coefficienti <span class="m" data-tex="(k_1,k_2,p_1,p_2,k_3)">(k1,k2,p1,p2,k3)</span>. Lo strumento di calibrazione della Eye prova anche il modello razionale e lo tiene solo se riduce l'RMS di oltre il 15 %.</p></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Calibration procedure</span><span class="l-it">Procedura di calibrazione</span></h2>
+  <div class="eq"><div class="tex" data-tex="\hat{\mathbf{K}},\hat{\mathbf{d}},\{\hat{\mathbf{R}}_i,\hat{\mathbf{t}}_i\}=\arg\min\sum_{i}\sum_{j}\left\lVert \mathbf{u}_{ij}-\pi(\mathbf{K},\mathbf{d},\mathbf{R}_i,\mathbf{t}_i,\mathbf{X}_j)\right\rVert^2"></div>
+  <p class="why l-en">Zhang's method [1]: closed-form initialisation from plane homographies, then Levenberg–Marquardt refinement over all views <span class="m" data-tex="i">i</span> and board corners <span class="m" data-tex="j">j</span>.</p>
+  <p class="why l-it">Metodo di Zhang [1]: inizializzazione in forma chiusa dalle omografie dei piani, poi raffinamento Levenberg–Marquardt su tutte le viste <span class="m" data-tex="i">i</span> e gli spigoli del board <span class="m" data-tex="j">j</span>.</p></div>
+  <div class="tbl col"><table class="kv"><tbody>
+    <tr><td><span class="l-en">Board</span><span class="l-it">Board</span></td><td><span class="l-en">ChArUco 5×7, 25 mm squares, 19 mm markers, DICT_4X4_50 (<code>calibrate.py --generate</code>). One board for the whole project.</span><span class="l-it">ChArUco 5×7, quadrati da 25 mm, marker da 19 mm, DICT_4X4_50 (<code>calibrate.py --generate</code>). Un solo board per tutto il progetto.</span></td></tr>
+    <tr><td><span class="l-en">Target</span><span class="l-it">Obiettivo</span></td><td><span class="l-en">RMS reprojection &lt; 0.5 px at the resolution used for measurement. Surface front camera, 1280×720: 0.42 px.</span><span class="l-it">RMS di riproiezione &lt; 0,5 px alla risoluzione usata per misurare. Camera frontale del Surface, 1280×720: 0,42 px.</span></td></tr>
+    <tr><td><span class="l-en">Focus</span><span class="l-it">Fuoco</span></td><td><span class="l-en">Fixed focus is required (<code>--focus</code> on calibration and capture); autofocus changes the intrinsics. It was still on in the first campaign.</span><span class="l-it">Serve il fuoco fisso (<code>--focus</code> in calibrazione e acquisizione); l'autofocus cambia gli intrinseci. Nella prima campagna era ancora attivo.</span></td></tr>
+    <tr><td><span class="l-en">Profiles</span><span class="l-it">Profili</span></td><td><span class="l-en">One YAML per camera profile; a resolution mismatch is refused. Binding to device identity, crop, rotation and focus state is still missing (audit F10, open).</span><span class="l-it">Un YAML per profilo camera; una risoluzione diversa viene rifiutata. Manca ancora il legame con identità del dispositivo, ritaglio, rotazione e stato del fuoco (audit F10, aperto).</span></td></tr>
+    <tr><td><span class="l-en">Eye camera</span><span class="l-it">Camera Eye</span></td><td><span class="l-en">Guided capture of up to 60 views spread over image position and board size; refused below 35 % image coverage or when <span class="m" data-tex="f_x,f_y">fx, fy</span> differ from the vendor value by more than 25 %. A one-place capture gave RMS 0.37 px with <span class="m" data-tex="f_x">fx</span> = 4344 px, a scale error of about 7×: low RMS does not prove a good calibration.</span><span class="l-it">Acquisizione guidata fino a 60 viste distribuite per posizione nell'immagine e dimensione del board; rifiutata sotto il 35 % di copertura dell'immagine o se <span class="m" data-tex="f_x,f_y">fx, fy</span> si scostano di oltre il 25 % dal valore del produttore. Un'acquisizione in un solo punto ha dato RMS 0,37 px con <span class="m" data-tex="f_x">fx</span> = 4344 px, un errore di scala di circa 7 volte: un RMS basso non dimostra una buona calibrazione.</span></td></tr>
+  </tbody></table></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Why reprojection cannot see scale</span><span class="l-it">Perché la riproiezione non vede la scala</span></h2>
+  <div class="eq"><div class="tex" data-tex="\pi\!\left(\mathbf{K},\,\mathbf{R}(\lambda\mathbf{X})+\lambda\mathbf{t}\right)=\pi\!\left(\mathbf{K},\,\lambda(\mathbf{R}\mathbf{X}+\mathbf{t})\right)=\pi\!\left(\mathbf{K},\,\mathbf{R}\mathbf{X}+\mathbf{t}\right)\quad\forall\lambda&gt;0"></div>
+  <p class="why l-en">Perspective projection is invariant to a common scale of the object and the translation [2]. A wrong marker size, unit factor or print scale therefore moves the estimated depth by the same factor and leaves the reprojection residual unchanged. Absolute scale must be checked against an independent length: the scale bars of the validation plates and the step test B3.</p>
+  <p class="why l-it">La proiezione prospettica è invariante a una scala comune dell'oggetto e della traslazione [2]. Una dimensione sbagliata del marker, un fattore di unità o una scala di stampa errata spostano quindi la profondità stimata dello stesso fattore e lasciano invariato il residuo di riproiezione. La scala assoluta va verificata con una lunghezza indipendente: le barre di scala dei plate di validazione e il test di passo B3.</p></div>
+</section>
+<p class="src"><code>python/calibrate.py</code>, <code>python/gui_calibration.py</code>, <code>python/xreal_gates/calib.py</code>, <code>docs/validation.md</code>, <code>docs/XREAL-PC-GATES-G1-G3.md</code> §17, <code>docs/AUDIT-2026-10-08.md</code> F10. [1] Zhang 2000; [2] Hartley &amp; Zisserman 2004.</p>
+</article>
+
+<article class="page" id="p-detect" data-group="system" data-en="Marker detection" data-it="Rilevamento dei marker">
+<header>
+  <div class="eyebrow"><span class="l-en">System</span><span class="l-it">Sistema</span></div>
+  <h1><span class="l-en">Marker detection</span><span class="l-it">Rilevamento dei marker</span></h1>
+  <p class="lede l-en">Square fiducials from the ArUco family [3] give four corners and an identity per detection. Corner location accuracy is the dominant noise source in every later step.</p>
+  <p class="lede l-it">I marker quadrati della famiglia ArUco [3] forniscono quattro spigoli e un'identità per ogni rilevamento. La precisione di localizzazione degli spigoli è la principale sorgente di rumore in tutti i passi successivi.</p>
+</header>
+<section>
+  <h2 class="col"><span class="l-en">Detection chain</span><span class="l-it">Catena di rilevamento</span></h2>
+  <div class="tbl col"><table class="txt">
+    <thead><tr><th><span class="l-en">Step</span><span class="l-it">Passo</span></th><th><span class="l-en">Implementation and default</span><span class="l-it">Implementazione e valore di default</span></th></tr></thead>
+    <tbody>
+      <tr><td><span class="l-en">Dictionary</span><span class="l-it">Dizionario</span></td><td class="wrap"><code>DICT_4X4_50</code>; <span class="l-en">markers are 20 mm on the validation plates, per-structure size in the marker config.</span><span class="l-it">marker da 20 mm sui plate di validazione, dimensione per struttura nella configurazione dei marker.</span></td></tr>
+      <tr><td><span class="l-en">Contrast</span><span class="l-it">Contrasto</span></td><td class="wrap"><span class="l-en">CLAHE [22] on the grey image, 8×8 tiles, clip limit 2.5 (cached object).</span><span class="l-it">CLAHE [22] sull'immagine in grigio, tasselli 8×8, clip limit 2,5 (oggetto in cache).</span></td></tr>
+      <tr><td><span class="l-en">Thresholding</span><span class="l-it">Soglia</span></td><td class="wrap"><span class="l-en">Adaptive, windows 3 → 37 px in steps of 6, constant 8.</span><span class="l-it">Adattiva, finestre da 3 a 37 px a passi di 6, costante 8.</span></td></tr>
+      <tr><td><span class="l-en">Corners</span><span class="l-it">Spigoli</span></td><td class="wrap"><span class="l-en">Sub-pixel refinement, window 5, 50 iterations, 0.02 px tolerance.</span><span class="l-it">Raffinamento sub-pixel, finestra 5, 50 iterazioni, tolleranza 0,02 px.</span></td></tr>
+      <tr><td><span class="l-en">Rejected candidates</span><span class="l-it">Candidati scartati</span></td><td class="wrap"><span class="l-en"><code>refineDetectedMarkers</code> against the board model; every frame while it recovers markers, then 1 frame in 5 after 30 idle frames; skipped above 64 candidates.</span><span class="l-it"><code>refineDetectedMarkers</code> rispetto al modello del board; a ogni frame finché recupera marker, poi 1 frame su 5 dopo 30 frame senza recuperi; saltato oltre 64 candidati.</span></td></tr>
+      <tr><td><span class="l-en">Flicker</span><span class="l-it">Intermittenza</span></td><td class="wrap"><span class="l-en"><code>MarkerCarryover</code>: pyramidal Lucas–Kanade flow [21] (21×21, 3 levels) carries a marker missed for up to 5 frames.</span><span class="l-it"><code>MarkerCarryover</code>: flusso piramidale di Lucas–Kanade [21] (21×21, 3 livelli) riporta un marker perso per al massimo 5 frame.</span></td></tr>
+      <tr><td><span class="l-en">Small markers</span><span class="l-it">Marker piccoli</span></td><td class="wrap"><span class="l-en"><code>RoiRedetector</code>: when fewer than the trusted count are seen, missing board markers are projected through the predicted pose and re-detected in up to 4 crops upscaled 2×.</span><span class="l-it"><code>RoiRedetector</code>: se si vedono meno marker del numero affidabile, quelli mancanti vengono proiettati con la posa predetta e ri-rilevati in al massimo 4 ritagli ingranditi 2×.</span></td></tr>
+      <tr><td><span class="l-en">Presets</span><span class="l-it">Preset</span></td><td class="wrap"><code>strict</code> · <code>balanced</code> · <code>forgiving</code>, <span class="l-en">tunable live in the GUI.</span><span class="l-it">regolabili dal vivo nella GUI.</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">How many pixels a marker gets</span><span class="l-it">Quanti pixel ottiene un marker</span></h2>
+  <div class="eq"><div class="tex" data-tex="s_{\mathrm{px}}\approx\frac{f_{\mathrm{px}}\,s}{d}\cos\theta,\qquad \delta_{\mathrm{mm/px}}\approx\frac{d}{f_{\mathrm{px}}}"></div>
+  <p class="why l-en">Image size of a marker of edge <span class="m" data-tex="s">s</span> at distance <span class="m" data-tex="d">d</span> and tilt <span class="m" data-tex="\theta">θ</span> (along the tilt axis), and the object-space size of one pixel. Webcam, <span class="m" data-tex="f\approx1100">f ≈ 1100</span> px: a 20 mm marker spans about 54 px at 400 mm and 24 px at 900 mm. XREAL Eye at 1280×720 with a horizontal field of about 93° (<span class="m" data-tex="f\approx 610">f ≈ 610</span> px): 1 px ≈ 1.3 mm at 0.8 m.</p>
+  <p class="why l-it">Dimensione nell'immagine di un marker di lato <span class="m" data-tex="s">s</span> a distanza <span class="m" data-tex="d">d</span> e inclinazione <span class="m" data-tex="\theta">θ</span> (lungo l'asse di inclinazione), e dimensione di un pixel nello spazio dell'oggetto. Webcam, <span class="m" data-tex="f\approx1100">f ≈ 1100</span> px: un marker da 20 mm occupa circa 54 px a 400 mm e 24 px a 900 mm. XREAL Eye a 1280×720 con campo orizzontale di circa 93° (<span class="m" data-tex="f\approx 610">f ≈ 610</span> px): 1 px ≈ 1,3 mm a 0,8 m.</p></div>
+  <div class="note"><b class="h"><span class="l-en">Finding from campaign 1</span><span class="l-it">Risultato della campagna 1</span></b>
+  <p class="l-en">Mapped through the saddle-point homography, marker edges appear 0.6–0.9 px short per side, independently of distance. A fixed pixel bias points to corner localisation, not to print size. OpenCV's own documentation notes that ArUco corners stay less accurate than chessboard corners even with sub-pixel refinement, which is the motivation for ChArUco [27]. Details in <a href="#b1">Campaign 1 · B1</a>.</p>
+  <p class="l-it">Riportati sul piano tramite l'omografia dei punti sella, i lati dei marker risultano più corti di 0,6–0,9 px per lato, indipendentemente dalla distanza. Uno scarto fisso in pixel indica la localizzazione degli spigoli, non la dimensione di stampa. La documentazione di OpenCV osserva che gli spigoli ArUco restano meno accurati degli angoli di una scacchiera anche con raffinamento sub-pixel, ed è questa la ragione del ChArUco [27]. Dettagli in <a href="#b1">Campagna 1 · B1</a>.</p></div>
+</section>
+<p class="src"><code>python/pose_estimator.py</code> (<code>ArucoDetectorTuning</code>, <code>make_detector_parameters</code>), <code>python/pose_lock.py</code> (<code>MarkerCarryover</code>, <code>RoiRedetector</code>), <code>docs/XREAL-PC-GATES-G1-G3.md</code> §17. [3] Garrido-Jurado et al. 2014; [4] Romero-Ramirez et al. 2018; [21] Lucas &amp; Kanade 1981; [22] Zuiderveld 1994; [27] OpenCV ChArUco tutorial.</p>
+</article>

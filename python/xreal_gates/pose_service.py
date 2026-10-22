@@ -1,25 +1,27 @@
-"""ADR-001 Step C pose service for the G5 locked-grid gate, on the same machine.
+"""ADR-001 Step C pose service for the G5 and demo gates, on the same machine.
 
-``python -m xreal_gates serve --target plateA|plateL|board25`` listens on
+``python -m xreal_gates serve --target plateA[,board25,...]`` listens on
 ``ws://127.0.0.1:8765``. The Unity gate (``WebSocketPoseBridge`` behind
 ``IArucoPoseBridge``) connects and says hello; the service answers with the
-camera model in use and the target's overlay geometry, then estimates the
-target pose for every frame it is sent and answers with it. It serves one
-client and exits when that client disconnects (or after the idle timeout).
+camera model in use and every target's overlay geometry, then estimates every
+target's pose in each frame it is sent. It serves one client and exits when that
+client disconnects (or after the idle timeout).
 
-Messages (JSON text unless stated):
+Messages (JSON text unless stated; arrays are flat and numbers never null, because
+Unity's JsonUtility reads neither nested arrays nor nulls):
 
-- client ``{"type": "hello", "target", "session", "run_dir", "vendor_fx_fy_cx_cy", "width", "height"}``
-- server ``{"type": "hello_ok", "target", "target_label", "camera", "overlay_segments", "overlay_points"}``
-  (flat: 6 floats per segment, 3 per point, target frame, metres)
+- client ``{"type": "hello", "targets": [...], "session", "run_dir", "vendor_fx_fy_cx_cy", "width", "height"}``
+- server ``{"type": "hello_ok", "camera": {...}, "overlays": [{"target", "label", "segments", "points"}]}``
+  (6 floats per segment, 3 per point, target frame, metres)
 - client binary: 4-byte little-endian header length, JSON header
   ``{"seq", "cam_ts", "w", "h", "rows": "bottom_up"|"top_down"}``, then w*h bytes of Y
-- server ``{"type": "pose", "seq", "cam_ts", "ok", "reason", "R", "tvec", ...}``
+- server ``{"type": "poses", "seq", "cam_ts", "ms", "results": [{"target", "ok", "reason", "R", "tvec", ...}]}``
   (OpenCV camera frame of the upright image, metres)
 
-Each (session, seq) is processed at most once, in increasing order (AGENTS.md:
-process each camera frame once). Every frame is logged to ``pose_service.csv``
-in the gate's run folder.
+Targets use disjoint marker IDs (board 0-16, plate A 30-32, plate L 40-43), so
+several can be served at once. Each (session, seq) is processed at most once, in
+increasing order (AGENTS.md: process each camera frame once). Every target of
+every frame is logged to ``pose_service.csv`` in the gate's run folder.
 """
 
 from __future__ import annotations
@@ -30,17 +32,25 @@ import struct
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Sequence
 
 import numpy as np
 
 from . import ws
 from .eyecam import EyeCamera, load_camera
-from .targets import make_target, overlay_counts
+from .targets import TARGET_NAMES, make_target, overlay_counts
 
 DEFAULT_PORT = 8765
-LOG_FIELDS = ["t_host", "session", "seq", "cam_ts", "ok", "reason", "n_markers", "n_points", "rms_px",
+LOG_FIELDS = ["t_host", "session", "seq", "cam_ts", "target", "ok", "reason", "n_markers", "n_points", "rms_px",
               "ambiguity", "tx", "ty", "tz", "rx", "ry", "rz", "dist_m", "ms", "marker_ids"]
+
+
+def parse_targets(text) -> List[str]:
+    names = [t.strip() for t in (text.split(",") if isinstance(text, str) else text) if t and t.strip()]
+    bad = [t for t in names if t not in TARGET_NAMES]
+    if not names or bad:
+        raise ValueError(f"targets {names!r}: each must be one of {', '.join(TARGET_NAMES)}")
+    return list(dict.fromkeys(names))
 
 
 def parse_frame(payload: bytes):
@@ -57,9 +67,16 @@ def parse_frame(payload: bytes):
     return header, np.ascontiguousarray(img)
 
 
+def _no_null(d: dict) -> dict:
+    for k in ("rms_px", "ambiguity"):
+        if d.get(k) is None:
+            d[k] = -1.0
+    return d
+
+
 class PoseService:
-    def __init__(self, target_name: str, calib_path: Optional[Path] = None, log=print):
-        self.target = make_target(target_name)
+    def __init__(self, targets: Sequence[str], calib_path: Optional[Path] = None, log=print):
+        self.targets = [make_target(t) for t in parse_targets(targets)]
         self.calib_path = calib_path
         self.camera: Optional[EyeCamera] = None
         self.log = log
@@ -67,34 +84,45 @@ class PoseService:
         self.last_seq = -1
         self.csv = None
         self.writer = None
-        self.frames = self.accepted = 0
+        self.frames = 0
+        self.accepted = {t.name: 0 for t in self.targets}
+
+    @property
+    def names(self) -> List[str]:
+        return [t.name for t in self.targets]
 
     # ---- messages
     def hello(self, msg: dict) -> dict:
-        if msg.get("target") and msg["target"] != self.target.name:
-            raise ValueError(f"client wants target {msg['target']}, service serves {self.target.name}")
+        wanted = msg.get("targets") or ([msg["target"]] if msg.get("target") else [])
+        missing = [t for t in wanted if t not in self.names]
+        if missing:
+            raise ValueError(f"client wants {missing}, service serves {self.names}")
         self.session = str(msg.get("session", ""))
         self.last_seq = -1
         self.camera = load_camera(self.calib_path, msg.get("vendor_fx_fy_cx_cy"))
         run_dir = msg.get("run_dir")
         if run_dir and Path(run_dir).is_dir():
+            self.close()
             self.csv = open(Path(run_dir) / "pose_service.csv", "w", newline="", encoding="utf-8")
             self.writer = csv.DictWriter(self.csv, LOG_FIELDS)
             self.writer.writeheader()
             (Path(run_dir) / "pose_service.json").write_text(json.dumps({
-                "target": self.target.name, "target_label": self.target.label, "target_source": self.target.source,
+                "targets": [{"name": t.name, "label": t.label, "source": t.source} for t in self.targets],
                 "camera": self.camera.describe(), "K": self.camera.K.tolist(),
                 "dist": np.ravel(self.camera.dist).tolist()}, indent=2), encoding="utf-8")
-        overlay = self.target.overlay()
-        self.log(f"hello: session {self.session}, {self.target.label}, camera {self.camera.describe()}, "
-                 f"overlay {overlay_counts(overlay)}")
-        # Flat arrays and no nulls: Unity's JsonUtility reads neither nested arrays nor null numbers.
-        return {"type": "hello_ok", "target": self.target.name, "target_label": self.target.label,
+        overlays = []
+        for t in self.targets:
+            ov = t.overlay()
+            overlays.append({"target": t.name, "label": t.label,
+                             "segments": [c for seg in ov["segments"] for c in seg],
+                             "points": [c for p in ov["points"] for c in p]})
+            self.log(f"  {t.label}: overlay {overlay_counts(ov)}")
+        self.log(f"hello: session {self.session}, camera {self.camera.describe()}")
+        return {"type": "hello_ok",
                 "camera": {"source": self.camera.source, "path": self.camera.path,
                            "rms_px": -1.0 if self.camera.rms_px is None else float(self.camera.rms_px),
                            "description": self.camera.describe()},
-                "overlay_segments": [c for seg in overlay["segments"] for c in seg],
-                "overlay_points": [c for p in overlay["points"] for c in p]}
+                "overlays": overlays}
 
     def on_frame(self, payload: bytes) -> Optional[dict]:
         from frame_packet import FramePacket
@@ -112,27 +140,34 @@ class PoseService:
                              received_at=time.perf_counter(), image_mode="gray8",
                              device_time_s=cam_ts * 1e-9, device_clock="xreal_eye_cam_ts")
         t0 = time.perf_counter()
-        est = self.target.estimate(packet.image, self.camera.K, self.camera.dist)
+        results = []
+        for target in self.targets:
+            ts = time.perf_counter()
+            est = target.estimate(packet.image, self.camera.K, self.camera.dist)
+            results.append((target.name, est, (time.perf_counter() - ts) * 1000.0))
         ms = (time.perf_counter() - t0) * 1000.0
         self.frames += 1
-        self.accepted += int(est.ok)
-        reply = {"type": "pose", "seq": seq, "cam_ts": cam_ts, "ms": ms, **est.to_json()}
-        for k in ("rms_px", "ambiguity"):
-            if reply[k] is None:
-                reply[k] = -1.0
-        if self.writer is not None:
-            t = np.ravel(est.tvec) if est.tvec is not None else [float("nan")] * 3
-            r = np.ravel(est.rvec) if est.rvec is not None else [float("nan")] * 3
-            self.writer.writerow({
-                "t_host": f"{time.time():.3f}", "session": self.session, "seq": seq, "cam_ts": cam_ts,
-                "ok": int(est.ok), "reason": est.reason, "n_markers": est.n_markers, "n_points": est.n_points,
-                "rms_px": f"{est.rms_px:.3f}", "ambiguity": f"{est.ambiguity:.3f}",
-                "tx": f"{t[0]:.5f}", "ty": f"{t[1]:.5f}", "tz": f"{t[2]:.5f}",
-                "rx": f"{r[0]:.5f}", "ry": f"{r[1]:.5f}", "rz": f"{r[2]:.5f}",
-                "dist_m": f"{float(np.linalg.norm(t)):.4f}", "ms": f"{ms:.1f}",
-                "marker_ids": " ".join(str(i) for i in est.marker_ids)})
-            self.csv.flush()
-        return reply
+        out = []
+        for name, est, t_ms in results:
+            self.accepted[name] += int(est.ok)
+            out.append(_no_null({"target": name, **est.to_json()}))
+            self._log_row(seq, cam_ts, name, est, t_ms)
+        return {"type": "poses", "seq": seq, "cam_ts": cam_ts, "ms": ms, "results": out}
+
+    def _log_row(self, seq, cam_ts, name, est, ms) -> None:
+        if self.writer is None:
+            return
+        t = np.ravel(est.tvec) if est.tvec is not None else [float("nan")] * 3
+        r = np.ravel(est.rvec) if est.rvec is not None else [float("nan")] * 3
+        self.writer.writerow({
+            "t_host": f"{time.time():.3f}", "session": self.session, "seq": seq, "cam_ts": cam_ts, "target": name,
+            "ok": int(est.ok), "reason": est.reason, "n_markers": est.n_markers, "n_points": est.n_points,
+            "rms_px": f"{est.rms_px:.3f}", "ambiguity": f"{est.ambiguity:.3f}",
+            "tx": f"{t[0]:.5f}", "ty": f"{t[1]:.5f}", "tz": f"{t[2]:.5f}",
+            "rx": f"{r[0]:.5f}", "ry": f"{r[1]:.5f}", "rz": f"{r[2]:.5f}",
+            "dist_m": f"{float(np.linalg.norm(t)):.4f}", "ms": f"{ms:.1f}",
+            "marker_ids": " ".join(str(i) for i in est.marker_ids)})
+        self.csv.flush()
 
     def close(self) -> None:
         if self.csv is not None:
@@ -140,12 +175,12 @@ class PoseService:
             self.csv = self.writer = None
 
 
-def serve(target_name: str, calib_path: Optional[Path] = None, port: int = DEFAULT_PORT,
+def serve(targets, calib_path: Optional[Path] = None, port: int = DEFAULT_PORT,
           idle_timeout: float = 600.0, log=print) -> int:
-    service = PoseService(target_name, calib_path, log)
+    service = PoseService(targets, calib_path, log)
     srv = ws.listen("127.0.0.1", port)
-    log(f"EyeLab pose service: {service.target.label}; ws://127.0.0.1:{port}; waiting for the gate "
-        f"(gives up after {idle_timeout:.0f} s)")
+    log(f"EyeLab pose service: {', '.join(t.label for t in service.targets)}; ws://127.0.0.1:{port}; "
+        f"waiting for the gate (gives up after {idle_timeout:.0f} s)")
     try:
         conn = ws.accept(srv, idle_timeout)
         if conn is None:
@@ -169,12 +204,14 @@ def serve(target_name: str, calib_path: Optional[Path] = None, port: int = DEFAU
                     try:
                         reply = service.on_frame(payload)
                     except Exception as e:
-                        reply = {"type": "pose", "ok": False, "reason": f"{type(e).__name__}: {e}"}
+                        reply = {"type": "poses", "seq": 0, "ms": 0.0, "results": [],
+                                 "message": f"{type(e).__name__}: {e}"}
                     if reply is not None:
                         conn.send_text(json.dumps(reply))
                         if service.frames % 10 == 1:
-                            log(f"frame {reply.get('seq')}: {'LOCK' if reply['ok'] else 'no pose'} "
-                                f"({reply.get('reason')}), {service.accepted}/{service.frames} accepted")
+                            seen = [r["target"] for r in reply["results"] if r["ok"]]
+                            log(f"frame {reply.get('seq')}: {', '.join(seen) or 'no target'}; "
+                                f"accepted so far {service.accepted} of {service.frames}")
         except ws.ConnectionClosed as e:
             log(f"gate disconnected ({e})")
         finally:
@@ -182,7 +219,7 @@ def serve(target_name: str, calib_path: Optional[Path] = None, port: int = DEFAU
     finally:
         service.close()
         srv.close()
-    log(f"done: {service.accepted}/{service.frames} frames gave a pose")
+    log(f"done: {service.frames} frames, accepted per target {service.accepted}")
     return 0
 
 

@@ -155,26 +155,26 @@ namespace EyeLabGates
         static Rect Z(float x, float y, float w, float h) => new Rect(x, y, w, h);
 
         /// <summary>
-        /// G5 locked grid, about 4 min: the target (plate A, plate L or the 25 mm board) stands about
-        /// 70 cm in front of A. The overlay locks on the first good camera pose, then follows 6DoF and
-        /// is corrected by every new pose. During the frozen steps corrections are logged, not applied,
-        /// which shows how far 6DoF alone drifts from the camera.
+        /// G5 locked overlay, 3 min (rev. 22 Oct): the target(s) stand about 70 cm in front of A. The
+        /// overlay follows the latest camera pose (LockAnchor). The frozen steps pause corrections while
+        /// standing and during one side-step, which shows how far 6DoF alone drifts in this room; the
+        /// 40 s walk of the first version is gone (21 Oct: metres of drift, nothing left to see).
         /// </summary>
         public static List<ProtocolStep> G5()
         {
             return new List<ProtocolStep>
             {
-                new ProtocolStep("acquire", "LOOK AT THE TARGET, HOLD STILL", "From A, about 70 cm away, until LOCKED", 20, speech: "Look at the target and hold still"),
+                new ProtocolStep("acquire", "LOOK AT THE TARGET, HOLD STILL", "From A, about 70 cm away, until LOCKED", 15, speech: "Look at the target and hold still"),
                 new ProtocolStep("static", "HOLD STILL", "Do the points sit on the printed crosses?", 30, speech: "Hold still. Check the points on the crosses"),
                 new ProtocolStep("move_head", "MOVE HEAD SLOWLY", "Small nods and turns, target in view", 20, speech: "Move your head slowly"),
                 new ProtocolStep("side_left", "STEP LEFT, LOOK AT THE TARGET", "One step left, view it from the side", 15, speech: "Step left and look at the target"),
                 new ProtocolStep("side_right", "STEP RIGHT, LOOK AT THE TARGET", "Two steps right, view it from the other side", 15, speech: "Step right and look at the target"),
                 new ProtocolStep("closer", "COME CLOSER, ABOUT 40 CM", "Look at the target from close up", 15, speech: "Come closer"),
                 new ProtocolStep("back_to_a", "BACK TO A, HOLD STILL", "Target in view", 15, speech: "Back to A and hold still"),
-                new ProtocolStep("frozen_walk", "FROZEN: WALK AROUND, COME BACK", "Corrections paused; end on A facing the target", 40, StepAction.AnchorFreeze,
-                                 "Lock frozen. Walk around and come back to A"),
-                new ProtocolStep("frozen_check", "FROZEN: HOLD STILL ON A", "Has the overlay drifted off the target?", 20, speech: "Hold still. Has it drifted?"),
-                new ProtocolStep("live", "LIVE AGAIN: HOLD STILL", "Corrections back on", 30, StepAction.AnchorLive, "Corrections back on. Hold still"),
+                new ProtocolStep("frozen_still", "FROZEN: HOLD STILL", "Corrections paused: does it drift while you stand?", 20, StepAction.AnchorFreeze,
+                                 "Corrections paused. Hold still and watch"),
+                new ProtocolStep("frozen_step", "FROZEN: STEP LEFT AND BACK", "One step left, then back to A", 15, speech: "Step left, then back"),
+                new ProtocolStep("live", "LIVE AGAIN: HOLD STILL", "Corrections back on: it should snap back", 20, StepAction.AnchorLive, "Corrections back on. Hold still"),
             };
         }
 

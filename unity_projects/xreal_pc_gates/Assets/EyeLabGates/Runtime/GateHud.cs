@@ -53,7 +53,7 @@ namespace EyeLabGates
         void Update()
         {
             CameraSource src = m_Gate != null ? m_Gate.Source : null;
-            if (src == null || !src.IsCapturing || m_Gate.IsLight) return;
+            if (src == null || !src.IsCapturing || (m_Gate.IsLight && !m_Gate.ShowEyeView)) return;
             Texture2D luma = src.LumaTexture;
             double now = Time.realtimeSinceStartupAsDouble;
             if (luma == null || src.Timestamp == m_PreviewTs || now - m_LastPreview < PreviewInterval) return;
@@ -212,7 +212,7 @@ namespace EyeLabGates
             }
 
             // ---- G5 lock status
-            if (m_Gate.IsG5 && m_Gate.LockStatus.Length > 0)
+            if (m_Gate.IsLocking && m_Gate.LockStatus.Length > 0)
             {
                 float lh = big.fontSize * 1.5f;
                 Color lc = m_Gate.LockState == 1 ? Green : m_Gate.LockState == 3 ? Amber : Red;
@@ -231,8 +231,20 @@ namespace EyeLabGates
                 Label(new Rect(bx, ty, bw, wh), $"SURFACE THROTTLED: CPU clock {clock.ToString("F0", Inv)}% of nominal", warn, Red);
             }
 
-            // ---- camera preview (colour, only while frames arrive)
-            if (m_Gate.Source.IsCapturing && m_Preview != null)
+            // ---- camera preview (colour, only while frames arrive; demo: the latest burst frame, bottom right)
+            bool demoEye = m_Gate.IsDemo && m_Gate.ShowEyeView;
+            if (demoEye && m_Preview != null)
+            {
+                float pw = v.width * 0.34f;
+                float ph = pw * m_Preview.height / Mathf.Max(1, m_Preview.width);
+                var pr = new Rect(v.xMax - pw - h * 0.03f, v.yMax - ph - h * 0.04f, pw, ph);
+                Fill(new Rect(pr.x - 2, pr.y - 2, pr.width + 4, pr.height + 4), Color.black);
+                GUI.DrawTexture(pr, m_Preview);
+                var small = Style(Mathf.RoundToInt(h / 40f), TextAnchor.LowerCenter, false);
+                Label(new Rect(pr.x, pr.y - small.fontSize * 1.4f, pr.width, small.fontSize * 1.4f),
+                      "What the Eye camera sees (latest frame)", small, Grey);
+            }
+            else if (m_Gate.Source.IsCapturing && m_Preview != null && !m_Gate.IsLight)
             {
                 // Calibration: a large preview with the zone where the board should go.
                 float pw = v.width * (m_Gate.IsCalib ? 0.62f : 0.45f);

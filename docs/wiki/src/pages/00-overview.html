@@ -1,0 +1,103 @@
+<article class="page" id="p-home" data-group="overview" data-en="EyeLab at a glance" data-it="EyeLab in sintesi">
+<header>
+  <div class="eyebrow"><span class="l-en">Project wiki · state at build 0.3.000 · 18 October 2026</span><span class="l-it">Wiki di progetto · stato alla build 0.3.000 · 18 ottobre 2026</span></div>
+  <h1><span class="l-en">EyeLab: AR guidance for impact-hammer modal testing</span><span class="l-it">EyeLab: guida AR per l'analisi modale con martello strumentato</span></h1>
+  <p class="lede l-en">EyeLab overlays the measurement grid of an Experimental Modal Analysis (EMA) test, imported from a Simcenter Testlab <code>.unv</code> file, onto the physical structure, so the operator sees where every accelerometer and impact point sits. The geometry is registered to the specimen through ArUco markers glued on it. The target platform is an optical see-through headset (XREAL One Pro with the XREAL Eye camera); a webcam version in Python/OpenCV is the development and validation baseline.</p>
+  <p class="lede l-it">EyeLab sovrappone alla struttura reale la griglia di misura di una prova di analisi modale sperimentale (EMA), importata da un file <code>.unv</code> di Simcenter Testlab, così che l'operatore veda dove si trovano ogni accelerometro e ogni punto di impatto. La geometria viene registrata sul provino tramite marker ArUco incollati su di esso. La piattaforma finale è un visore ottico see-through (XREAL One Pro con la camera XREAL Eye); la versione webcam in Python/OpenCV è la base di sviluppo e di validazione.</p>
+  <div class="meta">
+    <span><span class="l-en">build</span><span class="l-it">build</span> <b>0.3.000</b> (17/10/2026)</span>
+    <span><span class="l-en">accuracy aim</span><span class="l-it">obiettivo di accuratezza</span> <b>&lt; 1 mm</b> <span class="l-en">per grid point</span><span class="l-it">per punto di griglia</span></span>
+    <span><span class="l-en">grid spacing</span><span class="l-it">passo griglia</span> <b>≥ 50 mm</b></span>
+    <span><span class="l-en">author</span><span class="l-it">autore</span> <b>Giacomo Di Noto</b> · UNIMORE / UNIVPM</span>
+  </div>
+</header>
+
+<section>
+  <h2 class="col"><span class="l-en">Where the project stands</span><span class="l-it">A che punto è il progetto</span></h2>
+  <div class="board">
+    <div>
+      <h3><span class="l-en">Vision pipeline (webcam)</span><span class="l-it">Pipeline di visione (webcam)</span></h3>
+      <ul>
+        <li><span><span class="pill good"><span class="l-en">done</span><span class="l-it">fatto</span></span></span><span class="l-en">UNV import, ChArUco calibration, ArUco detection, board PnP, pose lock with Kalman filter, AR overlay, recording.</span><span class="l-it">Import UNV, calibrazione ChArUco, rilevamento ArUco, PnP sul board, pose lock con filtro di Kalman, overlay AR, registrazione.</span></li>
+        <li><span><span class="pill warn"><span class="l-en">open</span><span class="l-it">aperto</span></span></span><span class="l-en">Planar-ambiguity handling misbehaves at 900 mm face-on (rotation jitter 6.6° p95).</span><span class="l-it">La gestione dell'ambiguità planare sbaglia a 900 mm in vista frontale (jitter di rotazione 6,6° p95).</span></li>
+        <li><span><span class="pill info"><span class="l-en">status</span><span class="l-it">stato</span></span></span><span class="l-en">Research prototype, not yet a validated measuring system.</span><span class="l-it">Prototipo di ricerca, non ancora un sistema di misura validato.</span></li>
+      </ul>
+      <a class="more" href="#arch"><span class="l-en">System pages →</span><span class="l-it">Pagine sul sistema →</span></a>
+    </div>
+    <div>
+      <h3><span class="l-en">Validation</span><span class="l-it">Validazione</span></h3>
+      <ul>
+        <li><span><span class="pill good">ok</span></span><span class="l-en">Preliminary campaign: p95 0.52–0.79 mm at 0–30° and 400–600 mm.</span><span class="l-it">Campagna preliminare: p95 0,52–0,79 mm a 0–30° e 400–600 mm.</span></li>
+        <li><span><span class="pill bad">no</span></span><span class="l-en">50° and 900 mm miss 1 mm; single-marker mode reaches 1–8 mm median.</span><span class="l-it">50° e 900 mm superano 1 mm; con un solo marker la mediana è 1–8 mm.</span></li>
+        <li><span><span class="pill info"><span class="l-en">next</span><span class="l-it">prossimo</span></span></span><span class="l-en">Rigorous lab campaign with rigid, measured plates and instrument-set geometry.</span><span class="l-it">Campagna rigorosa in laboratorio con plate rigidi e misurati e geometria imposta da strumenti.</span></li>
+      </ul>
+      <a class="more" href="#b1"><span class="l-en">Results →</span><span class="l-it">Risultati →</span></a>
+    </div>
+    <div>
+      <h3><span class="l-en">XREAL port</span><span class="l-it">Porting su XREAL</span></h3>
+      <ul>
+        <li><span><span class="pill good"><span class="l-en">seen</span><span class="l-it">visto</span></span></span><span class="l-en">PC SDK 3.1.2 on the Surface: Eye frames 1280×720 at 30 fps; 6DoF head pose; world-locked grid sustained for 5 min.</span><span class="l-it">PC SDK 3.1.2 sul Surface: frame Eye 1280×720 a 30 fps; posa 6DoF della testa; griglia ancorata al mondo mantenuta per 5 min.</span></li>
+        <li><span><span class="pill warn"><span class="l-en">ready</span><span class="l-it">pronto</span></span></span><span class="l-en">Eye calibration capture and the camera-locked overlay (gate G5) are built, not yet run on the glasses.</span><span class="l-it">Acquisizione per la calibrazione della Eye e overlay agganciato alla camera (gate G5) pronti, non ancora eseguiti sugli occhiali.</span></li>
+        <li><span><span class="pill mute"><span class="l-en">none</span><span class="l-it">nessuno</span></span></span><span class="l-en">Optical overlay registered to a specimen: not demonstrated yet.</span><span class="l-it">Overlay ottico registrato su un provino: non ancora dimostrato.</span></li>
+      </ul>
+      <a class="more" href="#gates"><span class="l-en">Gate results →</span><span class="l-it">Risultati dei gate →</span></a>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2 class="col"><span class="l-en">How to read this wiki</span><span class="l-it">Come leggere questa wiki</span></h2>
+  <div class="prose l-en">
+    <p>Pages are grouped in four parts, matching the three work streams plus the decision record. Each page states its sources (repository documents, code modules, run logs) in a line at the bottom, so every number can be traced. Scientific claims cite peer-reviewed literature; where no such source exists, the page says so.</p>
+    <ul>
+      <li><b>System</b>: how the pipeline works, with the equations it implements. Start with <a href="#arch">Architecture</a>.</li>
+      <li><b>Validation</b>: how accuracy is measured, the uncertainty of the reference, and the first campaign. Start with <a href="#vmethod">Metrology framework</a>.</li>
+      <li><b>XREAL and platforms</b>: what an optical see-through overlay needs, and what the glasses deliver today. Start with <a href="#ost">Optical see-through requirements</a>.</li>
+      <li><b>Decisions and roadmap</b>: architecture decisions, audit findings, open questions, timeline, glossary and references.</li>
+    </ul>
+    <p>Evidence labels follow the repository's capability matrix: <b>observed</b> (run on this project's hardware, dated), <b>documented</b> (vendor or third-party document, not run here), <b>hypothesised</b> (inferred, no run, no document) and <b>none</b>.</p>
+  </div>
+  <div class="prose l-it">
+    <p>Le pagine sono raggruppate in quattro parti: i tre filoni di lavoro più il registro delle decisioni. Ogni pagina riporta in fondo le proprie fonti (documenti del repository, moduli di codice, log delle prove), così che ogni numero sia rintracciabile. Le affermazioni scientifiche citano letteratura con revisione paritaria; quando una fonte del genere manca, la pagina lo dice.</p>
+    <ul>
+      <li><b>Sistema</b>: come funziona la pipeline, con le equazioni che implementa. Si parte da <a href="#arch">Architettura</a>.</li>
+      <li><b>Validazione</b>: come si misura l'accuratezza, l'incertezza del riferimento e la prima campagna. Si parte da <a href="#vmethod">Impostazione metrologica</a>.</li>
+      <li><b>XREAL e piattaforme</b>: cosa richiede un overlay ottico see-through e cosa forniscono oggi gli occhiali. Si parte da <a href="#ost">Requisiti dell'ottico see-through</a>.</li>
+      <li><b>Decisioni e roadmap</b>: decisioni architetturali, risultati degli audit, questioni aperte, cronologia, glossario e bibliografia.</li>
+    </ul>
+    <p>Le etichette di evidenza seguono la matrice delle capacità del repository: <b>osservato</b> (prova eseguita sull'hardware del progetto, con data), <b>documentato</b> (documento del produttore o di terzi, non provato qui), <b>ipotizzato</b> (dedotto, senza prova né documento) e <b>nessuno</b>.</p>
+  </div>
+</section>
+
+<section>
+  <h2 class="col"><span class="l-en">The chain in one picture</span><span class="l-it">La catena in un'immagine</span></h2>
+  <div class="flow">
+    <div class="st"><em>Testlab</em><b>.unv</b><span class="l-en">nodes, coordinate systems, wireframe</span><span class="l-it">nodi, sistemi di riferimento, wireframe</span></div>
+    <div class="ar">→</div>
+    <div class="st"><em>config</em><b><span class="l-en">marker model</span><span class="l-it">modello marker</span></b><span class="l-en">marker id → pose on the structure (m)</span><span class="l-it">id marker → posa sulla struttura (m)</span></div>
+    <div class="ar">→</div>
+    <div class="st"><em>camera</em><b><span class="l-en">detection</span><span class="l-it">rilevamento</span></b><span class="l-en">ArUco corners, sub-pixel</span><span class="l-it">spigoli ArUco, sub-pixel</span></div>
+    <div class="ar">→</div>
+    <div class="st"><em>PnP</em><b><span class="l-en">pose</span><span class="l-it">posa</span></b><span>T<sub>cam←unv</sub></span></div>
+    <div class="ar">→</div>
+    <div class="st"><em>lock</em><b><span class="l-en">gating + Kalman</span><span class="l-it">gate + Kalman</span></b><span class="l-en">accept, coast, reacquire</span><span class="l-it">accetta, coasting, riaggancio</span></div>
+    <div class="ar">→</div>
+    <div class="st"><em>display</em><b>overlay</b><span class="l-en">nodes projected; in the glasses, per eye</span><span class="l-it">nodi proiettati; negli occhiali, per occhio</span></div>
+  </div>
+  <p class="cap l-en">In the webcam version the overlay is drawn on the video. In the glasses the specimen is seen directly and only the grid is drawn, which adds head tracking, the camera-to-head transform and a per-eye display calibration to the chain (<a href="#ost">Optical see-through requirements</a>).</p>
+  <p class="cap l-it">Nella versione webcam l'overlay è disegnato sul video. Negli occhiali il provino si vede direttamente e viene disegnata solo la griglia: alla catena si aggiungono il tracciamento della testa, la trasformazione camera-testa e una calibrazione del display per ciascun occhio (<a href="#ost">Requisiti dell'ottico see-through</a>).</p>
+</section>
+
+<section>
+  <h2 class="col"><span class="l-en">Project roadmap phases</span><span class="l-it">Fasi della roadmap</span></h2>
+  <div class="tbl col"><table class="txt">
+    <thead><tr><th><span class="l-en">Phase</span><span class="l-it">Fase</span></th><th><span class="l-en">Content</span><span class="l-it">Contenuto</span></th><th><span class="l-en">State</span><span class="l-it">Stato</span></th></tr></thead>
+    <tbody>
+      <tr><td>A · Webcam MVP</td><td class="wrap"><span class="l-en">Full UNV → registration → overlay chain in Python/OpenCV on a webcam.</span><span class="l-it">Catena completa UNV → registrazione → overlay in Python/OpenCV su webcam.</span></td><td><span class="pill good"><span class="l-en">implemented</span><span class="l-it">implementata</span></span></td></tr>
+      <tr><td>B · XREAL port</td><td class="wrap"><span class="l-en">Same pipeline driving an optical overlay in the glasses; frames from the Eye camera, pose service per ADR-001.</span><span class="l-it">Stessa pipeline per un overlay ottico negli occhiali; frame dalla camera Eye, servizio di posa secondo ADR-001.</span></td><td><span class="pill warn"><span class="l-en">in progress</span><span class="l-it">in corso</span></span></td></tr>
+      <tr><td>C · Impact verification</td><td class="wrap"><span class="l-en">Hammer-tip tracking, hit-point matching, Simcenter Testlab bridge.</span><span class="l-it">Tracciamento della punta del martello, verifica del punto colpito, collegamento con Simcenter Testlab.</span></td><td><span class="pill mute"><span class="l-en">not started</span><span class="l-it">non iniziata</span></span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+<p class="src"><code>README.md</code>, <code>CONTEXT.md</code> (17/10/2026), <code>docs/CAPABILITIES.md</code>, <code>docs/HARDWARE.md</code>, <code>CHANGELOG.md</code> [0.3.000].</p>
+</article>

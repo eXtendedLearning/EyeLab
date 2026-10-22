@@ -1,23 +1,29 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace EyeLabGates
 {
     /// <summary>
-    /// World pose of a fixed target from successive camera locks (G5). The first lock places it;
-    /// a lock within <see cref="AcceptMetres"/> and <see cref="AcceptDegrees"/> of the anchor joins a
-    /// sliding window whose mean is the anchor; anything further is an outlier. Three outliers in a
-    /// row that agree with each other mean the target (or the tracking origin) really moved, and the
-    /// window restarts from them. While frozen, locks are compared and logged but change nothing.
+    /// World pose of one target from successive camera locks (G5, demo). Policy since 22 Oct:
+    /// <b>follow the latest lock</b>. At the 21 Oct conference runs the 6DoF *position* drifted
+    /// (10 cm in 30 s standing still, metres while walking) while rotation stayed good, so a world
+    /// anchor averaged over many locks and guarded by a 3 cm gate kept the overlay at a stale,
+    /// drifted place (median 50 mm, p90 230-315 mm off). Taking each new lock instead leaves only the
+    /// drift since the last lock (median about 18 mm at 2 s spacing, from the same logs).
+    ///
+    /// A lock within <see cref="SmoothMetres"/>/<see cref="SmoothDegrees"/> of the anchor is blended
+    /// in by half (hides per-frame PnP noise); a larger one up to <see cref="ConfirmMetres"/> replaces
+    /// it; a jump beyond that is applied only when the next lock agrees with it (one wrong pose cannot
+    /// throw the overlay away). While frozen, locks are compared and logged but change nothing.
     /// </summary>
     public sealed class LockAnchor
     {
-        public const float AcceptMetres = 0.03f;
-        public const float AcceptDegrees = 3f;
-        public const int Window = 8;
-        public const int RelockAfter = 3;
+        public const float SmoothMetres = 0.015f;
+        public const float SmoothDegrees = 1.5f;
+        public const float ConfirmMetres = 0.10f;
+        public const float AgreeMetres = 0.03f;
+        public const float AgreeDegrees = 3f;
 
-        public enum Kind { First, Accepted, Rejected, Relocked, Frozen }
+        public enum Kind { First, Smoothed, Replaced, Pending, Confirmed, Frozen }
 
         public struct Result
         {
@@ -27,22 +33,21 @@ namespace EyeLabGates
             public bool Moved;           // the anchor changed
         }
 
-        readonly List<Pose> m_Window = new List<Pose>();
-        readonly List<Pose> m_Outliers = new List<Pose>();
+        bool m_HasPending;
+        Pose m_Pending;
 
         public bool HasAnchor { get; private set; }
         public Vector3 Position { get; private set; }
         public Quaternion Rotation { get; private set; } = Quaternion.identity;
         public bool Frozen { get; set; }
-        public int Count => m_Window.Count;
+        public int Applied { get; private set; }
 
         public Result Add(Vector3 position, Quaternion rotation)
         {
             if (!HasAnchor)
             {
                 if (Frozen) return new Result { Kind = Kind.Frozen };
-                m_Window.Add(new Pose(position, rotation));
-                Recompute();
+                Set(position, rotation);
                 HasAnchor = true;
                 return new Result { Kind = Kind.First, Moved = true };
             }
@@ -56,57 +61,41 @@ namespace EyeLabGates
                 r.Kind = Kind.Frozen;
                 return r;
             }
-            if (r.JumpMetres <= AcceptMetres && r.JumpDegrees <= AcceptDegrees)
+            if (r.JumpMetres <= SmoothMetres && r.JumpDegrees <= SmoothDegrees)
             {
-                m_Outliers.Clear();
-                m_Window.Add(new Pose(position, rotation));
-                if (m_Window.Count > Window) m_Window.RemoveAt(0);
-                Recompute();
-                r.Kind = Kind.Accepted;
-                r.Moved = true;
+                m_HasPending = false;
+                Set(Vector3.Lerp(Position, position, 0.5f), Quaternion.Slerp(Rotation, rotation, 0.5f));
+                r.Kind = Kind.Smoothed;
+            }
+            else if (r.JumpMetres <= ConfirmMetres)
+            {
+                m_HasPending = false;
+                Set(position, rotation);
+                r.Kind = Kind.Replaced;
+            }
+            else if (m_HasPending && Vector3.Distance(position, m_Pending.position) <= AgreeMetres
+                     && Quaternion.Angle(rotation, m_Pending.rotation) <= AgreeDegrees)
+            {
+                m_HasPending = false;
+                Set(position, rotation);
+                r.Kind = Kind.Confirmed;
+            }
+            else
+            {
+                m_HasPending = true;
+                m_Pending = new Pose(position, rotation);
+                r.Kind = Kind.Pending;
                 return r;
             }
-            m_Outliers.Add(new Pose(position, rotation));
-            if (m_Outliers.Count >= RelockAfter && Agree(m_Outliers))
-            {
-                m_Window.Clear();
-                m_Window.AddRange(m_Outliers);
-                m_Outliers.Clear();
-                Recompute();
-                r.Kind = Kind.Relocked;
-                r.Moved = true;
-                return r;
-            }
-            if (m_Outliers.Count >= RelockAfter) m_Outliers.RemoveAt(0);
-            r.Kind = Kind.Rejected;
+            r.Moved = true;
             return r;
         }
 
-        static bool Agree(List<Pose> poses)
+        void Set(Vector3 p, Quaternion q)
         {
-            for (int i = 1; i < poses.Count; i++)
-                if (Vector3.Distance(poses[i].position, poses[0].position) > AcceptMetres
-                    || Quaternion.Angle(poses[i].rotation, poses[0].rotation) > AcceptDegrees)
-                    return false;
-            return true;
-        }
-
-        void Recompute()
-        {
-            Vector3 p = Vector3.zero;
-            Vector4 q = Vector4.zero;
-            Quaternion first = m_Window[0].rotation;
-            foreach (var pose in m_Window)
-            {
-                p += pose.position;
-                Quaternion r = pose.rotation;
-                // same hemisphere as the first, then a normalised sum (fine for rotations a few degrees apart)
-                float sign = Quaternion.Dot(first, r) < 0f ? -1f : 1f;
-                q += sign * new Vector4(r.x, r.y, r.z, r.w);
-            }
-            Position = p / m_Window.Count;
-            q.Normalize();
-            Rotation = new Quaternion(q.x, q.y, q.z, q.w);
+            Position = p;
+            Rotation = q;
+            Applied++;
         }
     }
 }

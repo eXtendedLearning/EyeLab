@@ -4,6 +4,11 @@ This folder holds the **committed, public-safe** engineering documentation for E
 
 ## Where to start (in order)
 
+Project wiki (EN/IT): **`wiki/index.html`** — one navigable overview of the system, the
+validation campaign, the XREAL work and the decision record, with equations and references.
+It summarises the documents below and does not replace them; sources in `wiki/src/`,
+rebuild with `python docs/wiki/build_wiki.py`.
+
 XREAL gate experiment: **`XREAL-PC-GATES-G1-G3.md`** is the executable guide
 (desktop Unity CLI build, Surface runs) for G1 Eye frames, G2 6DoF and G3
 both together, with acceptance criteria and the outcome matrix.

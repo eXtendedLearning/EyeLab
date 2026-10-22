@@ -1,0 +1,131 @@
+<article class="page" id="p-vmethod" data-group="validation" data-en="Metrology framework" data-it="Impostazione metrologica">
+<header>
+  <div class="eyebrow"><span class="l-en">Validation</span><span class="l-it">Validazione</span></div>
+  <h1><span class="l-en">Metrology framework</span><span class="l-it">Impostazione metrologica</span></h1>
+  <p class="lede l-en">The validation measures how far from the true point EyeLab draws each grid node, against a printed reference whose own uncertainty is budgeted. The reference is located without using any EyeLab output.</p>
+  <p class="lede l-it">La validazione misura quanto lontano dal punto vero EyeLab disegna ciascun nodo della griglia, rispetto a un riferimento stampato di cui si quantifica l'incertezza. Il riferimento viene localizzato senza usare alcun risultato di EyeLab.</p>
+</header>
+<section>
+  <h2 class="col"><span class="l-en">Principles</span><span class="l-it">Principi</span></h2>
+  <ol class="opts">
+    <li><h3><span class="l-en">One definition of each plate</span><span class="l-it">Una sola definizione per ogni plate</span></h3><p class="l-en">One layout generates the PDF, the ground-truth target, the marker configuration and the UNV geometry. Markers and reference points are printed together, so their relative positions come from the print, not from caliper work on marker centres or roll.</p><p class="l-it">Un'unica disposizione genera il PDF, il target di verità, la configurazione dei marker e la geometria UNV. Marker e punti di riferimento sono stampati insieme, quindi le loro posizioni relative vengono dalla stampa, non da misure al calibro di centri o roll dei marker.</p></li>
+    <li><h3><span class="l-en">The instrument only checks the printer</span><span class="l-it">Lo strumento controlla solo la stampante</span></h3><p class="l-en">Each plate carries an X and a Y scale bar; their measured lengths rescale the layout per axis.</p><p class="l-it">Ogni plate porta una barra di scala in X e una in Y; le loro lunghezze misurate riscalano la disposizione per asse.</p></li>
+    <li><h3><span class="l-en">Independent ground truth</span><span class="l-it">Verità a terra indipendente</span></h3><p class="l-en">The analysis detects the markers itself and grows a face homography over sub-pixel saddle points. A first draft seeded this search with EyeLab's own projection and reported a 15 mm error as 0.1 mm; tests now recover injected errors from 0 to 30 mm.</p><p class="l-it">L'analisi rileva da sé i marker ed estende un'omografia della faccia sui punti sella sub-pixel. Una prima versione partiva dalla proiezione di EyeLab e riportava un errore di 15 mm come 0,1 mm; oggi i test recuperano errori iniettati da 0 a 30 mm.</p></li>
+    <li><h3><span class="l-en">The session is the statistical unit</span><span class="l-it">La sessione è l'unità statistica</span></h3><p class="l-en">Frames of one static pose are not independent. Spread between conditions comes from repositioned repetitions; per-frame confidence intervals would be pseudoreplication [18].</p><p class="l-it">I frame di una stessa posa statica non sono indipendenti. La dispersione tra condizioni viene dalle ripetizioni con riposizionamento; intervalli di confidenza per frame sarebbero pseudo-replicazione [18].</p></li>
+  </ol>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">What is measured</span><span class="l-it">Cosa si misura</span></h2>
+  <div class="eq"><div class="tex" data-tex="e_{\mathrm{mm}}=\left\lVert \mathbf{H}_f^{-1}\,\tilde{\mathbf{u}}_{\mathrm{E}}-\mathbf{X}_{\mathrm{true}}\right\rVert"></div>
+  <p class="why l-en"><span class="m" data-tex="\tilde{\mathbf{u}}_{\mathrm{E}}">ũ_E</span>: EyeLab's projection of a node (float, undistorted, homogeneous). <span class="m" data-tex="\mathbf{H}_f">H_f</span>: homography of face <span class="m" data-tex="f">f</span> fitted to the detected saddles of the same frame [2]. The error is the in-plane distance on the face, i.e. what decides whether the operator hits the right node. Depth error is invisible to it by construction.</p>
+  <p class="why l-it"><span class="m" data-tex="\tilde{\mathbf{u}}_{\mathrm{E}}">ũ_E</span>: proiezione di un nodo da parte di EyeLab (in virgola mobile, senza distorsione, omogenea). <span class="m" data-tex="\mathbf{H}_f">H_f</span>: omografia della faccia <span class="m" data-tex="f">f</span> stimata sui punti sella rilevati nello stesso frame [2]. L'errore è la distanza nel piano della faccia, cioè ciò che decide se l'operatore colpisce il nodo giusto. L'errore di profondità per costruzione non vi compare.</p></div>
+  <div class="tbl"><table class="txt">
+    <thead><tr><th><span class="l-en">Metric</span><span class="l-it">Metrica</span></th><th><span class="l-en">Definition</span><span class="l-it">Definizione</span></th></tr></thead>
+    <tbody>
+      <tr><td><code>err_mm</code>, <code>err_mm_raw</code></td><td class="wrap"><span class="l-en">On-face error for the drawn (filtered) and raw pose. Reported as RMSE, median, p95 and max.</span><span class="l-it">Errore sulla faccia per la posa disegnata (filtrata) e grezza. Riportato come RMSE, mediana, p95 e massimo.</span></td></tr>
+      <tr><td><code>err_px</code>, <code>err_px_drawn</code></td><td class="wrap"><span class="l-en">Image distance for the float projection and the integer pixels actually drawn (rounding adds ≈ 0.4 px).</span><span class="l-it">Distanza nell'immagine per la proiezione in virgola mobile e per i pixel interi effettivamente disegnati (l'arrotondamento aggiunge ≈ 0,4 px).</span></td></tr>
+      <tr><td><span class="l-en">bias / jitter</span><span class="l-it">bias / jitter</span></td><td class="wrap"><span class="l-en">Mean error vector per node (systematic) vs spread about it (random); <code>bias_map.png</code>.</span><span class="l-it">Vettore di errore medio per nodo (sistematico) contro dispersione attorno a esso (casuale); <code>bias_map.png</code>.</span></td></tr>
+      <tr><td><code>jitter_measured</code>, <code>jitter_pose</code></td><td class="wrap"><span class="l-en">Static-pose spread, translation (mm) and rotation (° about the chordal mean), raw vs Kalman.</span><span class="l-it">Dispersione della posa statica, traslazione (mm) e rotazione (° attorno alla media cordale), grezza contro Kalman.</span></td></tr>
+      <tr><td><code>homography_residual_px</code></td><td class="wrap"><span class="l-en">QA: must stay well below the errors being measured.</span><span class="l-it">Controllo qualità: deve restare ben sotto gli errori misurati.</span></td></tr>
+      <tr><td><span class="l-en">step error</span><span class="l-it">errore di passo</span></td><td class="wrap"><span class="l-en">Estimated minus known translation between two static sessions (B3): the only test of absolute scale.</span><span class="l-it">Traslazione stimata meno traslazione nota tra due sessioni statiche (B3): l'unico test della scala assoluta.</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Uncertainty of the reference</span><span class="l-it">Incertezza del riferimento</span></h2>
+  <div class="eq"><div class="tex" data-tex="u_{\mathrm{instr}}=\frac{a}{\sqrt{3}},\qquad u_c=\sqrt{u_{\mathrm{aniso}}^2+u_{\mathrm{place}}^2+u_{\mathrm{flat}}^2\;(+\,u_{\mathrm{fold}}^2)},\qquad U=2u_c,\qquad \mathrm{TUR}=\frac{T}{U}\ge4"></div>
+  <p class="why l-en">GUM type-B evaluation [15]: an instrument quoted as ±a is treated as rectangular. Terms: print anisotropy <span class="m" data-tex="u_{\mathrm{aniso}}=R\,u(s_x-s_y)/2">R·u(s_x − s_y)/2</span> with R ≤ 137 mm; placement 0.02 mm; paper flatness 0.05 mm; for plate L the fold angle, 64 mm·dφ. A uniform print scale cancels in on-face errors. For a pass/fail claim at T = 1 mm the reference should be 4× better (TUR ≥ 4, after ANSI/NCSL Z540.3 [16]), i.e. <span class="m" data-tex="u_c\le0.125">u_c ≤ 0.125</span> mm.</p>
+  <p class="why l-it">Valutazione di tipo B secondo la GUM [15]: uno strumento dichiarato ±a è trattato come distribuzione rettangolare. Termini: anisotropia di stampa <span class="m" data-tex="u_{\mathrm{aniso}}=R\,u(s_x-s_y)/2">R·u(s_x − s_y)/2</span> con R ≤ 137 mm; posizionamento 0,02 mm; planarità della carta 0,05 mm; per il plate L l'angolo di piega, 64 mm·dφ. Una scala di stampa uniforme si elide negli errori sulla faccia. Per un giudizio passa/non passa a T = 1 mm il riferimento deve essere 4 volte migliore (TUR ≥ 4, secondo ANSI/NCSL Z540.3 [16]), cioè <span class="m" data-tex="u_c\le0.125">u_c ≤ 0,125</span> mm.</p></div>
+  <div class="tbl col"><table class="data">
+    <thead><tr><th><span class="l-en">Instrument</span><span class="l-it">Strumento</span></th><th><span class="l-en">Plate A u (TUR)</span><span class="l-it">Plate A u (TUR)</span></th><th><span class="l-en">Plate L u (TUR)</span><span class="l-it">Plate L u (TUR)</span></th><th><span class="l-en">B3 step u (TUR)</span><span class="l-it">Passo B3 u (TUR)</span></th></tr></thead>
+    <tbody>
+      <tr><td><span class="l-en">Ruler ±1 mm</span><span class="l-it">Riga ±1 mm</span></td><td class="b">0.33 mm (1.5)</td><td class="b">0.53 mm (0.9)</td><td class="b">0.82 mm (0.6)</td></tr>
+      <tr><td><span class="l-en">Digital caliper ±0.03 mm</span><span class="l-it">Calibro digitale ±0,03 mm</span></td><td class="g">0.055 mm (9.1)</td><td class="g">0.13 mm (4.0)</td><td class="g">0.024 mm (20)</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><b class="h"><span class="l-en">Open audit finding F04</span><span class="l-it">Rilievo aperto F04 dell'audit</span></b>
+  <p class="l-en">Placement (0.02 mm) and flatness (0.05 mm) are assumed, not measured; the fold-angle term assumes independent frames and a 0.1° intrinsics floor; the same intrinsics enter fold fitting and validation. A ±a specification is not automatically a rectangular bound, and k = 2 is not automatically 95 % coverage. Until these terms are measured, results are reported with their U but without an unconditional metrological pass. Campaign 1 indeed suggests markers up to 0.9 mm off the plane on the paper plate.</p>
+  <p class="l-it">Posizionamento (0,02 mm) e planarità (0,05 mm) sono ipotizzati, non misurati; il termine dell'angolo di piega assume frame indipendenti e una soglia minima di 0,1° per gli intrinseci; gli stessi intrinseci entrano nella stima della piega e nella validazione. Una specifica ±a non è automaticamente un limite rettangolare, e k = 2 non garantisce automaticamente una copertura del 95 %. Finché questi termini non sono misurati, i risultati si riportano con la loro U ma senza un giudizio metrologico incondizionato. La campagna 1 indica infatti marker fino a 0,9 mm fuori piano sul plate di carta.</p></div>
+  <div class="note"><b class="h"><span class="l-en">Acceptance threshold</span><span class="l-it">Soglia di accettazione</span></b>
+  <p class="l-en">The 1 mm per-node aim is a project requirement set by the author for EMA grids with ≥ 50 mm spacing. No peer-reviewed source fixing this threshold for AR-guided modal testing has been found. The audit also asks to define whether it bounds per-axis, 3D radial, projected display error or a percentile; campaign 1 uses the p95 of the on-face error.</p>
+  <p class="l-it">L'obiettivo di 1 mm per nodo è un requisito di progetto fissato dall'autore per griglie EMA con passo ≥ 50 mm. Non è stata trovata una fonte con revisione paritaria che fissi questa soglia per l'analisi modale guidata in AR. L'audit chiede inoltre di stabilire se il limite riguarda l'errore per asse, l'errore radiale 3D, l'errore proiettato sul display o un percentile; la campagna 1 usa il p95 dell'errore sulla faccia.</p></div>
+</section>
+<p class="src"><code>docs/validation.md</code>, <code>python/validation/uncertainty.py</code>, <code>python/validation/metrics.py</code>, <code>docs/AUDIT-2026-10-08.md</code> F04. [2] Hartley &amp; Zisserman; [15] JCGM 100:2008; [16] ANSI/NCSL Z540.3-2006; [18] Hurlbert 1984.</p>
+</article>
+
+<article class="page" id="p-vplan" data-group="validation" data-en="Targets and test plan" data-it="Target e piano delle prove">
+<header>
+  <div class="eyebrow"><span class="l-en">Validation</span><span class="l-it">Validazione</span></div>
+  <h1><span class="l-en">Targets and test plan</span><span class="l-it">Target e piano delle prove</span></h1>
+  <p class="lede l-en">Two printed plates and five tests, run from one campaign menu (<code>validation.bat</code>) with repetitions as the outer loop.</p>
+  <p class="lede l-it">Due plate stampati e cinque prove, gestite da un unico menu di campagna (<code>validation.bat</code>) con le ripetizioni come ciclo esterno.</p>
+</header>
+<section>
+  <h2 class="col"><span class="l-en">Plates</span><span class="l-it">Plate</span></h2>
+  <div class="two">
+    <figure class="fig">
+      <h3><span class="l-en">Plate A (A4 landscape, mm)</span><span class="l-it">Plate A (A4 orizzontale, mm)</span></h3>
+      <svg id="plateA" viewBox="-12 -14 321 244" role="img" aria-label="Plate A"></svg>
+      <figcaption class="small l-en">20 saddle points (5×4, 40 mm pitch, 15 mm squares) and three 20 mm DICT_4X4_50 markers (ids 30, 31, 32) in an asymmetric L. Scale bars of 200 and 150 mm.</figcaption>
+      <figcaption class="small l-it">20 punti sella (5×4, passo 40 mm, quadrati da 15 mm) e tre marker DICT_4X4_50 da 20 mm (id 30, 31, 32) disposti a L asimmetrica. Barre di scala da 200 e 150 mm.</figcaption>
+    </figure>
+    <div class="fig">
+      <h3><span class="l-en">Plate L (folded)</span><span class="l-it">Plate L (piegato)</span></h3>
+      <p class="small l-en">Two faces of 5×2 saddles, markers 40/41 on the flat face and 42/43 on the upright one: non-coplanar markers and a grazing face. Valley-folded and bonded to a rigid 90° bracket; the fold angle is fitted from images jointly with the pose (≤ 0.08° error on synthetic data, reported u with a 0.1° floor).</p>
+      <p class="small l-it">Due facce di 5×2 punti sella, marker 40/41 sulla faccia orizzontale e 42/43 su quella verticale: marker non complanari e una faccia radente. Piegato a valle e incollato su una squadra rigida a 90°; l'angolo di piega è stimato dalle immagini insieme alla posa (errore ≤ 0,08° su dati sintetici, u riportata con una soglia minima di 0,1°).</p>
+      <p class="small l-en">Printing: 100 % scale, matte paper; plate A mounted on glass, aluminium or ≥ 5 mm foam board. For low-resolution or wide-angle cameras the plates can be regenerated with 40 mm markers.</p>
+      <p class="small l-it">Stampa: scala 100 %, carta opaca; plate A montato su vetro, alluminio o pannello di schiuma ≥ 5 mm. Per camere a bassa risoluzione o grandangolari i plate si possono rigenerare con marker da 40 mm.</p>
+    </div>
+  </div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Tests</span><span class="l-it">Prove</span></h2>
+  <div class="tbl"><table class="txt">
+    <thead><tr><th><span class="l-en">Test</span><span class="l-it">Prova</span></th><th><span class="l-en">Question</span><span class="l-it">Domanda</span></th><th><span class="l-en">Conditions</span><span class="l-it">Condizioni</span></th><th><span class="l-en">Sessions</span><span class="l-it">Sessioni</span></th><th><span class="l-en">State</span><span class="l-it">Stato</span></th></tr></thead>
+    <tbody>
+      <tr><td>B1</td><td class="wrap"><span class="l-en">Static registration error, jitter, detection</span><span class="l-it">Errore di registrazione statico, jitter, rilevamento</span></td><td class="wrap">400 / 600 / 900 mm × 0 / 30 / 50° × 3</td><td>27</td><td><span class="pill warn"><span class="l-en">preliminary</span><span class="l-it">preliminare</span></span></td></tr>
+      <tr><td>B1b</td><td class="wrap"><span class="l-en">Sustain with one marker (31, 32 covered)</span><span class="l-it">Mantenimento con un marker (31, 32 coperti)</span></td><td class="wrap">600 mm × 0 / 30° × 3</td><td>6</td><td><span class="pill warn"><span class="l-en">preliminary</span><span class="l-it">preliminare</span></span></td></tr>
+      <tr><td>B1c</td><td class="wrap"><span class="l-en">Acquisition with 1 / 2 / 3 markers: time to lock, wrong-lock rate, error after lock</span><span class="l-it">Aggancio con 1 / 2 / 3 marker: tempo di aggancio, tasso di aggancio errato, errore dopo l'aggancio</span></td><td class="wrap"><span class="l-en">B1 grid, presets single / standard / legacy3</span><span class="l-it">griglia B1, preset single / standard / legacy3</span></td><td>–</td><td><span class="pill mute"><span class="l-en">planned</span><span class="l-it">pianificata</span></span></td></tr>
+      <tr><td>B2-L</td><td class="wrap"><span class="l-en">Two-face registration, plate L</span><span class="l-it">Registrazione su due facce, plate L</span></td><td class="wrap"><span class="l-en">500 / 800 mm × bisector, ±20° × 3</span><span class="l-it">500 / 800 mm × bisettrice, ±20° × 3</span></td><td>18</td><td><span class="pill mute"><span class="l-en">not run</span><span class="l-it">non eseguita</span></span></td></tr>
+      <tr><td>B3</td><td class="wrap"><span class="l-en">Translation (scale) error from known steps</span><span class="l-it">Errore di traslazione (scala) da spostamenti noti</span></td><td class="wrap"><span class="l-en">5 / 10 / 20 mm steps, camera fixed, 2 sessions per step × 3</span><span class="l-it">passi da 5 / 10 / 20 mm, camera fissa, 2 sessioni per passo × 3</span></td><td>12</td><td><span class="pill mute"><span class="l-en">not run</span><span class="l-it">non eseguita</span></span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="cap l-en">Each B1 session records 300 frames with the real <code>ArucoPipeline</code>, logging raw and drawn pose, lock state, float and drawn projections, and saving every third frame as a raw grey image. Session metadata record the git commit, calibration digest and focus read-back. A setup-assistance panel shows distance, angle and centring from the camera's own pose (and the Surface accelerometer); it is a positioning aid, not a reference.</p>
+  <p class="cap l-it">Ogni sessione B1 registra 300 frame con la vera <code>ArucoPipeline</code>, salvando posa grezza e disegnata, stato del lock, proiezioni in virgola mobile e disegnate, e un frame su tre come immagine grezza in grigio. I metadati di sessione riportano commit git, impronta della calibrazione e lettura del fuoco. Un pannello di assistenza mostra distanza, angolo e centratura ricavati dalla posa stessa della camera (e dall'accelerometro del Surface); è un aiuto al posizionamento, non un riferimento.</p>
+</section>
+<p class="src"><code>docs/validation.md</code>, <code>docs/validation-campaign.md</code>, <code>python/validation/plates.py</code>, <code>plan.py</code>, <code>fold.py</code>, <code>setup_assist.py</code>, <code>capture.py</code>; project note "pose-lock acquisition" (B1c).</p>
+</article>
+
+<article class="page" id="p-vgt" data-group="validation" data-en="Ground truth" data-it="Verità a terra">
+<header>
+  <div class="eyebrow"><span class="l-en">Validation</span><span class="l-it">Validazione</span></div>
+  <h1><span class="l-en">Ground truth: detection and review</span><span class="l-it">Verità a terra: rilevamento e revisione</span></h1>
+  <p class="lede l-en">Every saved frame gets its own reference: the printed saddle points, found independently of EyeLab and, where needed, checked by hand.</p>
+  <p class="lede l-it">Ogni frame salvato ha il proprio riferimento: i punti sella stampati, trovati in modo indipendente da EyeLab e, dove serve, controllati a mano.</p>
+</header>
+<section>
+  <h2 class="col"><span class="l-en">Automatic detection</span><span class="l-it">Rilevamento automatico</span></h2>
+  <div class="flow">
+    <div class="st"><em>1</em><b><span class="l-en">markers</span><span class="l-it">marker</span></b><span class="l-en">analysis' own ArUco detector</span><span class="l-it">rilevatore ArUco proprio dell'analisi</span></div><div class="ar">→</div>
+    <div class="st"><em>2</em><b><span class="l-en">seed homography</span><span class="l-it">omografia iniziale</span></b><span class="l-en">from marker corners; a face without visible markers is seeded by PnP</span><span class="l-it">dagli spigoli dei marker; una faccia senza marker visibili parte da una PnP</span></div><div class="ar">→</div>
+    <div class="st"><em>3</em><b><span class="l-en">saddle search</span><span class="l-it">ricerca dei punti sella</span></b><span class="l-en">strongest −det(Hessian) within 5 px, cornerSubPix, X-junction ring test (4 alternating sectors) [14]</span><span class="l-it">massimo di −det(Hessiana) entro 5 px, cornerSubPix, test ad anello di giunzione a X (4 settori alternati) [14]</span></div><div class="ar">→</div>
+    <div class="st"><em>4</em><b><span class="l-en">grow and refit</span><span class="l-it">estensione e riadattamento</span></b><span class="l-en">refit on accepted saddles, repeat; final H from saddles only</span><span class="l-it">nuova stima sui punti accettati, ripetuta; H finale solo dai punti sella</span></div>
+  </div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Review tool and audit</span><span class="l-it">Strumento di revisione e audit</span></h2>
+  <div class="prose l-en">
+    <p>Campaign menu 10 (<code>python -m validation gt-review</code>) shows each point zoomed; a click snaps sub-pixel to the X-junction; a correction is carried to the following frames of the same static session and re-snapped, and is shown again only where it does not re-snap. Fixed-seed random audits estimate the failure rate with a one-sided Clopper–Pearson bound [17]:</p>
+  </div>
+  <div class="prose l-it">
+    <p>Il menu 10 della campagna (<code>python -m validation gt-review</code>) mostra ogni punto ingrandito; un click si aggancia con precisione sub-pixel alla giunzione a X; la correzione viene propagata ai frame successivi della stessa sessione statica e ri-agganciata, e viene riproposta solo dove non si riaggancia. Audit casuali a seme fisso stimano il tasso di fallimento con il limite unilaterale di Clopper–Pearson [17]:</p>
+  </div>
+  <div class="eq"><div class="tex" data-tex="p_{\mathrm{up}}:\;\sum_{i=0}^{k}\binom{n}{i}p_{\mathrm{up}}^{\,i}(1-p_{\mathrm{up}})^{n-i}=\alpha,\qquad k=0\Rightarrow p_{\mathrm{up}}=1-\alpha^{1/n}"></div>
+  <p class="why l-en">With α = 0.05: 0 failures in 120 checks gives 2.5 %; 1 in 300 gives 1.6 %.</p>
+  <p class="why l-it">Con α = 0,05: 0 fallimenti su 120 controlli dà 2,5 %; 1 su 300 dà 1,6 %.</p></div>
+  <div class="tbl col"><table id="t-gt"></table></div>
+  <p class="cap l-en">Failure: final truth more than 0.5 px from the checked point, or point missing. In B1b the search starts from one 20 mm marker; seeds fell up to 5 px off (the search radius) and the detector locked onto wrong junctions, which is why G5 on the glasses requires two markers for plates.</p>
+  <p class="cap l-it">Fallimento: verità finale a più di 0,5 px dal punto controllato, o punto assente. In B1b la ricerca parte da un solo marker da 20 mm; le stime iniziali cadevano fino a 5 px dal punto (il raggio di ricerca) e il rilevatore agganciava giunzioni sbagliate: per questo G5 negli occhiali richiede due marker sui plate.</p>
+</section>
+<p class="src"><code>python/validation/detect.py</code>, <code>gt_review.py</code>, <code>gt_review_gui.py</code>, <code>docs/validation-campaign.md</code> §9. [14] Chen &amp; Zhang 2005; [17] Clopper &amp; Pearson 1934.</p>
+</article>

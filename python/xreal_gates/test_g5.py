@@ -166,25 +166,35 @@ class TransportTest(unittest.TestCase):
 
 
 class ServiceTest(unittest.TestCase):
-    def test_hello_frame_and_once(self):
+    def test_hello_frame_and_once_two_targets(self):
         from validation.synth import render_scene, view_pose
         with tempfile.TemporaryDirectory() as tmp:
-            svc = PoseService("plateA", None, log=lambda *_: None)
-            hello = svc.hello({"type": "hello", "target": "plateA", "session": "s1", "run_dir": tmp,
+            svc = PoseService("plateA,board25", None, log=lambda *_: None)
+            hello = svc.hello({"type": "hello", "targets": ["plateA", "board25"], "session": "s1", "run_dir": tmp,
                                "vendor_fx_fy_cx_cy": list(VENDOR_FX_FY_CX_CY)})
-            self.assertEqual(hello["camera"]["source"] in ("vendor", "calibration"), True)
+            self.assertIn(hello["camera"]["source"], ("vendor", "calibration"))
+            self.assertEqual([o["target"] for o in hello["overlays"]], ["plateA", "board25"])
+            self.assertEqual(len(hello["overlays"][0]["points"]), 60)       # 20 saddles x 3, flat
+            json.dumps(hello)                                                # serialisable, no numpy
             t = make_target("plateA")
             rvec, tvec = view_pose(t.target, 0.5)
             img = np.clip(render_scene(t.layout, t.target, svc.camera.K, rvec, tvec), 0, 255).astype(np.uint8)
             header = json.dumps({"seq": 5, "cam_ts": 123, "w": 1280, "h": 720, "rows": "bottom_up"}).encode()
             msg = struct.pack("<I", len(header)) + header + img[::-1].tobytes()
             reply = svc.on_frame(msg)
-            self.assertTrue(reply["ok"], reply["reason"])
-            self.assertLess(abs(reply["tvec"][2] - tvec[2]) * 1000, 5.0)
+            res = {r["target"]: r for r in reply["results"]}
+            self.assertTrue(res["plateA"]["ok"], res["plateA"]["reason"])
+            self.assertFalse(res["board25"]["ok"])
+            self.assertEqual(res["board25"]["rms_px"], -1.0)                 # never null
+            self.assertLess(abs(res["plateA"]["tvec"][2] - tvec[2]) * 1000, 5.0)
             self.assertIsNone(svc.on_frame(msg))            # same seq: processed once only
             svc.close()
             rows = (Path(tmp) / "pose_service.csv").read_text().splitlines()
-            self.assertEqual(len(rows), 2)
+            self.assertEqual(len(rows), 3)                  # header + one row per target
+
+    def test_rejects_unknown_target(self):
+        with self.assertRaises(ValueError):
+            PoseService("plateA,plateZ", None, log=lambda *_: None)
 
 
 if __name__ == "__main__":

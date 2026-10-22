@@ -6,12 +6,12 @@ using UnityEngine;
 
 namespace EyeLabGates
 {
-    public enum GateKind { Manual, G1, G2, G3, G4, G5, Calib, Cooldown }
+    public enum GateKind { Manual, G1, G2, G3, G4, G5, Calib, Demo, Cooldown }
 
     /// <summary>
     /// Command-line arguments of the gate player (docs/XREAL-PC-GATES-G1-G3.md §5):
-    /// <c>-gate G1|G2|G3|G4|G5|calib|manual|cooldown -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60
-    /// -burstEvery s -burstFrames n -target plateA|plateL|board25 -port n -duration s -snapshotEvery s -label text -logRoot dir</c>. G1-G4 follow the timed protocols in
+    /// <c>-gate G1|G2|G3|G4|G5|calib|demo|manual|cooldown -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60
+    /// -burstEvery s -burstFrames n -target plateA|plateL|board25[,...] -port n -duration s -snapshotEvery s -label text -logRoot dir</c>. G1-G4 follow the timed protocols in
     /// <see cref="GateProtocol"/>; <c>-duration</c> only applies to manual (it is recorded otherwise). G4 (light overlay)
     /// renders at 30 fps unless <c>-renderFps 60</c> is given, and reads <c>-order tracked</c> as 6DoF, <c>3dof</c> as 3DoF.
     /// Unknown arguments (e.g. Unity's own <c>-logFile</c>) are ignored.
@@ -29,8 +29,9 @@ namespace EyeLabGates
         public double BurstEvery = 2.0;
         /// <summary>G4: frames per burst; the last one is saved as a snapshot.</summary>
         public int BurstFrames = 3;
-        /// <summary>G5: the target the pose service locks onto (plateA, plateL, board25).</summary>
+        /// <summary>G5/demo: the targets the pose service locks onto (plateA, plateL, board25), comma-separated.</summary>
         public string Target = "plateA";
+        public string[] TargetList => Target.Split(',');
         /// <summary>G5: pose service port on 127.0.0.1.</summary>
         public int Port = 8765;
 
@@ -68,7 +69,7 @@ namespace EyeLabGates
         {
             var a = new GateArgs { Raw = argv ?? Array.Empty<string>() };
             double? duration = null;
-            bool renderFpsGiven = false, snapshotGiven = false;
+            bool renderFpsGiven = false, snapshotGiven = false, targetGiven = false, burstGiven = false, burstFramesGiven = false;
 
             for (int i = 0; i < a.Raw.Length; i++)
             {
@@ -88,6 +89,7 @@ namespace EyeLabGates
                             case "g3": a.Gate = GateKind.G3; break;
                             case "g4": a.Gate = GateKind.G4; break;
                             case "g5": a.Gate = GateKind.G5; break;
+                            case "demo": a.Gate = GateKind.Demo; break;
                             case "calib": a.Gate = GateKind.Calib; break;
                             case "manual": a.Gate = GateKind.Manual; break;
                             case "cooldown": a.Gate = GateKind.Cooldown; break;
@@ -122,8 +124,12 @@ namespace EyeLabGates
                         break;
                     case "-target":
                         i++;
-                        if (Array.IndexOf(Targets, value ?? "") >= 0) a.Target = value;
-                        else a.Warnings.Add($"unknown -target '{value}', using plateA");
+                        if (!string.IsNullOrEmpty(value) && Array.TrueForAll(value.Split(','), t => Array.IndexOf(Targets, t) >= 0))
+                        {
+                            a.Target = value;
+                            targetGiven = true;
+                        }
+                        else a.Warnings.Add($"unknown -target '{value}', using the gate default");
                         break;
                     case "-port":
                         i++;
@@ -132,12 +138,12 @@ namespace EyeLabGates
                         break;
                     case "-burstevery":
                         i++;
-                        if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double be) && be >= 0) a.BurstEvery = be;
+                        if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double be) && be >= 0) { a.BurstEvery = be; burstGiven = true; }
                         else a.Warnings.Add($"bad -burstEvery '{value}', using 2");
                         break;
                     case "-burstframes":
                         i++;
-                        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int bf) && bf >= 1 && bf <= 30) a.BurstFrames = bf;
+                        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int bf) && bf >= 1 && bf <= 30) { a.BurstFrames = bf; burstFramesGiven = true; }
                         else a.Warnings.Add($"bad -burstFrames '{value}', using 3");
                         break;
                     case "-flushlag":
@@ -162,7 +168,13 @@ namespace EyeLabGates
             }
 
             a.Duration = duration ?? DefaultDuration(a.Gate);
-            if ((a.Gate == GateKind.G4 || a.Gate == GateKind.G5) && !renderFpsGiven) a.RenderFps = 30;
+            bool locks = a.Gate == GateKind.G5 || a.Gate == GateKind.Demo;
+            if ((a.Gate == GateKind.G4 || locks) && !renderFpsGiven) a.RenderFps = 30;
+            // Locks follow the latest camera pose (LockAnchor), so update faster: a burst every 1.2 s
+            // (the camera needs ~1.1 s to deliver its first frame) and use its second frame.
+            if (locks && !burstGiven) a.BurstEvery = 1.2;
+            if (locks && !burstFramesGiven) a.BurstFrames = 2;
+            if (a.Gate == GateKind.Demo && !targetGiven) a.Target = "plateA,board25";
             if (a.Gate == GateKind.Calib && !snapshotGiven) a.SnapshotEvery = 0.5;
             if (string.IsNullOrEmpty(a.LogRoot))
                 a.LogRoot = Path.Combine(Application.persistentDataPath, "GateRuns");

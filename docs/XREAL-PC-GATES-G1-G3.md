@@ -1226,3 +1226,114 @@ For each G5 run, note:
   eye);
 - whether the overlay drifted during the frozen steps;
 - whether the relock snapped it back.
+
+## 18. First G5 runs (17-21 Oct, metroXRAINE 2026), the cause of the floating overlay, G5 rev. 2 and the demo gate
+
+### What ran (build `2026-10-16T16:19:31Z`)
+
+- **Calibration.** The Calib run of 21 Oct used 201 of 226 snapshots and covered 98 % of
+  the image. RMS 0.47 px; standard model (rational: 0.46 px).
+  - fx 623.9, fy 625.8, cx 646.4, cy 357.2 against the vendor's 607.2, 607.4, 638.3,
+    359.2: the vendor focal length is **2.7 % short**, about 19 mm at 0.7 m.
+  - k1 -0.079, k2 +0.128, k3 -0.066.
+  - The two Calib runs of 17 Oct (one aborted) were superseded.
+- **G5, plate A.** 17, 18 Oct (three runs, all aborted early) and 21 Oct (complete).
+- **G5, 25 mm board.** 21 Oct (complete, after two aborted starts). Plate L was not
+  available.
+- **Operator report.** The overlay was never fixed. It floated 10-15 cm in front of the
+  target and swung up and down and left and right, while its *rotation* was good.
+  Freezing moved it metres away.
+
+### Cause: 6DoF position drift, made worse by the anchor filter
+
+- **The camera side is sound.** Over 30 s of holding still (board run): board in the
+  camera frame steady (0.58-0.59 m, image position stable to about 1 cm), rotation to
+  under 1°, reprojection 0.2-0.6 px.
+- **The headset position drifted.** Over the same 30 s it moved 10 cm forward and 5 cm
+  up, while its rotation stayed steady. During plate A's 40 s frozen walk the reported
+  head position ranged over 7 m, then jumped back 3.4 m when tracking relocalised.
+  Tracking reported `InsufficientLight` episodes in the frozen phases.
+  - Rotation comes from the IMU; position comes from visual SLAM, which the venue (people
+    moving, booth lighting) degraded.
+  - A world-fixed object is rendered at a fixed place in a frame that moves with the
+    drift, so it floats and swings.
+- **No other chain explains it.** A search over frame conventions, signs and a head-pose
+  delay of 0-0.3 s found no better chain than the implemented one.
+- **The filter amplified it.**
+  - Each target pose was averaged over the last 8 poses, and poses more than 3 cm off
+    were rejected: 30 of 69 on plate A, 33 of 73 on the board.
+  - So the overlay stayed at a stale, drifted position: median 48-56 mm, p90 230-315 mm
+    from the latest camera pose.
+  - Following the latest pose instead would leave only the drift between two locks:
+    median 17-20 mm, p90 32-55 mm, at 2 s spacing, from the same logs.
+- **"Floating in front".** This is the forward drift plus the stale anchor. A residual
+  depth offset from the display's own eye model (IPD and virtual image distance) cannot
+  be excluded yet; ADR-003 calls that eye-to-display calibration.
+
+### G5 rev. 2 (build `2026-10-22T09:52:28Z`)
+
+- **Follow the latest lock** (`LockAnchor`).
+  - A pose within 15 mm and 1.5° is blended in by half, which hides per-frame noise.
+  - Up to 10 cm, it replaces the anchor.
+  - A larger jump is applied only once the next pose agrees within 3 cm and 3°.
+  - Frozen: compared and logged, not applied.
+- **Faster updates.** A burst every 1.2 s, using its 2nd frame. The motion gate is
+  relaxed to 15°/s and 0.15 m/s; it skipped 35-46 % of bursts on 21 Oct.
+- **3DoF variants** (plate A, board). Rotation-only tracking cannot drift in position;
+  stepping sideways is corrected at the next lock.
+- **Several targets at once.** The pose service takes `--target plateA,board25` (the IDs
+  are disjoint); each target has its own anchor and colour (green, blue).
+- **Protocol 3 min.** The frozen steps are now "hold still" (does it drift while you
+  stand?) and one side-step; the 40 s walk is gone.
+
+### Demo gate (launcher `D`)
+
+No protocol; it runs until Esc. It shows the following, in 6DoF:
+
+- **A world grid**, 60 x 40 cm, 1.5 m ahead.
+- **Plate A and the 25 mm board**, each with its outline, markers and points locked by
+  the camera.
+- **The Eye's view** in the bottom-right corner: the latest burst frame, about once a
+  second.
+
+Operator keys on the Surface:
+
+| Key | Action |
+|---|---|
+| G | grid on/off |
+| P | place the grid 1.5 m along the wearer's gaze |
+| E | Eye view on/off |
+| T | target overlays on/off |
+| Esc | end |
+
+The pose service starts with both targets. If 6DoF drifts in the room, the targets
+still correct themselves at every lock. The world grid does not, and drifting is then
+what it shows.
+
+### Launcher
+
+The menu is now two levels:
+
+- **Main menu.** D demo, C calibrate, 1 G1, 2 G2, then 3 / 4 / 5 open the G3, G4 and
+  G5 submenus. K, M, V, O, Z, Q as before.
+- **Submenus.** Each lists its variants and has B for back.
+- **G5 submenu:**
+  1. plate A
+  2. plate L
+  3. board
+  4. plate A, 3DoF
+  5. board, 3DoF
+  6. plate A + board
+
+### Next session
+
+Order: **5 → 1** (plate A, 6DoF), **5 → 4** (plate A, 3DoF), **5 → 3** (board), then
+**D**.
+
+Note the following:
+
+- whether the overlay now stays on the target while standing;
+- how far it moves during the frozen still step;
+- whether 3DoF looks steadier than 6DoF in the same room.
+
+The calibration of 21 Oct stays valid (same glasses, same resolution).

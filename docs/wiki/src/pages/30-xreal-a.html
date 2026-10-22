@@ -1,0 +1,113 @@
+<article class="page" id="p-ost" data-group="xreal" data-en="Optical see-through requirements" data-it="Requisiti dell'ottico see-through">
+<header>
+  <div class="eyebrow"><span class="l-en">XREAL · ADR-003 (proposed, amended 8/10/2026)</span><span class="l-it">XREAL · ADR-003 (proposta, emendata l'8/10/2026)</span></div>
+  <h1><span class="l-en">What an optical see-through overlay needs</span><span class="l-it">Cosa richiede un overlay ottico see-through</span></h1>
+  <p class="lede l-en">In the glasses the specimen is seen directly through the optics and only the grid and points are drawn. Every term between the specimen and the wearer's eye must be known, and the overlay must not lag the head.</p>
+  <p class="lede l-it">Negli occhiali il provino si vede direttamente attraverso le ottiche e vengono disegnati solo la griglia e i punti. Ogni termine tra il provino e l'occhio di chi indossa deve essere noto, e l'overlay non deve restare indietro rispetto alla testa.</p>
+</header>
+<section>
+  <h2 class="col"><span class="l-en">Decision: the pose camera rides on the glasses</span><span class="l-it">Decisione: la camera di posa sta sugli occhiali</span></h2>
+  <div class="eq"><div class="tex" data-tex="\mathbf{T}_{\mathrm{eye}\leftarrow\mathrm{unv}}=\underbrace{\mathbf{T}_{\mathrm{display}\leftarrow\mathrm{head}}}_{\text{per user, per eye}}\;\underbrace{\mathbf{T}_{\mathrm{head}\leftarrow\mathrm{cam}}}_{\text{hardware constant}}\;\underbrace{\mathbf{T}_{\mathrm{cam}\leftarrow\mathrm{unv}}(t)}_{\text{vision pipeline}}"></div>
+  <p class="why l-en">With a head-mounted camera the middle factor is fixed at manufacture; with an external camera it becomes a per-frame unknown that would need its own tracker, to a better accuracy than the overlay. Hence the pose that drives the overlay must come from the glasses' camera; webcam poses remain valid for developing detection, registration and pose maths, not for driving the glasses. Multiple viewpoints are deferred, not rejected: a shared SLAM anchor would let several cameras and viewers register to one frame.</p>
+  <p class="why l-it">Con una camera montata sulla testa il fattore centrale è fissato in fabbrica; con una camera esterna diventa un'incognita per ogni frame che richiederebbe un proprio tracker, più accurato dell'overlay stesso. Quindi la posa che guida l'overlay deve venire dalla camera degli occhiali; le pose della webcam restano valide per sviluppare rilevamento, registrazione e matematica della posa, non per guidare gli occhiali. I punti di vista multipli sono rimandati, non esclusi: un'ancora SLAM condivisa permetterebbe a più camere e osservatori di registrarsi in un unico riferimento.</p></div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Video overlay vs optical see-through</span><span class="l-it">Overlay video e ottico see-through</span></h2>
+  <div class="tbl"><table class="txt">
+    <thead><tr><th></th><th><span class="l-en">Video overlay (diagnostic)</span><span class="l-it">Overlay video (diagnostico)</span></th><th><span class="l-en">Optical see-through (requirement)</span><span class="l-it">Ottico see-through (requisito)</span></th></tr></thead>
+    <tbody>
+      <tr><td><span class="l-en">Shown</span><span class="l-it">Cosa si vede</span></td><td class="wrap"><span class="l-en">captured image with a drawn wireframe</span><span class="l-it">immagine acquisita con wireframe disegnato</span></td><td class="wrap"><span class="l-en">only wireframe, labels, points; the specimen is seen directly</span><span class="l-it">solo wireframe, etichette, punti; il provino si vede direttamente</span></td></tr>
+      <tr><td><span class="l-en">World tracking</span><span class="l-it">Tracciamento del mondo</span></td><td><span class="l-en">no</span><span class="l-it">no</span></td><td><span class="l-en">yes</span><span class="l-it">sì</span></td></tr>
+      <tr><td><span class="l-en">Camera→head extrinsic</span><span class="l-it">Estrinseco camera→testa</span></td><td><span class="l-en">no</span><span class="l-it">no</span></td><td><span class="l-en">yes</span><span class="l-it">sì</span></td></tr>
+      <tr><td><span class="l-en">Eye position, display projection</span><span class="l-it">Posizione dell'occhio, proiezione del display</span></td><td><span class="l-en">no</span><span class="l-it">no</span></td><td><span class="l-en">yes, per user and per eye</span><span class="l-it">sì, per utente e per occhio</span></td></tr>
+      <tr><td><span class="l-en">Presentation-time compensation</span><span class="l-it">Compensazione al tempo di presentazione</span></td><td class="wrap"><span class="l-en">no (image and overlay share a timestamp)</span><span class="l-it">no (immagine e overlay hanno lo stesso timestamp)</span></td><td class="wrap"><span class="l-en">yes (the world has zero latency)</span><span class="l-it">sì (il mondo ha latenza nulla)</span></td></tr>
+      <tr><td><span class="l-en">Gate</span><span class="l-it">Criterio</span></td><td class="wrap"><span class="l-en">reprojection of known points in the displayed image</span><span class="l-it">riproiezione di punti noti nell'immagine mostrata</span></td><td class="wrap"><span class="l-en">error at held-out positions and depths, each eye, under motion, after repeated fitting</span><span class="l-it">errore in posizioni e profondità non usate per la stima, per occhio, in movimento, dopo stime ripetute</span></td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose l-en">
+    <p>Video displays can be calibrated with standard camera methods, whereas optical see-through displays leave no digital record of the incoming light [24]; the table is this project's reading of that distinction. A fullscreen video panel in the glasses is a diagnostic and is never described as a registered optical overlay. Per-eye display calibration needs a SPAAM-type procedure [23] with correspondences over depth, a repeatability check and held-out validation; a rigid offset fitted from four alignments at one distance does not qualify.</p>
+    <p>The wearer sees the scene through an electrochromic layer whose lightest setting still tints (powered-off is clearer than level 1 of 3). This raises overlay contrast but belongs in the lab protocol: task lighting on the specimen and a check that the operator sees hammer, structure and hands comfortably.</p>
+  </div>
+  <div class="prose l-it">
+    <p>I display video si calibrano con i metodi standard delle camere, mentre i display ottici see-through non lasciano alcuna registrazione digitale della luce entrante [24]; la tabella è la lettura che questo progetto dà di tale distinzione. Un pannello video a schermo intero negli occhiali è un diagnostico e non va mai descritto come overlay ottico registrato. La calibrazione del display per occhio richiede una procedura di tipo SPAAM [23] con corrispondenze a profondità diverse, un controllo di ripetibilità e una validazione su dati non usati; un offset rigido stimato da quattro allineamenti a una sola distanza non basta.</p>
+    <p>Chi indossa vede la scena attraverso uno strato elettrocromico che anche al livello più chiaro resta colorato (spento è più chiaro del livello 1 di 3). Questo aumenta il contrasto dell'overlay ma va considerato nel protocollo di laboratorio: illuminazione sul provino e verifica che l'operatore veda comodamente martello, struttura e mani.</p>
+  </div>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Order of work</span><span class="l-it">Ordine di lavoro</span></h2>
+  <div class="flow">
+    <div class="st"><em>1</em><b><span class="l-en">Eye camera source</span><span class="l-it">sorgente camera Eye</span></b><span class="l-en">frames with a known clock</span><span class="l-it">frame con orologio noto</span></div><div class="ar">→</div>
+    <div class="st"><em>2</em><b><span class="l-en">tracking + clock</span><span class="l-it">tracciamento + orologio</span></b><span class="l-en">6DoF pose, capture-time lookup</span><span class="l-it">posa 6DoF, lettura all'istante di acquisizione</span></div><div class="ar">→</div>
+    <div class="st"><em>3</em><b><span class="l-en">calibrations</span><span class="l-it">calibrazioni</span></b><span class="l-en">Eye intrinsics, camera→head, per-eye display</span><span class="l-it">intrinseci Eye, camera→testa, display per occhio</span></div><div class="ar">→</div>
+    <div class="st"><em>4</em><b><span class="l-en">static error</span><span class="l-it">errore statico</span></b><span class="l-en">held-out points, each eye</span><span class="l-it">punti di verifica, per occhio</span></div><div class="ar">→</div>
+    <div class="st"><em>5</em><b><span class="l-en">dynamic error</span><span class="l-it">errore dinamico</span></b><span class="l-en">under head motion</span><span class="l-it">con la testa in movimento</span></div>
+  </div>
+</section>
+<p class="src"><code>docs/adr/0003-eye-pov-rigid-coupling.draft.md</code>, <code>docs/AUDIT-2026-10-08.md</code> F13. [23] Tuceryan et al. 2002; [24] Gilson et al. 2011.</p>
+</article>
+
+<article class="page" id="p-hw" data-group="xreal" data-en="Hardware and hosts" data-it="Hardware e host">
+<header>
+  <div class="eyebrow"><span class="l-en">XREAL</span><span class="l-it">XREAL</span></div>
+  <h1><span class="l-en">Hardware and host machines</span><span class="l-it">Hardware e macchine host</span></h1>
+  <p class="lede l-en">The glasses have a single USB-C connector, so the host must deliver video and USB data on one cable. Of the two machines available, only the Surface does both.</p>
+  <p class="lede l-it">Gli occhiali hanno un solo connettore USB-C, quindi l'host deve fornire video e dati USB sullo stesso cavo. Delle due macchine disponibili, solo il Surface fa entrambe le cose.</p>
+</header>
+<section>
+  <div class="tbl col"><table class="kv"><tbody>
+    <tr><td><span class="l-en">Glasses</span><span class="l-it">Occhiali</span></td><td><span class="l-en">XREAL One Pro with the XREAL Eye camera (12 MP, video up to 1600×1200 per vendor; the PC SDK delivers 1280×720). Firmware updated by the vendor app after 25 September 2026; version not readable through the SDK. Further updates on hold until access routes are settled.</span><span class="l-it">XREAL One Pro con la camera XREAL Eye (12 MP, video fino a 1600×1200 secondo il produttore; il PC SDK fornisce 1280×720). Firmware aggiornato dall'app del produttore dopo il 25 settembre 2026; versione non leggibile tramite l'SDK. Altri aggiornamenti sospesi finché le vie di accesso non sono chiarite.</span></td></tr>
+    <tr><td><span class="l-en">Android host</span><span class="l-it">Host Android</span></td><td><span class="l-en">XREAL Beam Pro ordered on 14 May 2026, not arrived; no compatible Android phone available. The official SDK 3.1.0 route therefore has no host yet.</span><span class="l-it">XREAL Beam Pro ordinato il 14 maggio 2026, non arrivato; nessun telefono Android compatibile disponibile. La via ufficiale con SDK 3.1.0 non ha quindi ancora un host.</span></td></tr>
+  </tbody></table></div>
+  <div class="tbl"><table class="txt">
+    <thead><tr><th></th><th><span class="l-en">Desktop</span><span class="l-it">Desktop</span></th><th>Surface Pro 7</th></tr></thead>
+    <tbody>
+      <tr><td>GPU</td><td class="wrap">RTX 5060 <span class="l-en">(no integrated GPU)</span><span class="l-it">(nessuna GPU integrata)</span></td><td class="wrap">Intel <span class="l-en">integrated</span><span class="l-it">integrata</span></td></tr>
+      <tr><td><span class="l-en">USB data to glasses</span><span class="l-it">Dati USB agli occhiali</span></td><td><span class="l-en">yes</span><span class="l-it">sì</span></td><td><span class="l-en">yes</span><span class="l-it">sì</span></td></tr>
+      <tr><td><span class="l-en">Glasses as display</span><span class="l-it">Occhiali come display</span></td><td class="wrap"><span class="l-en">no: board DP Alt Mode needs the missing iGPU</span><span class="l-it">no: il DP Alt Mode della scheda richiede l'iGPU assente</span></td><td><span class="l-en">yes (S1, 22/09/2026)</span><span class="l-it">sì (S1, 22/09/2026)</span></td></tr>
+      <tr><td><span class="l-en">Sustained XR load</span><span class="l-it">Carico XR prolungato</span></td><td>–</td><td class="wrap"><span class="l-en">throttles to 45–60 % of nominal clock ≈ 50 s into XR; holds full clock for 5 min with a fan and the light runtime</span><span class="l-it">riduce il clock al 45–60 % del nominale ≈ 50 s dopo l'avvio XR; mantiene il clock pieno per 5 min con una ventola e il runtime leggero</span></td></tr>
+      <tr><td><span class="l-en">Windows security</span><span class="l-it">Sicurezza Windows</span></td><td>–</td><td class="wrap"><span class="l-en">Smart App Control must be off: the PC SDK runtime libraries are unsigned</span><span class="l-it">Smart App Control va disattivato: le librerie del runtime PC SDK non sono firmate</span></td></tr>
+      <tr><td><span class="l-en">Role</span><span class="l-it">Ruolo</span></td><td class="wrap"><span class="l-en">native API probing, builds, analysis</span><span class="l-it">sonde dell'API nativa, build, analisi</span></td><td class="wrap"><span class="l-en">display path, PC SDK gate runs, portable demos</span><span class="l-it">percorso display, prove dei gate PC SDK, dimostrazioni portatili</span></td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose l-en"><p><b>Decision (14 October 2026):</b> no Thunderbolt DP-in card for the desktop. The target host is the Beam Pro, which is not much faster than the Surface, and a desktop-only setup could not be reproduced elsewhere. The pipeline is made lighter instead: no video in the glasses, camera frames analysed only, short camera bursts, 6DoF only where needed.</p></div>
+  <div class="prose l-it"><p><b>Decisione (14 ottobre 2026):</b> nessuna scheda Thunderbolt con ingresso DP per il desktop. L'host finale è il Beam Pro, non molto più veloce del Surface, e un setup solo desktop non sarebbe riproducibile altrove. Si alleggerisce invece la pipeline: nessun video negli occhiali, frame della camera solo analizzati, brevi raffiche della camera, 6DoF solo dove serve.</p></div>
+  <p class="cap l-en">Still to record: Surface CPU/RAM variant, desktop webcam model, current glasses firmware.</p>
+  <p class="cap l-it">Da registrare: variante CPU/RAM del Surface, modello della webcam desktop, firmware attuale degli occhiali.</p>
+</section>
+<p class="src"><code>docs/HARDWARE.md</code> (16/10/2026), <code>AGENTS.md</code>, <code>CONTEXT.md</code>.</p>
+</article>
+
+<article class="page" id="p-xaccess" data-group="xreal" data-en="Glasses data access" data-it="Accesso ai dati degli occhiali">
+<header>
+  <div class="eyebrow"><span class="l-en">XREAL · September–October 2026</span><span class="l-it">XREAL · settembre–ottobre 2026</span></div>
+  <h1><span class="l-en">Access to camera and tracking data</span><span class="l-it">Accesso ai dati di camera e tracciamento</span></h1>
+  <p class="lede l-en">Camera access is the project's critical dependency. A stage ladder (S0–S6) tested the vendor's native Windows API first; the PC SDK 3.1.2 preview then delivered the data the native route could not.</p>
+  <p class="lede l-it">L'accesso alla camera è la dipendenza critica del progetto. Una scala di stadi (S0–S6) ha provato prima l'API nativa Windows del produttore; l'anteprima del PC SDK 3.1.2 ha poi fornito i dati che la via nativa non dava.</p>
+</header>
+<section>
+  <h2 class="col"><span class="l-en">Native API stages (pre firmware update)</span><span class="l-it">Stadi dell'API nativa (prima dell'aggiornamento firmware)</span></h2>
+  <div class="tbl"><table class="txt">
+    <thead><tr><th><span class="l-en">Stage</span><span class="l-it">Stadio</span></th><th><span class="l-en">Goal</span><span class="l-it">Obiettivo</span></th><th><span class="l-en">Result</span><span class="l-it">Risultato</span></th></tr></thead>
+    <tbody>
+      <tr><td>S0</td><td class="wrap"><span class="l-en">Device identity</span><span class="l-it">Identità del dispositivo</span></td><td class="wrap"><span class="pill good">22/09</span> <span class="l-en">Vendor library loads standalone; glasses enumerate; firmware version not readable.</span><span class="l-it">La libreria del produttore si carica da sola; gli occhiali vengono enumerati; versione firmware non leggibile.</span></td></tr>
+      <tr><td>S1</td><td class="wrap"><span class="l-en">Display smoke test</span><span class="l-it">Prova del display</span></td><td class="wrap"><span class="pill good">22/09</span> <span class="l-en">All line widths and colours legible; black is transmissive; electrochromic floor noted.</span><span class="l-it">Tutti gli spessori e i colori leggibili; il nero è trasparente; rilevato il limite elettrocromico.</span></td></tr>
+      <tr><td>S2</td><td class="wrap"><span class="l-en">Native API initialisation</span><span class="l-it">Inizializzazione dell'API nativa</span></td><td class="wrap"><span class="pill good">23/09</span> <span class="l-en">Initialises standalone without a graphics context (NR 3.1.1). An unplugged negative control returned the same codes, so device link is checked from the SDK log, not return codes.</span><span class="l-it">Si inizializza da sola senza contesto grafico (NR 3.1.1). Un controllo negativo a occhiali scollegati ha dato gli stessi codici, quindi il collegamento si verifica dal log dell'SDK e non dai codici di ritorno.</span></td></tr>
+      <tr><td>S3</td><td class="wrap"><span class="l-en">Raw IMU</span><span class="l-it">IMU grezza</span></td><td class="wrap"><span class="pill bad">23–24/09</span> <span class="l-en">Refused with <code>LicenseFeatureUnsupported</code>; the grayscale tracking camera is refused the same way. XREAL's FAQ states that raw camera and IMU data require the Enterprise SDK.</span><span class="l-it">Rifiutata con <code>LicenseFeatureUnsupported</code>; la camera in scala di grigi del tracciamento è rifiutata allo stesso modo. Le FAQ di XREAL indicano che i dati grezzi di camera e IMU richiedono l'SDK Enterprise.</span></td></tr>
+      <tr><td>S3b</td><td class="wrap"><span class="l-en">Fused head pose</span><span class="l-it">Posa della testa fusa</span></td><td class="wrap"><span class="pill bad">25/09</span> <span class="l-en">Not licence-gated; the full call chain runs (1930 poses) but every pose is the identity with tracking state <code>Initializing</code>. Passing the device clock changed nothing.</span><span class="l-it">Non soggetta a licenza; l'intera catena di chiamate funziona (1930 pose) ma ogni posa è l'identità con stato di tracciamento <code>Initializing</code>. Passare l'orologio del dispositivo non cambia nulla.</span></td></tr>
+      <tr><td>S4–S6</td><td class="wrap"><span class="l-en">Factory calibration, Eye frames, eye-POV overlay</span><span class="l-it">Calibrazione di fabbrica, frame Eye, overlay dal punto di vista dell'occhio</span></td><td class="wrap"><span class="l-en">Superseded by the PC SDK gates (G1–G5).</span><span class="l-it">Superati dai gate del PC SDK (G1–G5).</span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="cap l-en">All S-stage results predate the firmware update and are to be repeated before being used as statements about the current unit. The audit (F09) also tightened what counts as "data delivered": finite rigid poses, valid tracking state, increasing device timestamps, sufficient duration, a motion response and an unplugged negative control.</p>
+  <p class="cap l-it">Tutti i risultati degli stadi S sono precedenti all'aggiornamento firmware e vanno ripetuti prima di usarli come affermazioni sull'unità attuale. L'audit (F09) ha anche reso più stringente cosa conta come "dati forniti": pose rigide finite, stato di tracciamento valido, timestamp del dispositivo crescenti, durata sufficiente, risposta al movimento e controllo negativo a occhiali scollegati.</p>
+</section>
+<section>
+  <h2 class="col"><span class="l-en">Current position</span><span class="l-it">Situazione attuale</span></h2>
+  <ul class="find">
+    <li><span class="pill good">Windows</span><span class="l-en">The XREAL PC SDK 3.1.2 preview, run on the Surface, delivers Eye frames and a working 6DoF head pose (<a href="#gates">Gates</a>). This is the current development route; the main Unity project stays on SDK 3.1.0.</span><span class="l-it">L'anteprima del PC SDK XREAL 3.1.2, eseguita sul Surface, fornisce i frame della Eye e una posa 6DoF funzionante (<a href="#gates">Gate</a>). È la via di sviluppo attuale; il progetto Unity principale resta su SDK 3.1.0.</span></li>
+    <li><span class="pill info">Android</span><span class="l-en">The officially documented camera route (SDK 3.1.0, <code>XREALRGBCameraTexture</code>, YUV_420_888) needs an Android host; none is available yet. The final application remains a generic Android APK.</span><span class="l-it">La via ufficialmente documentata per la camera (SDK 3.1.0, <code>XREALRGBCameraTexture</code>, YUV_420_888) richiede un host Android; per ora non è disponibile. L'applicazione finale resta un APK Android generico.</span></li>
+    <li><span class="pill warn"><span class="l-en">licence</span><span class="l-it">licenza</span></span><span class="l-en">Raw IMU and grayscale camera are Enterprise features. A request for research access was sent to XREAL in October 2026; no answer is recorded. The current design (fused 6DoF + Eye frames) does not depend on them.</span><span class="l-it">IMU grezza e camera in scala di grigi sono funzioni Enterprise. Una richiesta di accesso per ricerca è stata inviata a XREAL a ottobre 2026; non risulta una risposta. L'impostazione attuale (6DoF fusa + frame Eye) non ne dipende.</span></li>
+    <li><span class="pill mute"><span class="l-en">emulator</span><span class="l-it">emulatore</span></span><span class="l-en">An Android emulator on Windows is a lower-priority, unverified option: USB forwarding does not give Android the physical display path.</span><span class="l-it">Un emulatore Android su Windows è un'opzione secondaria e non verificata: l'inoltro USB non dà ad Android il percorso fisico del display.</span></li>
+  </ul>
+</section>
+<p class="src"><code>docs/adr/0003-eye-pov-rigid-coupling.draft.md</code> (S-ladder), <code>docs/S3-HANDOVER-2026-09-25.md</code>, <code>docs/XREAL-PC-BETA-2026-10-09.md</code>, <code>docs/CAPABILITIES.md</code> rows 1–8, 11, 14; <code>docs/AUDIT-2026-10-08.md</code> F09.</p>
+</article>

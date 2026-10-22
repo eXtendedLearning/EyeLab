@@ -4,7 +4,7 @@
 - ``summary [run ...]``: one line per run.
 - ``calibrate RUN|--latest-in DIR [--out YAML]``: Eye intrinsics from a ``-gate calib`` run.
 - ``anchor RUN --target plateA|plateL|board25 [--calib YAML]``: offline lock test of an XR run.
-- ``serve --target ... [--calib YAML] [--port 8765]``: the G5 pose service (ADR-001 Step C).
+- ``serve --target plateA[,board25] [--calib YAML] [--port 8765]``: the G5 and demo pose service (ADR-001 Step C).
 """
 
 from __future__ import annotations
@@ -37,7 +37,8 @@ def main(argv=None) -> int:
     p_anc.add_argument("--target", required=True, choices=TARGET_NAMES)
     p_anc.add_argument("--calib", type=Path, help="calibration YAML (default: repo calibration, else vendor)")
     p_srv = sub.add_parser("serve", help="G5 pose service on ws://127.0.0.1:PORT")
-    p_srv.add_argument("--target", required=True, choices=TARGET_NAMES)
+    p_srv.add_argument("--target", required=True,
+                       help=f"one or more of {', '.join(TARGET_NAMES)}, comma-separated (demo: plateA,board25)")
     p_srv.add_argument("--calib", type=Path, help="calibration YAML (default: repo calibration, else vendor)")
     p_srv.add_argument("--port", type=int, default=8765)
     p_srv.add_argument("--idle-timeout", type=float, default=600.0)

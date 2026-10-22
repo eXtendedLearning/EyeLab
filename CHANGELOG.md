@@ -8,12 +8,32 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.3.000<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.3.001<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
+
+### Added
+
+- (0.3.001) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §18).
+  - **First G5 runs (17-21 Oct, metroXRAINE).** The Eye calibration is good (98 % coverage,
+    0.47 px; the vendor fx is 2.7 % short). The overlay floated because the headset's
+    6DoF *position* drifted (10 cm in 30 s standing, metres while walking) while the camera
+    poses were steady, and the 8-pose anchor with a 3 cm gate held a stale position.
+  - **G5 rev. 2.** The anchor follows the latest lock (half-blend under 15 mm, replace up to
+    10 cm, confirm larger jumps). A burst every 1.2 s. Relaxed motion gate. 3DoF variants.
+    Shorter frozen steps.
+  - **Several targets per pose service** (`--target plateA,board25`).
+  - **Demo gate** (launcher `D`): world grid, plate A and 25 mm board locked by the camera,
+    and the Eye view, until Esc; operator keys G/P/E/T.
+  - **Launcher submenus** for G3, G4 and G5.
+  - Rebuilt: `LATEST_BUILD.txt` 2026-10-22T09:52:28Z.
+- Bilingual (EN/IT) project wiki `docs/wiki/` (`index.html`, sources in `src/`,
+  `build_wiki.py`): architecture, vision pipeline with equations, validation method and
+  campaign 1 results (merging the B1/B1b report of 16 Oct), XREAL requirements and gate
+  results, decisions, audit status, roadmap, glossary and references.
 
 ## [0.3.000] — 2026-10-17
 

@@ -45,8 +45,10 @@ namespace EyeLabGates
         const float BridgeConnectTimeout = 15f;
         // G5: a frame is sent for a lock only while the head is nearly still, so that the head pose at
         // receipt stands in for the (unmeasured) pose at exposure.
-        const float MaxLockDegPerSec = 10f;
-        const float MaxLockMetresPerSec = 0.08f;
+        // Relaxed 22 Oct: on 21 Oct 35-46 % of bursts were skipped, partly on drift-induced "motion".
+        const float MaxLockDegPerSec = 15f;
+        const float MaxLockMetresPerSec = 0.15f;
+        const float DemoGridDistance = 1.5f;
         const float HeadHistorySeconds = 0.5f;
         const float HeadSpeedWindow = 0.25f;
         const float TrackingReadyHold = 1f;
@@ -89,10 +91,13 @@ namespace EyeLabGates
         Task<PoseResult> m_PoseTask;
         PendingLock m_Pending;
         long m_LockSeq;
-        int m_LocksSent, m_LocksPosed, m_LocksAccepted;
+        int m_LocksSent, m_LocksPosed;
         bool m_HasRgbFromHead;
         Pose m_RgbFromHead;
-        readonly LockAnchor m_Anchor = new LockAnchor();
+        readonly Dictionary<string, LockAnchor> m_Anchors = new Dictionary<string, LockAnchor>();
+        readonly Dictionary<string, string> m_TargetStatus = new Dictionary<string, string>();
+        readonly Dictionary<string, double> m_LastApplied = new Dictionary<string, double>();
+        bool m_ShowTargets = true;
         readonly Queue<HeadSample> m_HeadHistory = new Queue<HeadSample>();
 
         struct HeadSample { public double T; public Vector3 Position; public Quaternion Rotation; }
@@ -125,13 +130,18 @@ namespace EyeLabGates
         public double StepEnd { get; private set; } = double.NaN;
         public bool IsCooldown => m_Args != null && m_Args.Gate == GateKind.Cooldown;
         /// <summary>G4: banner at the top, no camera preview, so the overlay in the middle stays clear.</summary>
-        public bool IsLight => m_Args != null && (m_Args.Gate == GateKind.G4 || m_Args.Gate == GateKind.G5);
+        public bool IsLight => m_Args != null && (m_Args.Gate == GateKind.G4 || m_Args.Gate == GateKind.G5 || m_Args.Gate == GateKind.Demo);
         public int Bursts => m_Bursts;
         public bool IsG5 => m_Args != null && m_Args.Gate == GateKind.G5;
+        public bool IsDemo => m_Args != null && m_Args.Gate == GateKind.Demo;
+        /// <summary>G5 and demo: camera bursts feed the pose bridge.</summary>
+        public bool IsLocking => IsG5 || IsDemo;
+        /// <summary>Demo: show the latest Eye frame in a corner (key E).</summary>
+        public bool ShowEyeView { get; private set; }
         public bool IsCalib => m_Args != null && m_Args.Gate == GateKind.Calib;
         /// <summary>Calibration: where the board should be in the image (normalised, y down), or null.</summary>
         public Rect? CalibZone { get; private set; }
-        /// <summary>G5: one line for the HUD, and its state (0 none, 1 locked, 2 searching, 3 frozen).</summary>
+        /// <summary>G5/demo: one line for the HUD (all targets), and its state (0 none, 1 locked, 2 searching, 3 frozen).</summary>
         public string LockStatus { get; private set; } = "";
         public int LockState { get; private set; }
 
@@ -163,7 +173,7 @@ namespace EyeLabGates
             }
 
             // G4 and G5 save exactly one snapshot per burst (its last frame) instead of one every 2 s.
-            m_Camera.Attach(m_Log, m_Source, (m_Args.Gate == GateKind.G4 || m_Args.Gate == GateKind.G5) ? double.PositiveInfinity : m_Args.SnapshotEvery);
+            m_Camera.Attach(m_Log, m_Source, (m_Args.Gate == GateKind.G4 || m_Args.Gate == GateKind.G5 || m_Args.Gate == GateKind.Demo) ? double.PositiveInfinity : m_Args.SnapshotEvery);
             m_Pose.Attach(m_Log);
             m_Device.Attach(m_Log);
             m_Display.Attach(m_Log);
@@ -235,6 +245,7 @@ namespace EyeLabGates
                 case GateKind.G3: m_Sequence = StartCoroutine(RunG3()); break;
                 case GateKind.G4: m_Sequence = StartCoroutine(RunG4()); break;
                 case GateKind.G5: m_Sequence = StartCoroutine(RunG5()); break;
+                case GateKind.Demo: ShowEyeView = true; m_Sequence = StartCoroutine(RunDemo()); break;
                 case GateKind.Calib: m_Sequence = StartCoroutine(RunCalib()); break;
                 case GateKind.Cooldown: m_Sequence = StartCoroutine(RunCooldown()); break;
                 default:
@@ -446,14 +457,42 @@ namespace EyeLabGates
         }
 
         /// <summary>
-        /// G5 locked overlay (guide §17): G4's light runtime (30 fps, 6DoF, camera bursts) plus the
-        /// ADR-001 pose bridge. The last frame of each burst goes to the pose service while the head is
-        /// nearly still; each pose is chained with the head pose and the RGB-camera-from-head pose into
-        /// a world pose of the target, which <see cref="LockAnchor"/> filters. The overlay is drawn there.
+        /// G5 locked overlay (guide §17-18): G4's light runtime (30 fps, camera bursts) plus the ADR-001
+        /// pose bridge. The last frame of each burst goes to the pose service while the head is nearly
+        /// still; each target pose is chained with the head pose and the RGB-camera-from-head pose into a
+        /// world pose, which that target's <see cref="LockAnchor"/> follows. <c>-order 3dof</c> runs the
+        /// same lock with rotation-only tracking (no position drift; stepping is corrected at the next lock).
         /// </summary>
         IEnumerator RunG5()
         {
-            Say($"Gate five. Locked overlay on {SpokenTarget(m_Args.Target)}.");
+            Say($"Gate five. Locked overlay on {SpokenTargets()}.");
+            yield return StartLocking(m_Args.Order == "3dof" ? TrackingType.MODE_3DOF : TrackingType.MODE_6DOF);
+            if (m_Quitting) yield break;
+            yield return RunProtocol(GateProtocol.G5());
+            yield return StopLocking();
+            yield return Quit("COMPLETED");
+        }
+
+        /// <summary>
+        /// Demo (guide §18): no protocol, runs until Esc. A world-fixed grid, the targets' overlays locked
+        /// by the camera (default plate A and the 25 mm board, each in its own colour), and the Eye's view
+        /// (the latest burst frame) in a corner. Keys on the Surface: G grid on/off, P place the grid where
+        /// the wearer looks, E Eye view on/off, T target overlays on/off, Esc end.
+        /// </summary>
+        IEnumerator RunDemo()
+        {
+            Say("EyeLab demo.");
+            yield return StartLocking(TrackingType.MODE_6DOF);
+            if (m_Quitting) yield break;
+            Show("demo", "EYELAB DEMO", "G grid   P place grid   E eye view   T targets   Esc end", "");
+            PlaceOverlay("demo_start", DemoGridDistance);
+            m_InProtocol = true; // "Tracking lost" cues
+            while (!m_Quitting) yield return null;
+        }
+
+        /// <summary>Connects the pose service, builds the overlays, enters XR, starts the bursts.</summary>
+        IEnumerator StartLocking(TrackingType tracking)
+        {
             string connect = null;
             yield return Connect(r => connect = r);
             if (connect != "OK") { yield return Quit(connect); yield break; }
@@ -461,9 +500,8 @@ namespace EyeLabGates
             // Pose service first, so a missing service ends the run before XR starts.
             Show("bridge", "CONNECTING TO POSE SERVICE", $"ws://127.0.0.1:{m_Args.Port} ({m_Args.Target})", "");
             m_WsBridge = new WebSocketPoseBridge();
-            float[] vendor = VendorIntrinsics();
-            Task<TargetOverlayGeometry> hello = m_WsBridge.ConnectAsync(m_Args.Port, m_Args.Target, Guid.NewGuid().ToString("N").Substring(0, 12),
-                                                                        m_Log.Directory, vendor, m_BridgeCts.Token);
+            Task hello = m_WsBridge.ConnectAsync(m_Args.Port, m_Args.TargetList, Guid.NewGuid().ToString("N").Substring(0, 12),
+                                                 m_Log.Directory, VendorIntrinsics(), m_BridgeCts.Token);
             yield return WaitUntilOrTimeout(() => hello.IsCompleted, BridgeConnectTimeout);
             if (!hello.IsCompleted || hello.IsFaulted || hello.IsCanceled)
             {
@@ -473,37 +511,49 @@ namespace EyeLabGates
                 yield return Quit("NO_SERVICE");
                 yield break;
             }
-            TargetOverlayGeometry geometry = hello.Result;
             m_Bridge = m_WsBridge;
-            m_Log.Event("bridge", "CONNECTED",
-                $"target={geometry.Target} label=\"{geometry.Label}\" segments={geometry.Segments.Length / 6} " +
-                $"points={geometry.Points.Length / 3} camera={geometry.CameraSource} ({geometry.CameraDescription})");
-            m_Overlay.BuildTarget(geometry);
-            if (geometry.CameraSource != "calibration") Say("Warning. No Eye calibration, using the vendor values.");
+            m_Log.Event("bridge", "CONNECTED", $"camera={m_WsBridge.CameraSource} ({m_WsBridge.CameraDescription})");
+            foreach (var g in m_WsBridge.Overlays)
+            {
+                m_Overlay.BuildTarget(g);
+                m_Anchors[g.Target] = new LockAnchor();
+                m_TargetStatus[g.Target] = "searching";
+                m_Log.Event("target", g.Target, $"label=\"{g.Label}\" segments={g.Segments.Length / 6} points={g.Points.Length / 3}");
+            }
+            if (m_WsBridge.CameraSource != "calibration") Say("Warning. No Eye calibration, using the vendor values.");
 
             string xr = null;
             yield return StartXR(r => xr = r);
             if (xr != "OK") { yield return Quit(xr); yield break; }
-            yield return SwitchTracking(TrackingType.MODE_6DOF);
-            bool ready = false;
-            yield return WaitTrackingReady(r => ready = r);
-            if (!ready) Say("Continuing without tracking ready");
+            yield return SwitchTracking(tracking);
+            if (tracking == TrackingType.MODE_6DOF)
+            {
+                bool ready = false;
+                yield return WaitTrackingReady(r => ready = r);
+                if (!ready) Say("Continuing without tracking ready");
+            }
             ReadRgbFromHead();
-
-            LockStatus = "SEARCHING: look at the target";
-            LockState = 2;
+            UpdateLockStatus();
             StartCoroutine(BurstLoop());
-            yield return RunProtocol(GateProtocol.G5());
-            m_Bursting = false;
-            if (m_Source.IsCapturing) StopCapture("end");
-            m_Log.Event("lock_summary", m_LocksAccepted,
-                $"sent={m_LocksSent} posed={m_LocksPosed} accepted={m_LocksAccepted} bursts={m_Bursts} " +
-                $"window={m_Anchor.Count}");
-            yield return Quit("COMPLETED");
         }
 
-        static string SpokenTarget(string t) =>
-            t == "plateA" ? "plate A" : t == "plateL" ? "plate L" : t == "board25" ? "the calibration board" : t;
+        IEnumerator StopLocking()
+        {
+            m_Bursting = false;
+            if (m_Source.IsCapturing) StopCapture("end");
+            foreach (var kv in m_Anchors)
+                m_Log.Event("lock_summary", kv.Key,
+                    $"applied={kv.Value.Applied} sent={m_LocksSent} frames_posed={m_LocksPosed} bursts={m_Bursts}");
+            yield break;
+        }
+
+        string SpokenTargets()
+        {
+            var names = new List<string>();
+            foreach (string t in m_Args.TargetList)
+                names.Add(t == "plateA" ? "plate A" : t == "plateL" ? "plate L" : t == "board25" ? "the calibration board" : t);
+            return string.Join(" and ", names);
+        }
 
         static float[] VendorIntrinsics()
         {
@@ -546,7 +596,7 @@ namespace EyeLabGates
 
         void RecordHead(double now)
         {
-            if (!IsG5 || !XRActive) return;
+            if (!IsLocking || !XRActive) return;
             Transform head = Head();
             if (head == null) return;
             m_HeadHistory.Enqueue(new HeadSample { T = now, Position = head.position, Rotation = head.rotation });
@@ -606,46 +656,80 @@ namespace EyeLabGates
             {
                 string why = task.IsFaulted ? task.Exception?.GetBaseException().Message : "cancelled";
                 m_Log.Event("lock", "BRIDGE_ERROR", $"seq={pending.Seq} {why}");
-                LockStatus = "POSE SERVICE ERROR";
-                LockState = 2;
+                foreach (var k in new List<string>(m_TargetStatus.Keys)) m_TargetStatus[k] = "service error";
+                UpdateLockStatus();
                 return;
             }
             PoseResult r = task.Result;
-            string common = $"seq={pending.Seq} markers={r.Markers} points={r.Points} rms_px={r.RmsPx.ToString("F2", CultureInfo.InvariantCulture)} " +
-                            $"service_ms={r.ServiceMs.ToString("F0", CultureInfo.InvariantCulture)} rt_ms={r.RoundTripMs.ToString("F0", CultureInfo.InvariantCulture)} " +
-                            $"cam_ts={pending.CamTs}";
-            if (!r.Ok)
+            if (!string.IsNullOrEmpty(r.Error)) m_Log.Event("lock", "SERVICE_ERROR", $"seq={pending.Seq} {r.Error}");
+            bool anyPose = false;
+            foreach (TargetPose tp in r.Targets)
             {
-                m_Log.Event("lock", "NO_POSE", $"{common} reason=\"{r.Reason}\"");
-                if (!m_Anchor.HasAnchor) { LockStatus = $"SEARCHING: {r.Reason}"; LockState = 2; }
-                return;
+                if (!m_Anchors.TryGetValue(tp.Target, out LockAnchor anchor)) continue;
+                string common = $"target={tp.Target} seq={pending.Seq} markers={tp.Markers} points={tp.Points} " +
+                                $"rms_px={tp.RmsPx.ToString("F2", CultureInfo.InvariantCulture)} " +
+                                $"service_ms={r.ServiceMs.ToString("F0", CultureInfo.InvariantCulture)} rt_ms={r.RoundTripMs.ToString("F0", CultureInfo.InvariantCulture)} " +
+                                $"cam_ts={pending.CamTs} head={V(pending.HeadPosition)}";
+                if (!tp.Ok)
+                {
+                    // An absent target is the normal case when another one is in view: log only real failures.
+                    if (tp.Markers > 0) m_Log.Event("lock", "NO_POSE", $"{common} reason=\"{tp.Reason}\"");
+                    if (!anchor.HasAnchor) m_TargetStatus[tp.Target] = tp.Markers > 0 ? tp.Reason : "searching";
+                    continue;
+                }
+                anyPose = true;
+                Quaternion camRot = CvRotationToUnity(tp.RotationRowMajor);
+                Vector3 camPos = new Vector3(tp.TranslationCv.x, -tp.TranslationCv.y, tp.TranslationCv.z);
+                Vector3 worldPos = pending.HeadPosition + pending.HeadRotation * (m_RgbFromHead.rotation * camPos + m_RgbFromHead.position);
+                Quaternion worldRot = pending.HeadRotation * m_RgbFromHead.rotation * camRot;
+                LockAnchor.Result res = anchor.Add(worldPos, worldRot);
+                m_Log.Event("lock", res.Kind.ToString().ToUpperInvariant(),
+                    $"{common} jump_mm={(res.JumpMetres * 1000f).ToString("F1", CultureInfo.InvariantCulture)} " +
+                    $"jump_deg={res.JumpDegrees.ToString("F2", CultureInfo.InvariantCulture)} " +
+                    $"dist_m={tp.TranslationCv.magnitude.ToString("F3", CultureInfo.InvariantCulture)} world={V(worldPos)} anchor={V(anchor.Position)}");
+                if (res.Moved)
+                {
+                    if (m_ShowTargets) m_Overlay.SetTargetPose(tp.Target, anchor.Position, anchor.Rotation);
+                    m_LastApplied[tp.Target] = Time.realtimeSinceStartupAsDouble;
+                }
+                if (res.Kind == LockAnchor.Kind.First)
+                {
+                    m_Audio.PlayOneShot(m_ReadyBeep);
+                    Say(IsDemo ? "Target locked" : "Locked");
+                    Screenshot("first_lock_" + tp.Target, force: true);
+                }
+                string jump = $"{(res.JumpMetres * 1000f).ToString("F0", CultureInfo.InvariantCulture)} mm";
+                m_TargetStatus[tp.Target] = res.Kind == LockAnchor.Kind.Frozen ? $"FROZEN, camera says {jump} off"
+                    : res.Kind == LockAnchor.Kind.Pending ? $"jump of {jump} waiting for confirmation"
+                    : $"LOCKED, last correction {jump}";
             }
-            m_LocksPosed++;
-            Quaternion camRot = CvRotationToUnity(r.RotationRowMajor);
-            Vector3 camPos = new Vector3(r.TranslationCv.x, -r.TranslationCv.y, r.TranslationCv.z);
-            Vector3 worldPos = pending.HeadPosition + pending.HeadRotation * (m_RgbFromHead.rotation * camPos + m_RgbFromHead.position);
-            Quaternion worldRot = pending.HeadRotation * m_RgbFromHead.rotation * camRot;
-            LockAnchor.Result res = m_Anchor.Add(worldPos, worldRot);
-            if (res.Kind == LockAnchor.Kind.Accepted || res.Kind == LockAnchor.Kind.First || res.Kind == LockAnchor.Kind.Relocked)
-                m_LocksAccepted++;
-            m_Log.Event("lock", res.Kind.ToString().ToUpperInvariant(),
-                $"{common} jump_mm={(res.JumpMetres * 1000f).ToString("F1", CultureInfo.InvariantCulture)} " +
-                $"jump_deg={res.JumpDegrees.ToString("F2", CultureInfo.InvariantCulture)} window={m_Anchor.Count} " +
-                $"dist_m={r.TranslationCv.magnitude.ToString("F3", CultureInfo.InvariantCulture)} world={V(worldPos)} anchor={V(m_Anchor.Position)}");
-            if (res.Moved) m_Overlay.SetTargetPose(m_Anchor.Position, m_Anchor.Rotation);
-            if (res.Kind == LockAnchor.Kind.First)
+            if (anyPose) m_LocksPosed++;
+            UpdateLockStatus();
+        }
+
+        void UpdateLockStatus()
+        {
+            var parts = new List<string>();
+            bool anyLive = false, anyFrozen = false;
+            foreach (var kv in m_TargetStatus)
             {
-                m_Audio.PlayOneShot(m_ReadyBeep);
-                Say("Locked");
-                Screenshot("first_lock", force: true);
+                if (m_Anchors.TryGetValue(kv.Key, out var a) && a.HasAnchor)
+                {
+                    if (a.Frozen) anyFrozen = true;
+                    else anyLive = true;
+                }
+                parts.Add($"{kv.Key}: {kv.Value}");
             }
-            string jump = $"{(res.JumpMetres * 1000f).ToString("F0", CultureInfo.InvariantCulture)} mm";
-            switch (res.Kind)
-            {
-                case LockAnchor.Kind.Frozen: LockStatus = $"FROZEN: camera says {jump} off"; LockState = 3; break;
-                case LockAnchor.Kind.Rejected: LockStatus = $"LOCKED, last pose rejected ({jump} off)"; LockState = 1; break;
-                default: LockStatus = $"LOCKED ({m_Anchor.Count} poses, last {jump})"; LockState = 1; break;
-            }
+            int state = anyLive ? 1 : anyFrozen ? 3 : 2;
+            LockStatus = string.Join("   |   ", parts);
+            LockState = state;
+        }
+
+        void SetFrozen(bool frozen, string step)
+        {
+            foreach (var a in m_Anchors.Values) a.Frozen = frozen;
+            m_Log.Event("anchor", frozen ? "FROZEN" : "LIVE", step);
+            UpdateLockStatus();
         }
 
         /// <summary>OpenCV rotation (row-major) to Unity: F R F with F = diag(1, -1, 1) (THEORY §6.3).</summary>
@@ -660,7 +744,9 @@ namespace EyeLabGates
         static string V(Vector3 v) =>
             $"{v.x.ToString("F4", CultureInfo.InvariantCulture)},{v.y.ToString("F4", CultureInfo.InvariantCulture)},{v.z.ToString("F4", CultureInfo.InvariantCulture)}";
 
-        void PlaceOverlay(string why)
+        void PlaceOverlay(string why) => PlaceOverlay(why, OverlayDistance);
+
+        void PlaceOverlay(string why, float distance)
         {
             Transform head = Camera.main != null ? Camera.main.transform : null;
             if (head == null)
@@ -669,7 +755,7 @@ namespace EyeLabGates
                 head = cam != null ? cam.transform : null;
             }
             if (head == null) { m_Log.Event("overlay", "NO_CAMERA", why); return; }
-            m_Overlay.PlaceInFront(head, OverlayDistance);
+            m_Overlay.PlaceInFront(head, distance);
             Vector3 p = m_Overlay.Position;
             m_Log.Event("overlay", "PLACED",
                 $"{why} pos={p.x.ToString("F3", CultureInfo.InvariantCulture)},{p.y.ToString("F3", CultureInfo.InvariantCulture)},{p.z.ToString("F3", CultureInfo.InvariantCulture)} " +
@@ -716,7 +802,7 @@ namespace EyeLabGates
                 if (double.IsNaN(first) && m_Camera.FramesThisCapture > 0) first = Time.realtimeSinceStartupAsDouble - start;
                 int frames = m_Camera.FramesThisCapture;
                 double on = Time.realtimeSinceStartupAsDouble - start;
-                if (IsG5 && frames >= m_Args.BurstFrames) TrySendLockFrame();
+                if (IsLocking && frames >= m_Args.BurstFrames) TrySendLockFrame();
                 if (m_Source.IsCapturing) StopCapture($"burst_{m_Bursts}");
                 m_Log.Event("burst", frames >= m_Args.BurstFrames ? "OK" : frames > 0 ? "SHORT" : "NO_FRAMES",
                     $"n={m_Bursts} frames={frames} first_s={GateRunLog.F(first, "F3")} on_s={on.ToString("F3", CultureInfo.InvariantCulture)} " +
@@ -948,8 +1034,8 @@ namespace EyeLabGates
                     case StepAction.CameraStop: StopCapture(step.Id); break;
                     case StepAction.Track3DoF: StartCoroutine(SwitchTracking(TrackingType.MODE_3DOF)); break;
                     case StepAction.Track6DoF: StartCoroutine(SwitchTracking(TrackingType.MODE_6DOF)); break;
-                    case StepAction.AnchorFreeze: m_Anchor.Frozen = true; m_Log.Event("anchor", "FROZEN", step.Id); break;
-                    case StepAction.AnchorLive: m_Anchor.Frozen = false; m_Log.Event("anchor", "LIVE", step.Id); break;
+                    case StepAction.AnchorFreeze: SetFrozen(true, step.Id); break;
+                    case StepAction.AnchorLive: SetFrozen(false, step.Id); break;
                 }
                 CalibZone = step.Zone;
                 m_Log.Event("step", step.Id, $"{step.Seconds.ToString(CultureInfo.InvariantCulture)}s {step.Title}: {step.Detail}");
@@ -1126,7 +1212,7 @@ namespace EyeLabGates
                 m_WsBridge.Dispose();
                 m_WsBridge = null;
                 m_Bridge = null;
-                m_Log.Event("bridge", "CLOSED", $"sent={m_LocksSent} posed={m_LocksPosed} accepted={m_LocksAccepted}");
+                m_Log.Event("bridge", "CLOSED", $"sent={m_LocksSent} frames_posed={m_LocksPosed}");
             }
             WriteRepeatSummary();
             m_Log.Flush();
@@ -1151,6 +1237,38 @@ namespace EyeLabGates
         }
 
         // ---------------------------------------------------------------- keyboard
+
+        IEnumerator EndDemo()
+        {
+            yield return StopLocking();
+            yield return Quit("COMPLETED");
+        }
+
+        /// <summary>Demo keys (operator on the Surface keyboard): G grid, E Eye view, T target overlays.</summary>
+        void HandleDemoKeys()
+        {
+            if (Input.GetKeyDown(KeyCode.G))
+            {
+                if (m_Overlay.Placed) m_Overlay.Hide();
+                else PlaceOverlay("key_g", DemoGridDistance);
+                m_Log.Event("key", "G", m_Overlay.Placed ? "grid on" : "grid off");
+            }
+            if (Input.GetKeyDown(KeyCode.E))
+            {
+                ShowEyeView = !ShowEyeView;
+                m_Log.Event("key", "E", ShowEyeView ? "eye view on" : "eye view off");
+            }
+            if (Input.GetKeyDown(KeyCode.T))
+            {
+                m_ShowTargets = !m_ShowTargets;
+                foreach (var kv in m_Anchors)
+                {
+                    if (!m_ShowTargets) m_Overlay.HideTarget(kv.Key);
+                    else if (kv.Value.HasAnchor) m_Overlay.SetTargetPose(kv.Key, kv.Value.Position, kv.Value.Rotation);
+                }
+                m_Log.Event("key", "T", m_ShowTargets ? "targets on" : "targets off");
+            }
+        }
 
         void HandleKeys()
         {
@@ -1192,14 +1310,15 @@ namespace EyeLabGates
             if (Input.GetKeyDown(KeyCode.P) && XRActive)
             {
                 m_Log.Event("key", "P", "");
-                PlaceOverlay("key");
+                PlaceOverlay("key", IsDemo ? DemoGridDistance : OverlayDistance);
             }
             if (Input.GetKeyDown(KeyCode.Escape))
             {
                 m_Log.Event("key", "Esc", m_StepId);
                 if (m_Sequence != null) StopCoroutine(m_Sequence);
-                StartCoroutine(Quit("ABORTED_BY_USER"));
+                StartCoroutine(IsDemo ? EndDemo() : Quit("ABORTED_BY_USER"));
             }
+            if (IsDemo) HandleDemoKeys();
         }
 
         // ---------------------------------------------------------------- lifecycle and native events
@@ -1288,8 +1407,9 @@ namespace EyeLabGates
                 case GateKind.Cooldown: return "Cool-down check";
                 case GateKind.Calib: return "Calibration capture (25 mm board)";
                 case GateKind.G5:
-                    return $"G5 locked overlay on {m_Args.Target}, camera {m_Args.BurstFrames} fr every " +
+                    return $"G5 locked overlay on {m_Args.Target} ({(m_Args.Order == "3dof" ? "3DoF" : "6DoF")}), camera {m_Args.BurstFrames} fr every " +
                            $"{m_Args.BurstEvery.ToString(CultureInfo.InvariantCulture)} s, {m_Args.RenderFps} fps";
+                case GateKind.Demo: return $"EyeLab demo: {m_Args.Target}";
                 case GateKind.G4:
                     string burst = m_Args.BurstEvery > 0
                         ? $"camera {m_Args.BurstFrames} fr every {m_Args.BurstEvery.ToString(CultureInfo.InvariantCulture)} s"
