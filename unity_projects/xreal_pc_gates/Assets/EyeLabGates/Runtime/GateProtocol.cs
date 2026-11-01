@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace EyeLabGates
 {
-    public enum StepAction { None, CameraStart, CameraStop, Track3DoF, Track6DoF, AnchorFreeze, AnchorLive }
+    public enum StepAction { None, CameraStart, CameraStop, Track3DoF, Track6DoF, AnchorFreeze, AnchorLive, Filter0, Filter1, Filter2 }
 
     /// <summary>
     /// One guided step. <see cref="Title"/> is shown large in the middle of each eye and spoken;
@@ -176,6 +176,31 @@ namespace EyeLabGates
                 new ProtocolStep("frozen_step", "FROZEN: STEP LEFT AND BACK", "One step left, then back to A", 15, speech: "Step left, then back"),
                 new ProtocolStep("live", "LIVE AGAIN: HOLD STILL", "Corrections back on: it should snap back", 20, StepAction.AnchorLive, "Corrections back on. Hold still"),
             };
+        }
+
+        /// <summary>
+        /// Blind lock-filter comparison (guide §20): after acquiring, each block shows one filter under a
+        /// letter (the wearer does not know which) for 20 s holding still and 10 s moving the head, then asks
+        /// for a 1-5 rating on the keyboard. <paramref name="order"/> lists filter indices (latest, euro,
+        /// hysteresis) per block; all three filters run on every measurement regardless.
+        /// </summary>
+        public static List<ProtocolStep> G5Compare(int[] order, string[] labels)
+        {
+            var s = new List<ProtocolStep>
+            {
+                new ProtocolStep("acquire", "LOOK AT THE PLATE, HOLD STILL", "From A, about 70 cm away, until LOCKED", 15, speech: "Look at the plate and hold still"),
+            };
+            for (int k = 0; k < order.Length; k++)
+            {
+                int m = order[k];
+                string label = labels[m];
+                string id = $"cmp{k + 1}_{label.Substring(label.Length - 1)}";
+                s.Add(new ProtocolStep($"{id}_still", $"{label}: HOLD STILL", "Is it steady? Does it sit on the plate?", 20, StepAction.Filter0 + m,
+                                       $"{label}. Hold still"));
+                s.Add(new ProtocolStep($"{id}_move", $"{label}: MOVE HEAD SLOWLY", "Small nods and turns, plate in view", 10, speech: "Move your head slowly"));
+                s.Add(new ProtocolStep($"{id}_rate", $"RATE {label}: KEYS 1 TO 5", "1 unusable, 3 acceptable, 5 rock steady", 6, speech: $"Rate {label}, one to five"));
+            }
+            return s;
         }
 
         static void AddTranslation(List<ProtocolStep> s, string id, string label)

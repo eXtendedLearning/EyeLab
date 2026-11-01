@@ -11,7 +11,7 @@ namespace EyeLabGates
     /// <summary>
     /// Command-line arguments of the gate player (docs/XREAL-PC-GATES-G1-G3.md §5):
     /// <c>-gate G1|G2|G3|G4|G5|calib|demo|align|manual|cooldown -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60
-    /// -burstEvery s -burstFrames n -target plateA|plateL|board25[,...] -camMode stream|burst -port n -duration s -snapshotEvery s -label text -logRoot dir</c>. G1-G4 follow the timed protocols in
+    /// -burstEvery s -burstFrames n -target plateA|plateL|board25[,...] -camMode stream|burst -lockFilter latest|euro|hysteresis -compare -port n -duration s -snapshotEvery s -label text -logRoot dir</c>. G1-G4 follow the timed protocols in
     /// <see cref="GateProtocol"/>; <c>-duration</c> only applies to manual (it is recorded otherwise). G4 (light overlay)
     /// renders at 30 fps unless <c>-renderFps 60</c> is given, and reads <c>-order tracked</c> as 6DoF, <c>3dof</c> as 3DoF.
     /// Unknown arguments (e.g. Unity's own <c>-logFile</c>) are ignored.
@@ -38,6 +38,10 @@ namespace EyeLabGates
         /// (G4's start-grab-stop cycle; slower, lighter).
         /// </summary>
         public string CamMode = "stream";
+        /// <summary>Lock filter shown at start: latest, euro (default) or hysteresis; all three always run (guide §20).</summary>
+        public string LockFilter = "euro";
+        /// <summary>G5 only: the blind filter comparison protocol instead of the standard one.</summary>
+        public bool Compare;
         /// <summary>G5: pose service port on 127.0.0.1.</summary>
         public int Port = 8765;
 
@@ -142,6 +146,14 @@ namespace EyeLabGates
                         i++;
                         if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int port) && port > 0 && port < 65536) a.Port = port;
                         else a.Warnings.Add($"bad -port '{value}', using 8765");
+                        break;
+                    case "-lockfilter":
+                        i++;
+                        if (value == "latest" || value == "euro" || value == "hysteresis") a.LockFilter = value;
+                        else a.Warnings.Add($"unknown -lockFilter '{value}', using euro");
+                        break;
+                    case "-compare":
+                        a.Compare = true;
                         break;
                     case "-cammode":
                         i++;

@@ -104,7 +104,10 @@ namespace EyeLabGates
         int m_LocksSent, m_LocksPosed;
         bool m_HasRgbFromHead;
         Pose m_RgbFromHead;
-        readonly Dictionary<string, LockAnchor> m_Anchors = new Dictionary<string, LockAnchor>();
+        readonly Dictionary<string, TargetLock> m_Anchors = new Dictionary<string, TargetLock>();
+        int m_ActiveFilter = 1;
+        string m_CompareLabel = "";
+        string[] m_CompareLabels = new string[0];
         readonly Dictionary<string, string> m_TargetStatus = new Dictionary<string, string>();
         readonly Dictionary<string, double> m_LastApplied = new Dictionary<string, double>();
         bool m_ShowTargets = true;
@@ -159,11 +162,15 @@ namespace EyeLabGates
         public bool IsDemo => m_Args != null && m_Args.Gate == GateKind.Demo;
         /// <summary>G5 and demo: camera bursts feed the pose bridge.</summary>
         public bool IsAlign => m_Args != null && m_Args.Gate == GateKind.Align;
+        /// <summary>G5 filter comparison (blind): the shown filter changes per block and is not named.</summary>
+        public bool IsCompare => m_Args != null && m_Args.Gate == GateKind.G5 && m_Args.Compare;
         public bool IsLocking => IsG5 || IsDemo || IsAlign;
         /// <summary>Camera state for the HUD (locking gates): empty when fine.</summary>
         public string CameraStatus { get; private set; } = "";
         /// <summary>The head-frame view offset, with "(unsaved)" while changed and not saved.</summary>
-        public string OffsetStatus => IsLocking ? $"view offset {m_ViewOffset.Describe()}{(m_ViewOffsetDirty ? "  (unsaved: Enter)" : "")}" : "";
+        public string OffsetStatus => !IsLocking ? "" :
+            $"view offset {m_ViewOffset.Describe()}{(m_ViewOffsetDirty ? "  (unsaved: Enter)" : "")}" +
+            (IsCompare ? $"   |   {m_CompareLabel}" : $"   |   filter {FilterDescription()}  (F switch, [ ] tune)");
         /// <summary>Demo: show the latest Eye frame in a corner (key E).</summary>
         public bool ShowEyeView { get; private set; }
         public bool IsCalib => m_Args != null && m_Args.Gate == GateKind.Calib;
@@ -182,6 +189,7 @@ namespace EyeLabGates
             m_Device = GetComponent<DeviceInfoProbe>();
             m_Perf = GetComponent<PerfProbe>();
             m_Display = GetComponent<DisplayProbe>();
+            m_ActiveFilter = TargetLock.IndexOf(m_Args.LockFilter);
             m_Overlay = GetComponent<GateOverlay>();
             if (m_CameraTexture == null) m_CameraTexture = FindAnyObjectByType<XREALRGBCameraTexture>();
             if (m_HelloMR == null) m_HelloMR = FindAnyObjectByType<HelloMR>();
@@ -322,6 +330,11 @@ namespace EyeLabGates
             }
 
             RecordHead(now);
+            foreach (var kv in m_Anchors)
+            {
+                kv.Value.Tick(Time.unscaledDeltaTime);
+                if (m_ShowTargets && kv.Value.HasShown) m_Overlay.SetTargetPose(kv.Key, kv.Value.ShownPosition, kv.Value.ShownRotation);
+            }
             if (m_PoseTask != null && m_PoseTask.IsCompleted)
             {
                 Task<PoseResult> done = m_PoseTask;
@@ -494,10 +507,30 @@ namespace EyeLabGates
         /// </summary>
         IEnumerator RunG5()
         {
-            Say($"Gate five. Locked overlay on {SpokenTargets()}.");
+            Say(IsCompare ? "Gate five. Filter comparison." : $"Gate five. Locked overlay on {SpokenTargets()}.");
             yield return StartLocking(m_Args.Order == "3dof" ? TrackingType.MODE_3DOF : TrackingType.MODE_6DOF);
             if (m_Quitting) yield break;
-            yield return RunProtocol(GateProtocol.G5());
+            if (IsCompare)
+            {
+                // Blind: methods get random letters; round 2 repeats round 1 in reverse order.
+                var rng = new System.Random();
+                var letters = new List<string> { "A", "B", "C" };
+                var labels = new string[3];
+                for (int i = 0; i < 3; i++) { int k = rng.Next(letters.Count); labels[i] = "METHOD " + letters[k]; letters.RemoveAt(k); }
+                var round = new List<int> { 0, 1, 2 };
+                for (int i = round.Count - 1; i > 0; i--) { int k = rng.Next(i + 1); (round[i], round[k]) = (round[k], round[i]); }
+                var order = new List<int>(round);
+                round.Reverse();
+                order.AddRange(round);
+                m_CompareLabels = labels;
+                m_Log.Event("compare_mapping", "", $"{TargetLock.Names[0]}={labels[0]} {TargetLock.Names[1]}={labels[1]} " +
+                    $"{TargetLock.Names[2]}={labels[2]} order={string.Join(",", order)}");
+                yield return RunProtocol(GateProtocol.G5Compare(order.ToArray(), labels));
+            }
+            else
+            {
+                yield return RunProtocol(GateProtocol.G5());
+            }
             yield return StopLocking();
             yield return Quit("COMPLETED");
         }
@@ -545,7 +578,7 @@ namespace EyeLabGates
             foreach (var g in m_WsBridge.Overlays)
             {
                 m_Overlay.BuildTarget(g);
-                m_Anchors[g.Target] = new LockAnchor();
+                m_Anchors[g.Target] = new TargetLock { Active = m_ActiveFilter };
                 m_TargetStatus[g.Target] = "searching";
                 m_Log.Event("target", g.Target, $"label=\"{g.Label}\" segments={g.Segments.Length / 6} points={g.Points.Length / 3}");
             }
@@ -562,6 +595,7 @@ namespace EyeLabGates
                 if (!ready) Say("Continuing without tracking ready");
             }
             ReadRgbFromHead();
+            m_Log.Event("lock_filter", TargetLock.Names[m_ActiveFilter], IsCompare ? "compare: changes per block" : "key F switches");
             m_ViewOffset = ViewOffset.LoadOrZero(ViewOffset.DefaultPath, out string offsetStatus);
             m_Log.Event("view_offset", "LOADED", $"{offsetStatus}: {m_ViewOffset.Describe()}");
             UpdateLockStatus();
@@ -680,7 +714,9 @@ namespace EyeLabGates
             if (m_Source.IsCapturing) StopCapture("end");
             foreach (var kv in m_Anchors)
                 m_Log.Event("lock_summary", kv.Key,
-                    $"applied={kv.Value.Applied} sent={m_LocksSent} frames_posed={m_LocksPosed} bursts={m_Bursts}");
+                    $"applied latest={kv.Value.Filters[0].Applied} euro={kv.Value.Filters[1].Applied} hysteresis={kv.Value.Filters[2].Applied} " +
+                    $"sent={m_LocksSent} frames_posed={m_LocksPosed} bursts={m_Bursts} windows={m_StreamWindows} " +
+                    $"final {FilterDescription()}");
             yield break;
         }
 
@@ -816,7 +852,7 @@ namespace EyeLabGates
             bool anyPose = false;
             foreach (TargetPose tp in r.Targets)
             {
-                if (!m_Anchors.TryGetValue(tp.Target, out LockAnchor anchor)) continue;
+                if (!m_Anchors.TryGetValue(tp.Target, out TargetLock anchor)) continue;
                 string common = $"target={tp.Target} seq={pending.Seq} markers={tp.Markers} points={tp.Points} " +
                                 $"rms_px={tp.RmsPx.ToString("F2", CultureInfo.InvariantCulture)} " +
                                 $"service_ms={r.ServiceMs.ToString("F0", CultureInfo.InvariantCulture)} rt_ms={r.RoundTripMs.ToString("F0", CultureInfo.InvariantCulture)} " +
@@ -831,26 +867,37 @@ namespace EyeLabGates
                 anyPose = true;
                 m_LastRaw[tp.Target] = new LastLock { Pending = pending, Pose = tp };
                 WorldPose(pending, tp, out Vector3 worldPos, out Quaternion worldRot);
-                LockAnchor.Result res = anchor.Add(worldPos, worldRot);
+                // Measurement weight: more points and a lower reprojection error count for more.
+                float weight = Mathf.Clamp((tp.Points + 4f * tp.Markers) / 32f, 0.2f, 1f)
+                               * Mathf.Clamp(0.6f / Mathf.Max(tp.RmsPx, 0.1f), 0.3f, 1f);
+                double tNow = Time.realtimeSinceStartupAsDouble;
+                var results = new LockFilter.Result[anchor.Filters.Length];
+                for (int i = 0; i < anchor.Filters.Length; i++)
+                    results[i] = anchor.Filters[i].Add(worldPos, worldRot, pending.T, weight);
+                LockFilter.Result res = results[anchor.Active];
                 m_Log.Event("lock", res.Kind.ToString().ToUpperInvariant(),
                     $"{common} jump_mm={(res.JumpMetres * 1000f).ToString("F1", CultureInfo.InvariantCulture)} " +
                     $"jump_deg={res.JumpDegrees.ToString("F2", CultureInfo.InvariantCulture)} " +
-                    $"dist_m={tp.TranslationCv.magnitude.ToString("F3", CultureInfo.InvariantCulture)} world={V(worldPos)} anchor={V(anchor.Position)}");
-                if (res.Moved)
-                {
-                    if (m_ShowTargets) m_Overlay.SetTargetPose(tp.Target, anchor.Position, anchor.Rotation);
-                    m_LastApplied[tp.Target] = Time.realtimeSinceStartupAsDouble;
-                }
-                if (res.Kind == LockAnchor.Kind.First)
+                    $"dist_m={tp.TranslationCv.magnitude.ToString("F3", CultureInfo.InvariantCulture)} world={V(worldPos)} anchor={V(anchor.Current.Position)} " +
+                    $"cx_px={tp.CentreXPx.ToString("F0", CultureInfo.InvariantCulture)} cy_px={tp.CentreYPx.ToString("F0", CultureInfo.InvariantCulture)} " +
+                    $"span_px={tp.SpanPx.ToString("F0", CultureInfo.InvariantCulture)} w={weight.ToString("F2", CultureInfo.InvariantCulture)} filter={anchor.Current.Name}");
+                // All three filters see the same measurement; their outputs go to the log for offline comparison.
+                m_Log.Event("filters", tp.Target,
+                    $"seq={pending.Seq} t={pending.T.ToString("F3", CultureInfo.InvariantCulture)} active={anchor.Current.Name} " +
+                    $"meas={PQ(worldPos, worldRot)} latest={PQ(anchor.Filters[0].Position, anchor.Filters[0].Rotation)} " +
+                    $"euro={PQ(anchor.Filters[1].Position, anchor.Filters[1].Rotation)} " +
+                    $"hysteresis={PQ(anchor.Filters[2].Position, anchor.Filters[2].Rotation)} w={weight.ToString("F2", CultureInfo.InvariantCulture)}");
+                if (res.Moved) m_LastApplied[tp.Target] = tNow;
+                if (res.Kind == LockFilter.Kind.First)
                 {
                     m_Audio.PlayOneShot(m_ReadyBeep);
                     Say(IsDemo ? "Target locked" : "Locked");
                     Screenshot("first_lock_" + tp.Target, force: true);
                 }
                 string jump = $"{(res.JumpMetres * 1000f).ToString("F0", CultureInfo.InvariantCulture)} mm";
-                m_TargetStatus[tp.Target] = res.Kind == LockAnchor.Kind.Frozen ? $"FROZEN, camera says {jump} off"
-                    : res.Kind == LockAnchor.Kind.Pending ? $"jump of {jump} waiting for confirmation"
-                    : $"LOCKED, last correction {jump}";
+                m_TargetStatus[tp.Target] = res.Kind == LockFilter.Kind.Frozen ? $"FROZEN, camera says {jump} off"
+                    : res.Kind == LockFilter.Kind.Pending ? $"jump of {jump} waiting for confirmation"
+                    : $"LOCKED, camera {jump} from shown";
             }
             if (anyPose) m_LocksPosed++;
             UpdateLockStatus();
@@ -878,10 +925,9 @@ namespace EyeLabGates
         {
             foreach (var kv in m_LastRaw)
             {
-                if (!m_Anchors.TryGetValue(kv.Key, out LockAnchor anchor)) continue;
+                if (!m_Anchors.TryGetValue(kv.Key, out TargetLock anchor)) continue;
                 WorldPose(kv.Value.Pending, kv.Value.Pose, out Vector3 p, out Quaternion q);
-                anchor.Reset(p, q);
-                if (m_ShowTargets) m_Overlay.SetTargetPose(kv.Key, p, q);
+                anchor.Reset(p, q, Time.realtimeSinceStartupAsDouble);
             }
         }
 
@@ -961,6 +1007,52 @@ namespace EyeLabGates
             Vector3 col1 = new Vector3(S(0) * r[1] * S(1), S(1) * r[4] * S(1), S(2) * r[7] * S(1));
             Vector3 col2 = new Vector3(S(0) * r[2] * S(2), S(1) * r[5] * S(2), S(2) * r[8] * S(2));
             return Quaternion.LookRotation(col2, col1);
+        }
+
+        static string PQ(Vector3 p, Quaternion q) =>
+            $"{p.x.ToString("F4", CultureInfo.InvariantCulture)},{p.y.ToString("F4", CultureInfo.InvariantCulture)},{p.z.ToString("F4", CultureInfo.InvariantCulture)}," +
+            $"{q.x.ToString("F5", CultureInfo.InvariantCulture)},{q.y.ToString("F5", CultureInfo.InvariantCulture)},{q.z.ToString("F5", CultureInfo.InvariantCulture)},{q.w.ToString("F5", CultureInfo.InvariantCulture)}";
+
+        string FilterDescription()
+        {
+            foreach (var t in m_Anchors.Values) return t.Current.Describe();
+            return TargetLock.Names[m_ActiveFilter];
+        }
+
+        void SetActiveFilter(int index, string why)
+        {
+            m_ActiveFilter = index;
+            foreach (var t in m_Anchors.Values) t.Active = index;
+            if (IsCompare && index < m_CompareLabels.Length) m_CompareLabel = m_CompareLabels[index];
+            m_Log.Event("lock_filter", TargetLock.Names[index], $"{why} {FilterDescription()}");
+        }
+
+        /// <summary>Filter keys (locking gates): F next filter (not in the blind comparison), ] smoother, [ more responsive; compare: 1-5 rate.</summary>
+        void HandleFilterKeys()
+        {
+            if (Input.GetKeyDown(KeyCode.F) && !IsCompare)
+            {
+                SetActiveFilter((m_ActiveFilter + 1) % TargetLock.Names.Length, "key F");
+                Say(TargetLock.Names[m_ActiveFilter] == "euro" ? "One euro filter" : TargetLock.Names[m_ActiveFilter]);
+            }
+            int adjust = Input.GetKeyDown(KeyCode.RightBracket) ? 1 : Input.GetKeyDown(KeyCode.LeftBracket) ? -1 : 0;
+            if (adjust != 0)
+            {
+                foreach (var t in m_Anchors.Values) t.Current.Adjust(adjust);
+                m_Log.Event("lock_filter", "ADJUST", $"{(adjust > 0 ? "smoother" : "more responsive")}: {FilterDescription()}");
+            }
+            if (IsCompare)
+            {
+                for (int n = 1; n <= 5; n++)
+                {
+                    if (Input.GetKeyDown(KeyCode.Alpha0 + n) || Input.GetKeyDown(KeyCode.Keypad0 + n))
+                    {
+                        m_Log.Event("rating", n, $"step={m_StepId} label=\"{m_CompareLabel}\" method={TargetLock.Names[m_ActiveFilter]}");
+                        m_Audio.PlayOneShot(m_Tick);
+                        Say($"{n}");
+                    }
+                }
+            }
         }
 
         static string V(Vector3 v) =>
@@ -1263,6 +1355,9 @@ namespace EyeLabGates
                     case StepAction.Track6DoF: StartCoroutine(SwitchTracking(TrackingType.MODE_6DOF)); break;
                     case StepAction.AnchorFreeze: SetFrozen(true, step.Id); break;
                     case StepAction.AnchorLive: SetFrozen(false, step.Id); break;
+                    case StepAction.Filter0: SetActiveFilter(0, step.Id); break;
+                    case StepAction.Filter1: SetActiveFilter(1, step.Id); break;
+                    case StepAction.Filter2: SetActiveFilter(2, step.Id); break;
                 }
                 CalibZone = step.Zone;
                 m_Log.Event("step", step.Id, $"{step.Seconds.ToString(CultureInfo.InvariantCulture)}s {step.Title}: {step.Detail}");
@@ -1496,7 +1591,7 @@ namespace EyeLabGates
                 foreach (var kv in m_Anchors)
                 {
                     if (!m_ShowTargets) m_Overlay.HideTarget(kv.Key);
-                    else if (kv.Value.HasAnchor) m_Overlay.SetTargetPose(kv.Key, kv.Value.Position, kv.Value.Rotation);
+                    else if (kv.Value.HasShown) m_Overlay.SetTargetPose(kv.Key, kv.Value.ShownPosition, kv.Value.ShownRotation);
                 }
                 m_Log.Event("key", "T", m_ShowTargets ? "targets on" : "targets off");
             }
@@ -1512,7 +1607,7 @@ namespace EyeLabGates
                 m_Log.Event("mark", m_Marks, m_StepId);
                 m_Audio.PlayOneShot(m_Tick);
             }
-            if (IsLocking && XRActive) HandleOffsetKeys();
+            if (IsLocking && XRActive) { HandleOffsetKeys(); HandleFilterKeys(); }
             if (Input.GetKeyDown(KeyCode.C) && !IsLocking)
             {
                 m_Log.Event("key", "C", "");
@@ -1525,12 +1620,12 @@ namespace EyeLabGates
                 if (XRActive) ExitXR();
                 else EnterXR();
             }
-            if (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3))
+            if (!IsLocking && (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3)))
             {
                 m_Log.Event("key", "3", "");
                 StartCoroutine(SwitchTracking(TrackingType.MODE_3DOF));
             }
-            if (Input.GetKeyDown(KeyCode.Alpha6) || Input.GetKeyDown(KeyCode.Keypad6))
+            if (!IsLocking && (Input.GetKeyDown(KeyCode.Alpha6) || Input.GetKeyDown(KeyCode.Keypad6)))
             {
                 m_Log.Event("key", "6", "");
                 StartCoroutine(SwitchTracking(TrackingType.MODE_6DOF));
@@ -1639,6 +1734,8 @@ namespace EyeLabGates
                 case GateKind.G2: return "G2 6DoF";
                 case GateKind.Cooldown: return "Cool-down check";
                 case GateKind.Calib: return "Calibration capture (25 mm board)";
+                case GateKind.G5 when m_Args.Compare:
+                    return $"G5 filter comparison on {m_Args.Target} ({(m_Args.Order == "3dof" ? "3DoF" : "6DoF")}), blind";
                 case GateKind.G5:
                     return $"G5 locked overlay on {m_Args.Target} ({(m_Args.Order == "3dof" ? "3DoF" : "6DoF")}), camera {m_Args.BurstFrames} fr every " +
                            $"{m_Args.BurstEvery.ToString(CultureInfo.InvariantCulture)} s, {m_Args.RenderFps} fps";

@@ -68,7 +68,7 @@ def parse_frame(payload: bytes):
 
 
 def _no_null(d: dict) -> dict:
-    for k in ("rms_px", "ambiguity"):
+    for k in ("rms_px", "ambiguity", "cx_px", "cy_px", "span_px"):
         if d.get(k) is None:
             d[k] = -1.0
     return d

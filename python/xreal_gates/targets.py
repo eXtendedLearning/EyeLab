@@ -50,11 +50,23 @@ class PoseEstimate:
     n_markers: int = 0
     n_points: int = 0
     marker_ids: List[int] = field(default_factory=list)
+    centre_px: Optional[np.ndarray] = None   # mean image position of the points used
+    span_px: float = float("nan")            # their extent (sqrt of the bounding-box area)
+
+    def set_image_points(self, img) -> None:
+        pts = np.asarray(img, float).reshape(-1, 2)
+        if len(pts):
+            self.centre_px = pts.mean(axis=0)
+            w, h = np.ptp(pts[:, 0]), np.ptp(pts[:, 1])
+            self.span_px = float(np.sqrt(max(w * h, 0.0)))
 
     def to_json(self) -> dict:
         d = {"ok": self.ok, "reason": self.reason, "rms_px": _num(self.rms_px),
              "ambiguity": _num(self.ambiguity), "n_markers": self.n_markers,
-             "n_points": self.n_points, "marker_ids": list(self.marker_ids)}
+             "n_points": self.n_points, "marker_ids": list(self.marker_ids),
+             "cx_px": None if self.centre_px is None else float(self.centre_px[0]),
+             "cy_px": None if self.centre_px is None else float(self.centre_px[1]),
+             "span_px": _num(self.span_px)}
         if self.rvec is not None and self.tvec is not None:
             R, _ = cv2.Rodrigues(np.asarray(self.rvec, float))
             d["rvec"] = [float(v) for v in np.ravel(self.rvec)]
@@ -155,6 +167,7 @@ class PlateTarget(GateTarget):
             return PoseEstimate(False, "PnP failed", n_markers=len(seen), n_points=len(pids))
         rvec, tvec, rms, amb = solved
         est = PoseEstimate(True, "", rvec, tvec, rms, amb, len(seen), len(pids), [m.id for m in seen])
+        est.set_image_points(img)
         # Saddles seeded from a single 20 mm marker are often wrong (validation B1b, 15 Oct: seed
         # offsets up to the search radius), so a plate pose needs at least two markers.
         if len(seen) < MIN_PLATE_MARKERS:
@@ -220,6 +233,7 @@ class BoardTarget(GateTarget):
             return PoseEstimate(False, "PnP failed", n_markers=n_markers, n_points=len(ci), marker_ids=ids)
         rvec, tvec, rms, amb = solved
         est = PoseEstimate(True, "", rvec, tvec, rms, amb, n_markers, len(ci), ids)
+        est.set_image_points(img)
         return _accept(est, planar=True, strong=len(ci) >= 12)
 
     def overlay(self) -> dict:

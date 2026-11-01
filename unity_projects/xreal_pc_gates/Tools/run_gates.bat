@@ -123,9 +123,12 @@ echo  6  plate A + 25 mm board together, 6DoF
 echo  7  ALIGN on plate A    move the drawing onto the plate by eye, Enter saves (3DoF, until Esc)
 echo  8  ALIGN on 25 mm board
 echo  9  Demo in 6DoF        as D, with position tracking
+echo  A  COMPARE filters, plate A, 3DoF   blind: methods A/B/C, rate each 1-5 on the keyboard (about 4 min)
+echo  C  COMPARE filters, plate A, 6DoF
 echo  B  Back
+echo  In G5 runs: F switches the lock filter (latest / one euro / hysteresis), ] smoother, [ more responsive.
 echo  Saved view offset: %USERPROFILE%\AppData\LocalLow\EyeLab\XrealPcGates\calibration\view_offset.json
-choice /c 123456789B /n /m "Select: "
+choice /c 123456789ACB /n /m "Select: "
 set "SEL=%errorlevel%"
 if "%SEL%"=="1" call :g5 plateA tracked & goto menu_g5
 if "%SEL%"=="2" call :g5 plateL tracked & goto menu_g5
@@ -136,6 +139,8 @@ if "%SEL%"=="6" call :g5 plateA+board25 tracked & goto menu_g5
 if "%SEL%"=="7" call :align plateA & goto menu_g5
 if "%SEL%"=="8" call :align board25 & goto menu_g5
 if "%SEL%"=="9" call :demo tracked & goto menu_g5
+if "%SEL%"=="10" call :g5 plateA 3dof -compare & goto menu_g5
+if "%SEL%"=="11" call :g5 plateA tracked -compare & goto menu_g5
 goto menu
 
 rem ---- Eye calibration: capture (camera only), then python -m xreal_gates calibrate on the newest run.
@@ -171,7 +176,8 @@ if errorlevel 1 exit /b 0
 set "G5LABEL=g5_%~1"
 if "%2"=="3dof" set "G5LABEL=g5_%~1_3dof"
 set "G5LABEL=%G5LABEL:+=_%"
-call :gate G5 %G5LABEL% -target "%TGT%" -order %2
+if "%3"=="-compare" set "G5LABEL=%G5LABEL%_compare"
+call :gate G5 %G5LABEL% -target "%TGT%" -order %2 %3
 exit /b 0
 
 rem ---- Demo: plate A and the 25 mm board until Esc. %1 = 3dof or tracked (6DoF). Keys: G grid, P place grid, E Eye view, T targets.
@@ -212,12 +218,12 @@ if not defined PY (
 )
 exit /b 0
 
-rem %1 gate, %2 label, %3..%6 optional extra args
+rem %1 gate, %2 label, %3..%9 optional extra args
 :gate
 call :stamp
 set "PLOG=%RUNROOT%\player_%2_%TS%.log"
 echo Running %1 (%2) ... player log: %PLOG%
-start "" /wait "%EXE%" -gate %1 -label %2 %3 %4 %5 %6 -logFile "%PLOG%"
+start "" /wait "%EXE%" -gate %1 -label %2 %3 %4 %5 %6 %7 %8 %9 -logFile "%PLOG%"
 echo %1 (%2) finished, exit code %errorlevel%.
 exit /b 0
 

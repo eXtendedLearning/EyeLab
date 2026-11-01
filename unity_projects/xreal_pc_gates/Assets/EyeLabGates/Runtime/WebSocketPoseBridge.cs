@@ -94,6 +94,7 @@ namespace EyeLabGates
                             Target = p.target ?? "", Ok = ok, Reason = p.reason ?? "", RotationRowMajor = p.R,
                             TranslationCv = ok ? new Vector3(p.tvec[0], p.tvec[1], p.tvec[2]) : Vector3.zero,
                             RmsPx = p.rms_px, Ambiguity = p.ambiguity, Markers = p.n_markers, Points = p.n_points,
+                            CentreXPx = p.cx_px, CentreYPx = p.cy_px, SpanPx = p.span_px,
                         });
                     }
                     return result;
@@ -182,7 +183,7 @@ namespace EyeLabGates
             public string target, reason;
             public bool ok;
             public float[] R, tvec;
-            public float rms_px, ambiguity;
+            public float rms_px, ambiguity, cx_px, cy_px, span_px;
             public int n_markers, n_points;
         }
 

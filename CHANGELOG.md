@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.3.002<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.3.003<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -17,6 +17,19 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.3.003) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §20).
+  - **Stream-mode runs of 22 Oct.** The camera stayed alive and corrections came at 7.4 Hz,
+    but every measurement's few-mm noise was shown, as jitter.
+  - **Three lock filters run side by side** on every pose: latest (baseline), One Euro
+    (Casiez et al. 2012) and an anchor with hysteresis. Each is logged; one is shown with
+    a per-frame glide. Key F switches the shown filter, `[`/`]` tune it.
+  - **Defaults tuned offline** on the 22 Oct runs: 3DoF still jitter 13 mm/s down to
+    4 mm/s.
+  - **Blind comparison subgate** (G5 menu A/C) with 1-5 ratings.
+  - **`python -m xreal_gates filters`**: offline comparison and parameter replay.
+  - **Image position and extent logged per lock**, for the static-error study.
+  - The run archive now imports Align and Demo runs.
+  - Rebuilt: `LATEST_BUILD.txt` 2026-10-24T07:36:59Z.
 - (0.3.002) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §19).
   - **22 Oct runs.** In G5 6DoF the RGB camera died 11 s in: it was restarted 0.18 s
     after a stop and every later start failed. G5 3DoF held, with standing corrections

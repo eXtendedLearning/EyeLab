@@ -1430,3 +1430,105 @@ Same room, plate A first.
 
 If the offset that fits at 70 cm is wrong at 40 cm, note it: that points to a rotation
 error, not a translation.
+
+## 20. Stream-mode runs (22 Oct evening), the jitter, and the lock-filter comparison (0.3.003)
+
+### What ran (build `2026-10-22T11:25:28Z`)
+
+Align twice, G5 3DoF and G5 6DoF, all on plate A.
+
+- **Stream mode worked.** The camera stayed alive in all four runs and restarted on lag
+  about every 4 s. Corrections came at **7.4 Hz** (6 Hz in 6DoF), against 0.7 Hz before.
+- **Align.** The first run saved x +6, y −18 mm. The second reset it and saved zero,
+  which G5 6DoF then used. The operator: align works, but the offset was not the
+  problem.
+- **Operator: G5 3DoF and 6DoF now jitter constantly.**
+  - In the 3DoF still phase each correction moved the drawing a median 3.2 mm and 0.6°
+    (p90 9 mm and 1.5°), seven times a second.
+  - The camera-derived world position scatters about 5 mm at the plate centre and
+    10 mm at its corners. About 4 mm of that is frame-to-frame noise from a small target
+    (markers about 16 px). A slow ~7 mm wander remains after any low-pass filter: a
+    static, view-dependent registration error.
+  - In 6DoF the slow part is the drift, which must be followed.
+
+### Literature, and what 0.3.003 does with it
+
+Jitter against lag is the classic dynamic-registration trade-off: Azuma 1997; Holloway
+1997; Azuma & Bishop 1994 for optical see-through.
+
+- **Temporal filtering.**
+  - One Euro filter (Casiez, Roussel & Vogel, CHI 2012): a speed-adaptive low-pass.
+  - Double exponential smoothing (LaViola 2003).
+  - Kalman filtering (Welch & Bishop, SCAAT 1997).
+- **Anchors with hysteresis.** As in ARKit and ARCore: hold the pose, correct only when
+  the error clearly exceeds the noise.
+- **Static error is calibration**, not filtering: SPAAM (Tuceryan & Navab 2000); survey
+  by Grubert et al., IEEE TVCG 2018.
+
+0.3.003 implements the first two and compares them.
+
+- **Three lock filters run side by side** on every camera pose (`LockAnchor.cs`). Common
+  rule: a jump over 10 cm needs a second, agreeing pose; it then snaps.
+  - `latest`: the 0.3.002 policy, kept as the baseline.
+  - `euro`: One Euro on position and rotation. Minimum cutoff 0.1 Hz; β 2 per m/s and
+    0.015 per °/s; derivative cutoff 1 Hz.
+  - `hysteresis`: an exponential estimate (τ 0.6 s) of the measurements. The anchor
+    moves to it only when it stays more than 5 mm or 0.6° away for 3 consecutive poses.
+- **Measurement weight:** more points and lower reprojection RMS count for more.
+- **One filter is shown, gliding.** The shown pose glides every frame towards it (time
+  constant 0.05, 0.06 or 0.3 s), instead of stepping at the camera rate.
+- **Keys.** `F` switches the shown filter, `]` makes it smoother, `[` more responsive;
+  the HUD names the filter and its setting.
+- **Logging.** Every pose writes a `filters` event: the measurement and all three
+  outputs. The lock event carries the target's image position and extent (`cx_px`,
+  `cy_px`, `span_px`) for the static-error study.
+
+### Offline comparison on the 22 Oct data (`python -m xreal_gates filters RUN`)
+
+The tool replays the measurements through Python ports of the filters, including the
+glide.
+
+- **jitter:** path speed of the shown plate corners, mm/s.
+- **error:** distance from the ±1 s median of the measurements, mm.
+- **rev3:** the 0.3.002 behaviour.
+
+| Step | rev3 | euro | hysteresis |
+|---|---|---|---|
+| 3DoF still, jitter | 13.1 mm/s | **4.2 mm/s** | **3.5 mm/s** |
+| 3DoF still, error | 3.0 mm | 3.2 mm | 5.1 mm |
+| 3DoF "live" (after the frozen step), jitter | 18.4 mm/s | 6.9 mm/s | 6.5 mm/s |
+| 3DoF "live", error | 3.9 mm | 5.2 mm | 7.2 mm |
+| 6DoF still, error | 12.5 mm | 14.5 mm | 25.6 mm |
+
+- **The defaults were chosen from a parameter sweep** so that the two candidates shake
+  about equally while still; the comparison is then decided by accuracy and feel.
+- **The sweep shows the trade-off.** Euro at 0.05 Hz without β is calmer (1.9 mm/s) but
+  5 mm off, and lags drift (36 mm in 6DoF). Hysteresis at 8 mm holds 7 mm off.
+- **6DoF:** drift is followed best by the faster settings; hysteresis lags it most.
+
+### Comparison subgate (G5 menu `A` 3DoF, `C` 6DoF; `-compare`)
+
+**Blind.** The three filters get random letters (`METHOD A/B/C`, logged as
+`compare_mapping`), so the wearer does not know which is shown.
+
+**Blocks.** Each of six blocks shows one method:
+
+- 20 s holding still;
+- 10 s moving the head slowly;
+- 6 s to **rate it 1-5 on the keyboard** (1 unusable, 3 acceptable, 5 rock steady;
+  `rating` events).
+
+Round 2 repeats round 1 in reverse order. About 4 min with the acquire step.
+
+`python -m xreal_gates filters RUN` reports both:
+
+- the objective scores for all three filters, computed on the same data whichever was
+  shown;
+- the mean rating per method.
+
+### Session 0.3.003
+
+1. **5 → A**: compare in 3DoF. Rate every block, even when unsure.
+2. **5 → C**: compare in 6DoF.
+3. **5 → 4 or 5 → 1** with the winner. If needed, tune it live with `[` and `]`; the
+   setting is logged.

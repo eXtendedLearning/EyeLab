@@ -4,6 +4,7 @@
 - ``summary [run ...]``: one line per run.
 - ``calibrate RUN|--latest-in DIR [--out YAML]``: Eye intrinsics from a ``-gate calib`` run.
 - ``anchor RUN --target plateA|plateL|board25 [--calib YAML]``: offline lock test of an XR run.
+- ``filters RUN [--target plateA]``: compare the three G5 lock filters (shake, error) on a run.
 - ``serve --target plateA[,board25] [--calib YAML] [--port 8765]``: the G5 and demo pose service (ADR-001 Step C).
 """
 
@@ -36,6 +37,9 @@ def main(argv=None) -> int:
     p_anc.add_argument("run", type=Path)
     p_anc.add_argument("--target", required=True, choices=TARGET_NAMES)
     p_anc.add_argument("--calib", type=Path, help="calibration YAML (default: repo calibration, else vendor)")
+    p_flt = sub.add_parser("filters", help="compare the G5 lock filters on a run")
+    p_flt.add_argument("runs", nargs="+", type=Path)
+    p_flt.add_argument("--target", default="plateA", choices=TARGET_NAMES)
     p_srv = sub.add_parser("serve", help="G5 pose service on ws://127.0.0.1:PORT")
     p_srv.add_argument("--target", required=True,
                        help=f"one or more of {', '.join(TARGET_NAMES)}, comma-separated (demo: plateA,board25)")
@@ -73,6 +77,12 @@ def main(argv=None) -> int:
         print(f"target: {target.label}")
         for line in report(analyse(args.run, target, camera)):
             print(line)
+        return 0
+    if args.cmd == "filters":
+        from .lockfilters import report as filter_report
+        for run in args.runs:
+            for line in filter_report(run, args.target):
+                print(line)
         return 0
     if args.cmd == "serve":
         from .pose_service import serve

@@ -59,6 +59,8 @@ namespace EyeLabGates
         public float Ambiguity = -1f;
         public int Markers;
         public int Points;
+        /// <summary>Where the target's detected points sit in the image (px) and their extent, for the static-error log.</summary>
+        public float CentreXPx = -1f, CentreYPx = -1f, SpanPx = -1f;
     }
 
     /// <summary>What the glasses draw on a target, in the target frame (OpenCV-handed, metres).</summary>
