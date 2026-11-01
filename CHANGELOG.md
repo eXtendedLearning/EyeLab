@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.3.003<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.3.004<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -17,6 +17,15 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.3.004) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §21).
+  - **Align and G5 use one chain.** Lens, RGB-from-head, tracking, render rate, camera mode and
+    target are identical in the logs (`python -m xreal_gates chain`). The offset that did not
+    carry over is attributed, as a hypothesis, to eye-to-display geometry between runs.
+  - **Alignment is now a step inside every G5 run** (untimed, Enter continues, hands-off check,
+    keys stay active); the separate Align gate is removed.
+  - **Launcher cleaned up**: main menu for current work, older gates under X.
+  - `filters` report: mean over the `_still` blocks per method.
+  - Rebuilt: `LATEST_BUILD.txt` 2026-11-01T14:25:10Z.
 - (0.3.003) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §20).
   - **Stream-mode runs of 22 Oct.** The camera stayed alive and corrections came at 7.4 Hz,
     but every measurement's few-mm noise was shown, as jitter.

@@ -49,34 +49,66 @@ echo.
 if exist "%CALIB%" (echo  Eye calibration: %CALIB%) else (echo  Eye calibration: none yet - run C first, G5 and the demo would use the vendor values)
 echo.
 echo  D  DEMO         world grid + plate A and 25 mm board locked by the camera + Eye view, 3DoF (until Esc)
-echo  C  Calibrate    capture with the 25 mm board, then compute       (about 2 min + 1 min)
+echo  C  Calibrate    Eye camera, with the 25 mm board, then compute   (about 3 min)
+echo.
+echo  Every G5 run starts by aligning the drawing by eye: keep the glasses on, Enter continues.
+echo  1  G5 plate A, 3DoF
+echo  2  G5 plate A, 6DoF
+echo  3  G5 25 mm board, 3DoF
+echo  4  G5 plate L, 3DoF
+echo  5  COMPARE lock filters, plate A, 3DoF   blind: methods A/B/C, rate each 1-5 (about 5 min)
+echo  6  COMPARE lock filters, plate A, 6DoF
+echo.
+echo  K  Cool-down    sustained CPU clock check, run between XR gates   (until cool, max 10 min)
+echo  O  Open run folder
+echo  Z  Zip NEW runs for transfer (exported runs move to _exported)
+echo  X  Older gates  G1, G2, G3, G4, other G5 variants, manual, vendor sample
+echo  Q  Quit
+echo.
+echo  In G5: F switches the lock filter, ] smoother, [ more responsive, arrows move the drawing, Enter saves.
+choice /c DC123456KOZXQ /n /m "Select: "
+set "SEL=%errorlevel%"
+if "%SEL%"=="1" call :demo 3dof & goto menu
+if "%SEL%"=="2" call :calib & goto menu
+if "%SEL%"=="3" call :g5 plateA 3dof & goto menu
+if "%SEL%"=="4" call :g5 plateA tracked & goto menu
+if "%SEL%"=="5" call :g5 board25 3dof & goto menu
+if "%SEL%"=="6" call :g5 plateL 3dof & goto menu
+if "%SEL%"=="7" call :g5 plateA 3dof -compare & goto menu
+if "%SEL%"=="8" call :g5 plateA tracked -compare & goto menu
+if "%SEL%"=="9" call :gate cooldown cooldown & goto menu
+if "%SEL%"=="10" start "" explorer "%RUNROOT%" & goto menu
+if "%SEL%"=="11" call :zipruns & goto menu
+if "%SEL%"=="12" goto menu_old
+goto :eof
+
+:menu_old
+echo.
+echo ----- Older gates (results are in the guide; kept for repeat measurements) -----
 echo  1  G1           camera only, no XR                                 (about 2 min)
 echo  2  G2           6DoF tracking only                                 (about 4.5 min)
 echo  3  G3 ...       camera + XR with full video (5 variants)
 echo  4  G4 ...       light overlay, camera bursts (3 variants)
-echo  5  G5 ...       overlay locked on a target by the camera, ALIGN, 6DoF demo
-echo  K  Cool-down    sustained CPU clock check, run between XR gates   (until cool, max 10 min)
+echo  5  G5 25 mm board, 6DoF
+echo  6  G5 plate L, 6DoF
+echo  7  G5 plate A + 25 mm board, 6DoF
+echo  8  Demo in 6DoF
 echo  M  Manual       keyboard control
 echo  V  Vendor       XREAL RGBCamera sample (control, unmodified)
-echo  O  Open run folder
-echo  Z  Zip NEW runs for transfer (exported runs move to _exported)
-echo  Q  Quit
-echo.
-choice /c DC12345KMVOZQ /n /m "Select: "
+echo  B  Back
+choice /c 12345678MVB /n /m "Select: "
 set "SEL=%errorlevel%"
-if "%SEL%"=="1" call :demo 3dof & goto menu
-if "%SEL%"=="2" call :calib & goto menu
-if "%SEL%"=="3" call :gate G1 g1 & goto menu
-if "%SEL%"=="4" call :gate G2 g2 & goto menu
-if "%SEL%"=="5" goto menu_g3
-if "%SEL%"=="6" goto menu_g4
-if "%SEL%"=="7" goto menu_g5
-if "%SEL%"=="8" call :gate cooldown cooldown & goto menu
-if "%SEL%"=="9" call :gate manual manual & goto menu
-if "%SEL%"=="10" call :vendor & goto menu
-if "%SEL%"=="11" start "" explorer "%RUNROOT%" & goto menu
-if "%SEL%"=="12" call :zipruns & goto menu
-goto :eof
+if "%SEL%"=="1" call :gate G1 g1 & goto menu_old
+if "%SEL%"=="2" call :gate G2 g2 & goto menu_old
+if "%SEL%"=="3" goto menu_g3
+if "%SEL%"=="4" goto menu_g4
+if "%SEL%"=="5" call :g5 board25 tracked & goto menu_old
+if "%SEL%"=="6" call :g5 plateL tracked & goto menu_old
+if "%SEL%"=="7" call :g5 plateA+board25 tracked & goto menu_old
+if "%SEL%"=="8" call :demo tracked & goto menu_old
+if "%SEL%"=="9" call :gate manual manual & goto menu_old
+if "%SEL%"=="10" call :vendor & goto menu_old
+goto menu
 
 :menu_g3
 echo.
@@ -94,7 +126,7 @@ if "%SEL%"=="2" call :gate G3 g3c_30fps -order tracked -renderFps 30 & goto menu
 if "%SEL%"=="3" call :gate G3 g3c_flush -order tracked -flushLag 1 & goto menu_g3
 if "%SEL%"=="4" call :gate G3 g3_3dof -order 3dof & goto menu_g3
 if "%SEL%"=="5" call :gate G3 g3c_drain -order tracked -reader drain & goto menu_g3
-goto menu
+goto menu_old
 
 :menu_g4
 echo.
@@ -108,40 +140,7 @@ set "SEL=%errorlevel%"
 if "%SEL%"=="1" call :gate G4 g4_6dof -order tracked -burstEvery 2 & goto menu_g4
 if "%SEL%"=="2" call :gate G4 g4_3dof -order 3dof -burstEvery 2 & goto menu_g4
 if "%SEL%"=="3" call :gate G4 g4_nocam -order tracked -burstEvery 0 & goto menu_g4
-goto menu
-
-:menu_g5
-echo.
-echo ----- G5: overlay locked on a target by the camera (about 3 min each) -----
-echo  Target about 70 cm in front of A; only one board with IDs 0-16 in view.
-echo  1  plate A, 6DoF
-echo  2  plate L, 6DoF
-echo  3  25 mm board, 6DoF
-echo  4  plate A, 3DoF       (no position tracking: immune to its drift)
-echo  5  25 mm board, 3DoF
-echo  6  plate A + 25 mm board together, 6DoF
-echo  7  ALIGN on plate A    move the drawing onto the plate by eye, Enter saves (3DoF, until Esc)
-echo  8  ALIGN on 25 mm board
-echo  9  Demo in 6DoF        as D, with position tracking
-echo  A  COMPARE filters, plate A, 3DoF   blind: methods A/B/C, rate each 1-5 on the keyboard (about 4 min)
-echo  C  COMPARE filters, plate A, 6DoF
-echo  B  Back
-echo  In G5 runs: F switches the lock filter (latest / one euro / hysteresis), ] smoother, [ more responsive.
-echo  Saved view offset: %USERPROFILE%\AppData\LocalLow\EyeLab\XrealPcGates\calibration\view_offset.json
-choice /c 123456789ACB /n /m "Select: "
-set "SEL=%errorlevel%"
-if "%SEL%"=="1" call :g5 plateA tracked & goto menu_g5
-if "%SEL%"=="2" call :g5 plateL tracked & goto menu_g5
-if "%SEL%"=="3" call :g5 board25 tracked & goto menu_g5
-if "%SEL%"=="4" call :g5 plateA 3dof & goto menu_g5
-if "%SEL%"=="5" call :g5 board25 3dof & goto menu_g5
-if "%SEL%"=="6" call :g5 plateA+board25 tracked & goto menu_g5
-if "%SEL%"=="7" call :align plateA & goto menu_g5
-if "%SEL%"=="8" call :align board25 & goto menu_g5
-if "%SEL%"=="9" call :demo tracked & goto menu_g5
-if "%SEL%"=="10" call :g5 plateA 3dof -compare & goto menu_g5
-if "%SEL%"=="11" call :g5 plateA tracked -compare & goto menu_g5
-goto menu
+goto menu_old
 
 rem ---- Eye calibration: capture (camera only), then python -m xreal_gates calibrate on the newest run.
 :calib
@@ -189,15 +188,6 @@ echo  E Eye view on/off, T target overlays on/off, arrows/PgUp/PgDn view offset 
 set "DLABEL=demo"
 if "%1"=="3dof" set "DLABEL=demo_3dof"
 call :gate demo %DLABEL% -target "%TGT%" -order %1
-exit /b 0
-
-rem ---- Align: move the overlay onto the target by eye (head-frame view offset), Enter saves it. %1 = target.
-:align
-call :service %1
-if errorlevel 1 exit /b 0
-echo  Align keys: arrows move, PgUp/PgDn farther/nearer, Ctrl+arrows and Ctrl+PgUp/PgDn rotate,
-echo  Shift for big steps, Backspace zero, Enter SAVE, Esc end.
-call :gate align align_%1 -target "%TGT%"
 exit /b 0
 
 rem Python with OpenCV from the pulled repo: its venv first, else the one on PATH.

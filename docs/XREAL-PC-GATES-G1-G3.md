@@ -1532,3 +1532,91 @@ Round 2 repeats round 1 in reverse order. About 4 min with the acquire step.
 2. **5 → C**: compare in 6DoF.
 3. **5 → 4 or 5 → 1** with the winner. If needed, tune it live with `[` and `]`; the
    setting is logged.
+
+## 21. Why the offset did not carry over, alignment inside the run, and the menu cleanup (0.3.004)
+
+### Operator report (0.3.003, no logs of this short test)
+
+- With a correct alignment in the Align gate, the following comparison gate showed a
+  big offset. With no offset, the comparison was only a little off.
+- In the blind comparison, methods A and B looked rock solid most of the time and C
+  wiggled.
+
+### Is the calibration the same in every gate? Yes
+
+- **Code.** Align and G5 shared one path: `StartLocking`, `WorldPose`, the same view
+  offset loaded at the same point.
+- **Logs.** `python -m xreal_gates chain` on the 22 Oct Align and G5 3DoF runs reports
+  the chain **identical**: lens calibration (hash 8d239fe5), RGB-camera-from-head pose,
+  tracking mode, render rate, camera mode and target file.
+- **The offset is repeatable within Align.** It reached x +6, y −18 mm in two independent
+  runs (about 1.4° at 0.77 m), with the plate in nearly the same part of the view as in
+  G5 (within 3-4°).
+
+So the two gates compute the same thing, and what changes is not in the logs: the
+**eye-to-display geometry**. This is a hypothesis; nothing logged can show it directly.
+
+- How the glasses sit on the nose.
+- Posture while reaching for the keyboard.
+- The app closing and restarting between the two gates, with the glasses possibly
+  touched.
+
+A shift of about 1.4° is small for an eyewear fit. The optical see-through literature
+treats this as the known validity limit of a display calibration under HMD slippage
+(Grubert et al. 2018).
+
+### What 0.3.004 changes
+
+- **Alignment is a step inside every G5 run** (`AlignStep`), so it uses the same process,
+  posture and glasses position as the test.
+  1. The run locks on the target.
+  2. Untimed: align the drawing with the keys, starting from the saved offset. **Enter**
+     saves and continues.
+  3. 6 s hands-off check.
+
+  The keys stay active for the whole run, and every change is logged with its time. The
+  run warns if the offset ends unsaved.
+- **The Align gate is removed.** The demo keeps the keys but has no blocking step, since
+  guests come and go.
+- **`python -m xreal_gates chain RUN...`** prints each run's chain and states whether it
+  is identical across runs.
+- **`python -m xreal_gates filters`** adds a mean over all `_still` blocks per method.
+
+### Menu
+
+| Key | Entry |
+|---|---|
+| D | demo |
+| C | calibrate the Eye |
+| 1 | G5 plate A, 3DoF |
+| 2 | G5 plate A, 6DoF |
+| 3 | G5 25 mm board, 3DoF |
+| 4 | G5 plate L, 3DoF |
+| 5 | compare filters, 3DoF |
+| 6 | compare filters, 6DoF |
+| K | cool-down |
+| O | open run folder |
+| Z | zip runs |
+| X | older gates |
+| Q | quit |
+
+Older gates (X) keeps, unchanged, for repeat measurements: G1, G2, the G3 and G4
+variants, the other G5 combinations, the 6DoF demo, manual and the vendor sample.
+
+### Session 0.3.004
+
+1. Glasses on, and do not touch them from here on. Run **C** only if the glasses or the
+   camera changed; the 21 Oct calibration stays valid.
+2. **5**: compare in 3DoF. Align, Enter, hands-off check, then rate every block.
+3. **6**: compare in 6DoF, the same way.
+4. **Z**. Then on the desktop:
+
+   ```
+   python -m xreal_gates import
+   python -m xreal_gates chain <run5> <run6>
+   python -m xreal_gates filters <run5> <run6>
+   ```
+
+The result to look for: the same offset in both runs would mean the glasses stayed put; a
+different one, with an identical chain, would support the eye-to-display explanation.
+If it holds, the next step is a SPAAM-style several-point alignment.

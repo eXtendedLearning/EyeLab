@@ -393,6 +393,12 @@ def report(run_dir: Path, target: str, **params) -> List[str]:
             s = sc.get(n)
             cells.append(f"{'-':>21s}" if s is None else f"jit {s.jitter_mm_s:6.1f} err {s.error_mm:5.1f}".rjust(21))
         lines.append(f"  {step:16s} " + "  ".join(cells))
+    res = compare(meas, target, **params)
+    still = [sc for step, sc in res.items() if step.endswith("_still")]
+    if still:
+        lines.append("  all *_still blocks (mean): " + "   ".join(
+            f"{n} jitter {np.mean([sc[n].jitter_mm_s for sc in still if n in sc]):.1f} mm/s "
+            f"error {np.nanmean([sc[n].error_mm for sc in still if n in sc]):.1f} mm" for n in COLUMNS))
     r = ratings(run_dir)
     if r:
         lines.append("  ratings (1-5): " + ", ".join(f"{n} {np.mean(v):.1f} ({v})" for n, v in sorted(r.items())))

@@ -6,11 +6,11 @@ using UnityEngine;
 
 namespace EyeLabGates
 {
-    public enum GateKind { Manual, G1, G2, G3, G4, G5, Calib, Demo, Align, Cooldown }
+    public enum GateKind { Manual, G1, G2, G3, G4, G5, Calib, Demo, Cooldown }
 
     /// <summary>
     /// Command-line arguments of the gate player (docs/XREAL-PC-GATES-G1-G3.md §5):
-    /// <c>-gate G1|G2|G3|G4|G5|calib|demo|align|manual|cooldown -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60
+    /// <c>-gate G1|G2|G3|G4|G5|calib|demo|manual|cooldown -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60
     /// -burstEvery s -burstFrames n -target plateA|plateL|board25[,...] -camMode stream|burst -lockFilter latest|euro|hysteresis -compare -port n -duration s -snapshotEvery s -label text -logRoot dir</c>. G1-G4 follow the timed protocols in
     /// <see cref="GateProtocol"/>; <c>-duration</c> only applies to manual (it is recorded otherwise). G4 (light overlay)
     /// renders at 30 fps unless <c>-renderFps 60</c> is given, and reads <c>-order tracked</c> as 6DoF, <c>3dof</c> as 3DoF.
@@ -100,7 +100,6 @@ namespace EyeLabGates
                             case "g4": a.Gate = GateKind.G4; break;
                             case "g5": a.Gate = GateKind.G5; break;
                             case "demo": a.Gate = GateKind.Demo; break;
-                            case "align": a.Gate = GateKind.Align; break;
                             case "calib": a.Gate = GateKind.Calib; break;
                             case "manual": a.Gate = GateKind.Manual; break;
                             case "cooldown": a.Gate = GateKind.Cooldown; break;
@@ -192,7 +191,7 @@ namespace EyeLabGates
             }
 
             a.Duration = duration ?? DefaultDuration(a.Gate);
-            bool locks = a.Gate == GateKind.G5 || a.Gate == GateKind.Demo || a.Gate == GateKind.Align;
+            bool locks = a.Gate == GateKind.G5 || a.Gate == GateKind.Demo;
             if ((a.Gate == GateKind.G4 || locks) && !renderFpsGiven) a.RenderFps = 30;
             // Locks follow the latest camera pose (LockAnchor), so update faster: a burst every 1.2 s
             // (the camera needs ~1.1 s to deliver its first frame) and use its second frame.

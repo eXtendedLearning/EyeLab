@@ -56,6 +56,8 @@ namespace EyeLabGates
         const float StreamWindowSeconds = 8f;     // and at least this often
         const float StreamNoFrameTimeout = 4f;
         const float MaxSendHz = 8f;
+        const float AlignLockTimeout = 30f;
+        const float AlignCheckSeconds = 6f;
         const float LockSnapshotEvery = 1f;       // keep one sent frame per second for offline analysis
         const double HotClockPct = 110.0;         // stream mode falls back to bursts below this CPU clock
         const double HotSeconds = 10.0;           // for this long (continuous decoding heats the Surface, §16)
@@ -122,6 +124,7 @@ namespace EyeLabGates
         double m_HotSince = double.NaN;
         ViewOffset m_ViewOffset = new ViewOffset();
         bool m_ViewOffsetDirty;
+        bool m_AlignConfirmed;
 
         sealed class LastLock { public PendingLock Pending; public TargetPose Pose; }
         readonly Queue<HeadSample> m_HeadHistory = new Queue<HeadSample>();
@@ -156,15 +159,14 @@ namespace EyeLabGates
         public double StepEnd { get; private set; } = double.NaN;
         public bool IsCooldown => m_Args != null && m_Args.Gate == GateKind.Cooldown;
         /// <summary>G4: banner at the top, no camera preview, so the overlay in the middle stays clear.</summary>
-        public bool IsLight => m_Args != null && (m_Args.Gate == GateKind.G4 || m_Args.Gate == GateKind.G5 || m_Args.Gate == GateKind.Demo || m_Args.Gate == GateKind.Align);
+        public bool IsLight => m_Args != null && (m_Args.Gate == GateKind.G4 || m_Args.Gate == GateKind.G5 || m_Args.Gate == GateKind.Demo);
         public int Bursts => m_Bursts;
         public bool IsG5 => m_Args != null && m_Args.Gate == GateKind.G5;
         public bool IsDemo => m_Args != null && m_Args.Gate == GateKind.Demo;
         /// <summary>G5 and demo: camera bursts feed the pose bridge.</summary>
-        public bool IsAlign => m_Args != null && m_Args.Gate == GateKind.Align;
         /// <summary>G5 filter comparison (blind): the shown filter changes per block and is not named.</summary>
         public bool IsCompare => m_Args != null && m_Args.Gate == GateKind.G5 && m_Args.Compare;
-        public bool IsLocking => IsG5 || IsDemo || IsAlign;
+        public bool IsLocking => IsG5 || IsDemo;
         /// <summary>Camera state for the HUD (locking gates): empty when fine.</summary>
         public string CameraStatus { get; private set; } = "";
         /// <summary>The head-frame view offset, with "(unsaved)" while changed and not saved.</summary>
@@ -282,7 +284,6 @@ namespace EyeLabGates
                 case GateKind.G4: m_Sequence = StartCoroutine(RunG4()); break;
                 case GateKind.G5: m_Sequence = StartCoroutine(RunG5()); break;
                 case GateKind.Demo: ShowEyeView = true; m_Sequence = StartCoroutine(RunDemo()); break;
-                case GateKind.Align: m_Sequence = StartCoroutine(RunAlign()); break;
                 case GateKind.Calib: m_Sequence = StartCoroutine(RunCalib()); break;
                 case GateKind.Cooldown: m_Sequence = StartCoroutine(RunCooldown()); break;
                 default:
@@ -510,6 +511,8 @@ namespace EyeLabGates
             Say(IsCompare ? "Gate five. Filter comparison." : $"Gate five. Locked overlay on {SpokenTargets()}.");
             yield return StartLocking(m_Args.Order == "3dof" ? TrackingType.MODE_3DOF : TrackingType.MODE_6DOF);
             if (m_Quitting) yield break;
+            yield return AlignStep();
+            if (m_Quitting) yield break;
             if (IsCompare)
             {
                 // Blind: methods get random letters; round 2 repeats round 1 in reverse order.
@@ -606,23 +609,47 @@ namespace EyeLabGates
             StartCoroutine(m_Args.CamMode == "stream" ? StreamLoop() : BurstLoop());
         }
 
-        static bool IsLockingGate(GateKind g) => g == GateKind.G5 || g == GateKind.Demo || g == GateKind.Align;
+        static bool IsLockingGate(GateKind g) => g == GateKind.G5 || g == GateKind.Demo;
 
         /// <summary>
-        /// Align (guide §19): 3DoF lock on the target with no protocol; the wearer moves the overlay
-        /// onto the target with the keyboard (head-frame <see cref="ViewOffset"/>) and saves it with Enter.
-        /// G5 and the demo load the saved offset.
+        /// Alignment inside the run (guide §21). 22 Oct: the separate Align gate gave x +6, y -18 mm twice,
+        /// with camera, calibration and head chain identical to G5, yet that offset looked wrong in the
+        /// following G5: the wearer's eye-to-display geometry changes between runs (fit on the nose,
+        /// posture at the keyboard), which no separate gate can capture. So each G5 run starts by aligning
+        /// the drawing as it stands now, from the saved offset, glasses untouched: untimed, Enter saves
+        /// and continues, then a hands-off check. The arrows stay active for the whole run.
         /// </summary>
-        IEnumerator RunAlign()
+        IEnumerator AlignStep()
         {
-            Say("Alignment. Look at the target and hold still.");
-            yield return StartLocking(TrackingType.MODE_3DOF);
+            Show("align_wait", "LOOK AT THE TARGET, HOLD STILL", "Waiting for the first lock", "ALIGN");
+            Say("Look at the target and hold still.");
+            yield return WaitUntilOrTimeout(AnyLocked, AlignLockTimeout);
+            if (!AnyLocked())
+            {
+                m_Log.Event("align", "NO_LOCK", $"after {AlignLockTimeout.ToString(CultureInfo.InvariantCulture)} s");
+                Say("No target found. Continuing.");
+                yield break;
+            }
+            double t0 = Time.realtimeSinceStartupAsDouble;
+            m_Log.Event("align", "BEGIN", m_ViewOffset.Describe());
+            Show("align", "ALIGN THE DRAWING, THEN ENTER",
+                 "Arrows: move  PgUp/PgDn: farther/nearer  Ctrl+arrows: rotate  Shift: big steps  Backspace: zero  Enter: done. Do not touch the glasses.", "HANDS-OFF CHECK");
+            Say("Align the drawing on the target with the arrow keys, then press Enter.");
+            m_AlignConfirmed = false;
+            while (!m_AlignConfirmed && !m_Quitting) yield return null;
             if (m_Quitting) yield break;
-            Show("align", "ALIGN THE DRAWING ON THE TARGET",
-                 "Arrows: move   PgUp/PgDn: farther/nearer   Ctrl+arrows, Ctrl+PgUp/PgDn: rotate   Shift: big steps   Enter: save   Backspace: zero   Esc: end", "");
-            Say("Use the arrow keys until the drawing sits on the target. Then press Enter.");
-            m_InProtocol = true;
-            while (!m_Quitting) yield return null;
+            m_Log.Event("align", "DONE", $"seconds={(Time.realtimeSinceStartupAsDouble - t0).ToString("F1", CultureInfo.InvariantCulture)} {m_ViewOffset.Describe()}");
+            Show("align_check", "HANDS OFF: IS IT ON THE TARGET?", "Stand normally and look at it. Arrows still work; Enter saves.", "");
+            StepEnd = StepStart + AlignCheckSeconds;
+            Say("Hands off. Stand normally and check.");
+            yield return new WaitForSecondsRealtime(AlignCheckSeconds);
+        }
+
+        bool AnyLocked()
+        {
+            foreach (var t in m_Anchors.Values)
+                if (t.HasAnchor) return true;
+            return false;
         }
 
         /// <summary>Waits until the camera has rested since its last stop, plus a back-off after failures.</summary>
@@ -710,6 +737,11 @@ namespace EyeLabGates
 
         IEnumerator StopLocking()
         {
+            if (m_ViewOffsetDirty)
+            {
+                m_Log.Event("view_offset", "UNSAVED", m_ViewOffset.Describe());
+                Say("The offset was not saved");
+            }
             m_Bursting = false;
             if (m_Source.IsCapturing) StopCapture("end");
             foreach (var kv in m_Anchors)
@@ -963,6 +995,7 @@ namespace EyeLabGates
                 {
                     m_ViewOffset.Save(ViewOffset.DefaultPath);
                     m_ViewOffsetDirty = false;
+                    m_AlignConfirmed = true;
                     m_Log.Event("view_offset", "SAVED", $"{ViewOffset.DefaultPath}: {m_ViewOffset.Describe()}");
                     m_Audio.PlayOneShot(m_ReadyBeep);
                     Say("Offset saved");
@@ -1562,11 +1595,6 @@ namespace EyeLabGates
 
         IEnumerator EndDemo()
         {
-            if (m_ViewOffsetDirty)
-            {
-                m_Log.Event("view_offset", "UNSAVED", m_ViewOffset.Describe());
-                Say("The offset was not saved");
-            }
             yield return StopLocking();
             yield return Quit("COMPLETED");
         }
@@ -1644,7 +1672,7 @@ namespace EyeLabGates
             {
                 m_Log.Event("key", "Esc", m_StepId);
                 if (m_Sequence != null) StopCoroutine(m_Sequence);
-                StartCoroutine(IsDemo || IsAlign ? EndDemo() : Quit("ABORTED_BY_USER"));
+                StartCoroutine(IsDemo ? EndDemo() : Quit("ABORTED_BY_USER"));
             }
             if (IsDemo) HandleDemoKeys();
         }
@@ -1740,7 +1768,6 @@ namespace EyeLabGates
                     return $"G5 locked overlay on {m_Args.Target} ({(m_Args.Order == "3dof" ? "3DoF" : "6DoF")}), camera {m_Args.BurstFrames} fr every " +
                            $"{m_Args.BurstEvery.ToString(CultureInfo.InvariantCulture)} s, {m_Args.RenderFps} fps";
                 case GateKind.Demo: return $"EyeLab demo: {m_Args.Target} ({(m_Args.Order == "3dof" ? "3DoF" : "6DoF")})";
-                case GateKind.Align: return $"Align the overlay: {m_Args.Target} (3DoF)";
                 case GateKind.G4:
                     string burst = m_Args.BurstEvery > 0
                         ? $"camera {m_Args.BurstFrames} fr every {m_Args.BurstEvery.ToString(CultureInfo.InvariantCulture)} s"
