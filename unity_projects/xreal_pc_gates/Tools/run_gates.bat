@@ -65,7 +65,8 @@ echo  Z  Zip NEW runs for transfer (exported runs move to _exported)
 echo  X  Older gates  G1, G2, G3, G4, other G5 variants, manual, vendor sample
 echo  Q  Quit
 echo.
-echo  In G5: F switches the lock filter, ] smoother, [ more responsive, arrows move the drawing, Enter saves.
+echo  In G5: F lock filter, ] smoother, [ more responsive; arrows turn the drawing, Ctrl+arrows shift it,
+echo  Alt+PgUp/PgDn depth, Enter saves; , and . camera latency -/+10 ms.
 choice /c DC123456KOZXQ /n /m "Select: "
 set "SEL=%errorlevel%"
 if "%SEL%"=="1" call :demo 3dof & goto menu

@@ -6,6 +6,7 @@
 - ``anchor RUN --target plateA|plateL|board25 [--calib YAML]``: offline lock test of an XR run.
 - ``filters RUN [--target plateA]``: compare the three G5 lock filters (shake, error) on a run.
 - ``chain RUN [RUN ...]``: is the registration chain the same in these runs?
+- ``latency RUN [RUN ...]``: estimate the Eye frame age at sending from lock consistency.
 - ``serve --target plateA[,board25] [--calib YAML] [--port 8765]``: the G5 and demo pose service (ADR-001 Step C).
 """
 
@@ -41,6 +42,8 @@ def main(argv=None) -> int:
     p_flt = sub.add_parser("filters", help="compare the G5 lock filters on a run")
     p_flt.add_argument("runs", nargs="+", type=Path)
     p_flt.add_argument("--target", default="plateA", choices=TARGET_NAMES)
+    p_lat = sub.add_parser("latency", help="estimate the Eye frame age from lock consistency")
+    p_lat.add_argument("runs", nargs="+", type=Path)
     p_chn = sub.add_parser("chain", help="compare the registration chain of runs")
     p_chn.add_argument("runs", nargs="+", type=Path)
     p_srv = sub.add_parser("serve", help="G5 pose service on ws://127.0.0.1:PORT")
@@ -85,6 +88,12 @@ def main(argv=None) -> int:
         from .lockfilters import report as filter_report
         for run in args.runs:
             for line in filter_report(run, args.target):
+                print(line)
+        return 0
+    if args.cmd == "latency":
+        from .latency import report as latency_report
+        for run in args.runs:
+            for line in latency_report(run):
                 print(line)
         return 0
     if args.cmd == "chain":

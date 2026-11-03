@@ -46,8 +46,11 @@ namespace EyeLabGates
         // G5: a frame is sent for a lock only while the head is nearly still, so that the head pose at
         // receipt stands in for the (unmeasured) pose at exposure.
         // Relaxed 22 Oct: on 21 Oct 35-46 % of bursts were skipped, partly on drift-induced "motion".
-        const float MaxLockDegPerSec = 15f;
-        const float MaxLockMetresPerSec = 0.15f;
+        // 0.3.005: with the frame paired to the head pose at its capture (CamLatency) a turning head no
+        // longer misplaces the target by the turn during the frame's age, so corrections are allowed
+        // during normal head motion; only fast moves (motion blur) are skipped.
+        const float MaxLockDegPerSec = 45f;
+        const float MaxLockMetresPerSec = 0.4f;
         const float DemoGridDistance = 1.5f;
         // Camera handling for the locking gates (rev. 3, 22 Oct). A restart 0.18 s after a stop left
         // the RGB camera unable to start for the rest of the 22 Oct G5 run (NativeRGBCamera+Start).
@@ -59,9 +62,17 @@ namespace EyeLabGates
         const float AlignLockTimeout = 30f;
         const float AlignCheckSeconds = 6f;
         const float LockSnapshotEvery = 1f;       // keep one sent frame per second for offline analysis
-        const double HotClockPct = 110.0;         // stream mode falls back to bursts below this CPU clock
-        const double HotSeconds = 10.0;           // for this long (continuous decoding heats the Surface, §16)
-        const float HeadHistorySeconds = 0.5f;
+        // Stream mode falls back to bursts only when the Surface is really hot (0.3.004 fell back on a
+        // cold, lightly loaded Surface whose clock idled at 83-97 %, 2 Nov): the hottest thermal zone at or
+        // above HotTempC, or, with no temperature, a low clock under real load. It returns to streaming
+        // after CoolSeconds below the thresholds.
+        const double HotTempC = 65.0;
+        const double CoolTempC = 60.0;
+        const double HotClockPct = 110.0;
+        const double HotLoadPct = 60.0;
+        const double HotSeconds = 10.0;
+        const double CoolSeconds = 30.0;
+        const float HeadHistorySeconds = 1.0f;
         const float HeadSpeedWindow = 0.25f;
         const float TrackingReadyHold = 1f;
         const float NoReportFallbackSeconds = 15f;
@@ -122,6 +133,10 @@ namespace EyeLabGates
         double m_LastSend = double.NegativeInfinity;
         int m_StreamWindows;
         double m_HotSince = double.NaN;
+        double m_CoolSince = double.NaN;
+        bool m_HotMode;
+        /// <summary>Age of a camera frame when it is sent (s): the head pose is taken this much earlier.</summary>
+        float m_CamLatency;
         ViewOffset m_ViewOffset = new ViewOffset();
         bool m_ViewOffsetDirty;
         bool m_AlignConfirmed;
@@ -171,7 +186,7 @@ namespace EyeLabGates
         public string CameraStatus { get; private set; } = "";
         /// <summary>The head-frame view offset, with "(unsaved)" while changed and not saved.</summary>
         public string OffsetStatus => !IsLocking ? "" :
-            $"view offset {m_ViewOffset.Describe()}{(m_ViewOffsetDirty ? "  (unsaved: Enter)" : "")}" +
+            $"view offset {m_ViewOffset.Describe()}{(m_ViewOffsetDirty ? "  (unsaved: Enter)" : "")}   |   latency {Mathf.RoundToInt(m_CamLatency * 1000f)} ms" +
             (IsCompare ? $"   |   {m_CompareLabel}" : $"   |   filter {FilterDescription()}  (F switch, [ ] tune)");
         /// <summary>Demo: show the latest Eye frame in a corner (key E).</summary>
         public bool ShowEyeView { get; private set; }
@@ -192,6 +207,7 @@ namespace EyeLabGates
             m_Perf = GetComponent<PerfProbe>();
             m_Display = GetComponent<DisplayProbe>();
             m_ActiveFilter = TargetLock.IndexOf(m_Args.LockFilter);
+            m_CamLatency = (float)m_Args.CamLatency;
             m_Overlay = GetComponent<GateOverlay>();
             if (m_CameraTexture == null) m_CameraTexture = FindAnyObjectByType<XREALRGBCameraTexture>();
             if (m_HelloMR == null) m_HelloMR = FindAnyObjectByType<HelloMR>();
@@ -516,7 +532,8 @@ namespace EyeLabGates
             if (IsCompare)
             {
                 // Blind: methods get random letters; round 2 repeats round 1 in reverse order.
-                var rng = new System.Random();
+                int seed = Guid.NewGuid().GetHashCode();   // 2 Nov: two runs got the same order from new Random()
+                var rng = new System.Random(seed);
                 var letters = new List<string> { "A", "B", "C" };
                 var labels = new string[3];
                 for (int i = 0; i < 3; i++) { int k = rng.Next(letters.Count); labels[i] = "METHOD " + letters[k]; letters.RemoveAt(k); }
@@ -526,7 +543,7 @@ namespace EyeLabGates
                 round.Reverse();
                 order.AddRange(round);
                 m_CompareLabels = labels;
-                m_Log.Event("compare_mapping", "", $"{TargetLock.Names[0]}={labels[0]} {TargetLock.Names[1]}={labels[1]} " +
+                m_Log.Event("compare_mapping", seed, $"{TargetLock.Names[0]}={labels[0]} {TargetLock.Names[1]}={labels[1]} " +
                     $"{TargetLock.Names[2]}={labels[2]} order={string.Join(",", order)}");
                 yield return RunProtocol(GateProtocol.G5Compare(order.ToArray(), labels));
             }
@@ -599,6 +616,8 @@ namespace EyeLabGates
             }
             ReadRgbFromHead();
             m_Log.Event("lock_filter", TargetLock.Names[m_ActiveFilter], IsCompare ? "compare: changes per block" : "key F switches");
+            m_Log.Event("cam_latency", (m_CamLatency * 1000f).ToString("F0", CultureInfo.InvariantCulture),
+                "ms: head pose taken this long before the frame is sent (keys , and . change it by 10 ms)");
             m_ViewOffset = ViewOffset.LoadOrZero(ViewOffset.DefaultPath, out string offsetStatus);
             m_Log.Event("view_offset", "LOADED", $"{offsetStatus}: {m_ViewOffset.Describe()}");
             UpdateLockStatus();
@@ -633,7 +652,7 @@ namespace EyeLabGates
             double t0 = Time.realtimeSinceStartupAsDouble;
             m_Log.Event("align", "BEGIN", m_ViewOffset.Describe());
             Show("align", "ALIGN THE DRAWING, THEN ENTER",
-                 "Arrows: move  PgUp/PgDn: farther/nearer  Ctrl+arrows: rotate  Shift: big steps  Backspace: zero  Enter: done. Do not touch the glasses.", "HANDS-OFF CHECK");
+                 "Arrows: turn  Ctrl+arrows: shift  Alt+PgUp/PgDn: depth  Shift: big steps  Backspace: zero  Enter: done. Do not touch the glasses.", "HANDS-OFF CHECK");
             Say("Align the drawing on the target with the arrow keys, then press Enter.");
             m_AlignConfirmed = false;
             while (!m_AlignConfirmed && !m_Quitting) yield return null;
@@ -680,6 +699,18 @@ namespace EyeLabGates
             m_Bursting = true;
             while (m_Bursting && !m_Quitting)
             {
+                if (m_HotMode)
+                {
+                    yield return BurstOnce();
+                    UpdateHeat();
+                    if (!m_HotMode)
+                    {
+                        m_Log.Event("camera_mode", "stream", "back to streaming: the Surface cooled down");
+                        CameraStatus = "";
+                        Say("Surface cooler. Fast updates again.");
+                    }
+                    continue;
+                }
                 yield return CameraRest();
                 if (!m_Bursting || m_Quitting) break;
                 m_StreamWindows++;
@@ -716,23 +747,34 @@ namespace EyeLabGates
                 int frames = m_Camera.FramesThisCapture;
                 if (m_Source.IsCapturing) StopCapture($"stream_{m_StreamWindows}");
                 m_LastCameraStop = Time.realtimeSinceStartupAsDouble;
-                double clock = m_Perf.CpuPerformancePct;
-                double nowT = Time.realtimeSinceStartupAsDouble;
-                if (!double.IsNaN(clock) && clock < HotClockPct) { if (double.IsNaN(m_HotSince)) m_HotSince = nowT; }
-                else m_HotSince = double.NaN;
+                UpdateHeat();
                 m_Log.Event("stream", end, $"n={m_StreamWindows} frames={frames} sent={sent} " +
                     $"on_s={(m_LastCameraStop - t0).ToString("F2", CultureInfo.InvariantCulture)} " +
                     $"lag_s={(double.IsNaN(lag0) ? "" : (m_Camera.LagGrowth - lag0).ToString("F3", CultureInfo.InvariantCulture))}");
                 if (end == "no_frames") NoteCameraFailure("no frames");
-                if (!double.IsNaN(m_HotSince) && nowT - m_HotSince > HotSeconds)
+                if (m_HotMode)
                 {
-                    m_Log.Event("camera_mode", "burst", $"fallback: CPU clock below {HotClockPct.ToString(CultureInfo.InvariantCulture)} % for {HotSeconds.ToString(CultureInfo.InvariantCulture)} s");
+                    m_Log.Event("camera_mode", "burst",
+                        $"fallback: hot (temp {GateRunLog.F(m_Perf.TempMaxC, "F0")} C, clock {GateRunLog.F(m_Perf.CpuPerformancePct, "F0")} %, " +
+                        $"load {GateRunLog.F(m_Perf.SystemCpuPct, "F0")} %) for {HotSeconds.ToString(CultureInfo.InvariantCulture)} s");
                     CameraStatus = "SURFACE HOT: slower camera bursts";
                     Say("Surface hot. Slower updates.");
-                    StartCoroutine(BurstLoop());
-                    yield break;
                 }
             }
+        }
+
+        /// <summary>Hot = hottest zone at or above HotTempC (or, without temperatures, low clock under load) for HotSeconds.</summary>
+        void UpdateHeat()
+        {
+            double now = Time.realtimeSinceStartupAsDouble;
+            double temp = m_Perf.TempMaxC, clock = m_Perf.CpuPerformancePct, load = m_Perf.SystemCpuPct;
+            bool hot = !double.IsNaN(temp) ? temp >= HotTempC
+                     : !double.IsNaN(clock) && clock < HotClockPct && !double.IsNaN(load) && load >= HotLoadPct;
+            bool cool = !double.IsNaN(temp) ? temp < CoolTempC : double.IsNaN(clock) || clock >= 180.0;
+            if (hot) { if (double.IsNaN(m_HotSince)) m_HotSince = now; } else m_HotSince = double.NaN;
+            if (cool) { if (double.IsNaN(m_CoolSince)) m_CoolSince = now; } else m_CoolSince = double.NaN;
+            if (!m_HotMode && !double.IsNaN(m_HotSince) && now - m_HotSince > HotSeconds) m_HotMode = true;
+            else if (m_HotMode && !double.IsNaN(m_CoolSince) && now - m_CoolSince > CoolSeconds) m_HotMode = false;
         }
 
         IEnumerator StopLocking()
@@ -809,6 +851,36 @@ namespace EyeLabGates
                 m_HeadHistory.Dequeue();
         }
 
+        /// <summary>
+        /// Head pose at time <paramref name="t"/> (realtime s), interpolated from the recorded history; the
+        /// current pose when the history does not reach back that far. 0.3.005: the Eye frame being sent is
+        /// about 160 ms old (offline estimate, 5 runs: lock-to-lock jumps while turning smallest at 140-200 ms),
+        /// so it must be paired with the head pose of its capture, not of its sending.
+        /// </summary>
+        void HeadAt(double t, Transform fallback, out Vector3 position, out Quaternion rotation)
+        {
+            position = fallback.position;
+            rotation = fallback.rotation;
+            HeadSample before = default, after = default;
+            bool hasBefore = false, hasAfter = false;
+            foreach (var h in m_HeadHistory)
+            {
+                if (h.T <= t) { before = h; hasBefore = true; }
+                else { after = h; hasAfter = true; break; }
+            }
+            if (hasBefore && hasAfter)
+            {
+                float a = (float)((t - before.T) / Math.Max(after.T - before.T, 1e-6));
+                position = Vector3.Lerp(before.Position, after.Position, a);
+                rotation = Quaternion.Slerp(before.Rotation, after.Rotation, a);
+            }
+            else if (hasBefore)
+            {
+                position = before.Position;
+                rotation = before.Rotation;
+            }
+        }
+
         /// <summary>Head angular and linear speed over the last <see cref="HeadSpeedWindow"/> s.</summary>
         bool HeadSpeed(out float degPerSec, out float metresPerSec)
         {
@@ -858,10 +930,11 @@ namespace EyeLabGates
             }
             m_LastSend = now;
             var img = new YGrayImage { Width = y.width, Height = y.height, Data = data, BottomUp = true, Sequence = ++m_LockSeq };
+            HeadAt(now - m_CamLatency, head, out Vector3 capPos, out Quaternion capRot);
             m_Pending = new PendingLock
             {
-                Seq = img.Sequence, T = Time.realtimeSinceStartupAsDouble, HeadPosition = head.position,
-                HeadRotation = head.rotation, CamTs = m_Source.Timestamp,
+                Seq = img.Sequence, T = now - m_CamLatency, HeadPosition = capPos,
+                HeadRotation = capRot, CamTs = m_Source.Timestamp,
             };
             m_LocksSent++;
             m_PoseTask = m_Bridge.EstimatePoseAsync(img, m_Source.Timestamp, m_BridgeCts.Token);
@@ -964,25 +1037,38 @@ namespace EyeLabGates
         }
 
         /// <summary>
-        /// View-offset keys (G5, demo, align), wearer looking at the target: arrows move it in the head
-        /// frame (2 mm, Shift 10 mm), PgUp/PgDn farther/nearer, Ctrl+arrows yaw/pitch and Ctrl+PgUp/PgDn
-        /// roll (0.25 deg, Shift 1 deg), Backspace zero, Enter save.
+        /// View-offset keys (G5, demo), wearer looking at the target. 0.3.005: arrows turn the drawing about
+        /// the head (yaw/pitch, 0.1 deg; Shift 0.5 deg), because a fixed tilt of the display against the eyes
+        /// is an angle and then holds at every distance (2 Nov: y -16 mm at 0.77 m in both runs = 1.2 deg).
+        /// Ctrl+arrows shift it (2 mm; Shift 10 mm), Ctrl+PgUp/PgDn roll, Alt+PgUp/PgDn depth (2 mm; depth is
+        /// hard to judge by eye, so it needs the extra key). Backspace zero, Enter save. Keys , and . change
+        /// the camera latency by 10 ms.
         /// </summary>
         void HandleOffsetKeys()
         {
             bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
             bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
-            float mm = shift ? 10f : 2f, deg = shift ? 1f : 0.25f;
+            bool alt = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
+            float mm = shift ? 10f : 2f, deg = shift ? 0.5f : 0.1f;
             var o = m_ViewOffset;
             bool changed = true;
-            if (Input.GetKeyDown(KeyCode.LeftArrow)) { if (ctrl) o.yaw_deg -= deg; else o.dx_mm -= mm; }
-            else if (Input.GetKeyDown(KeyCode.RightArrow)) { if (ctrl) o.yaw_deg += deg; else o.dx_mm += mm; }
-            else if (Input.GetKeyDown(KeyCode.UpArrow)) { if (ctrl) o.pitch_deg -= deg; else o.dy_mm += mm; }
-            else if (Input.GetKeyDown(KeyCode.DownArrow)) { if (ctrl) o.pitch_deg += deg; else o.dy_mm -= mm; }
-            else if (Input.GetKeyDown(KeyCode.PageUp)) { if (ctrl) o.roll_deg += deg; else o.dz_mm += mm; }
-            else if (Input.GetKeyDown(KeyCode.PageDown)) { if (ctrl) o.roll_deg -= deg; else o.dz_mm -= mm; }
+            if (Input.GetKeyDown(KeyCode.LeftArrow)) { if (ctrl) o.dx_mm -= mm; else o.yaw_deg -= deg; }
+            else if (Input.GetKeyDown(KeyCode.RightArrow)) { if (ctrl) o.dx_mm += mm; else o.yaw_deg += deg; }
+            else if (Input.GetKeyDown(KeyCode.UpArrow)) { if (ctrl) o.dy_mm += mm; else o.pitch_deg -= deg; }
+            else if (Input.GetKeyDown(KeyCode.DownArrow)) { if (ctrl) o.dy_mm -= mm; else o.pitch_deg += deg; }
+            else if (Input.GetKeyDown(KeyCode.PageUp) && ctrl) o.roll_deg += deg;
+            else if (Input.GetKeyDown(KeyCode.PageDown) && ctrl) o.roll_deg -= deg;
+            else if (Input.GetKeyDown(KeyCode.PageUp) && alt) o.dz_mm += mm;
+            else if (Input.GetKeyDown(KeyCode.PageDown) && alt) o.dz_mm -= mm;
             else if (Input.GetKeyDown(KeyCode.Backspace)) m_ViewOffset = new ViewOffset();
             else changed = false;
+            int lat = Input.GetKeyDown(KeyCode.Period) ? 1 : Input.GetKeyDown(KeyCode.Comma) ? -1 : 0;
+            if (lat != 0)
+            {
+                m_CamLatency = Mathf.Clamp(m_CamLatency + 0.01f * lat, 0f, 0.4f);
+                m_Log.Event("cam_latency", (m_CamLatency * 1000f).ToString("F0", CultureInfo.InvariantCulture), "key");
+                Say($"{Mathf.RoundToInt(m_CamLatency * 1000f)} milliseconds");
+            }
             if (changed)
             {
                 m_ViewOffsetDirty = true;
@@ -1120,49 +1206,53 @@ namespace EyeLabGates
         {
             m_Bursting = true;
             while (m_Bursting && !m_Quitting)
+                yield return BurstOnce();
+        }
+
+        /// <summary>One burst: rest, start, wait for BurstFrames frames, send the last one (locking gates), stop.</summary>
+        IEnumerator BurstOnce()
+        {
+            yield return CameraRest();
+            if (!m_Bursting || m_Quitting) yield break;
+            double start = Time.realtimeSinceStartupAsDouble;
+            m_Bursts++;
+            if (!StartCapture($"burst_{m_Bursts}"))
             {
-                yield return CameraRest();
-                if (!m_Bursting || m_Quitting) break;
-                double start = Time.realtimeSinceStartupAsDouble;
-                m_Bursts++;
-                if (!StartCapture($"burst_{m_Bursts}"))
-                {
-                    NoteCameraFailure("start failed");
-                    continue;
-                }
-                bool requested = false;
-                if (m_Args.BurstFrames <= 1)
+                NoteCameraFailure("start failed");
+                yield break;
+            }
+            bool requested = false;
+            if (m_Args.BurstFrames <= 1)
+            {
+                m_Camera.SnapshotNextFrame();
+                requested = true;
+            }
+            double first = double.NaN;
+            while (m_Camera.FramesThisCapture < m_Args.BurstFrames
+                   && Time.realtimeSinceStartupAsDouble - start < BurstTimeoutSeconds && m_Bursting && !m_Quitting)
+            {
+                if (double.IsNaN(first) && m_Camera.FramesThisCapture > 0) first = Time.realtimeSinceStartupAsDouble - start;
+                if (!requested && m_Camera.FramesThisCapture >= m_Args.BurstFrames - 1)
                 {
                     m_Camera.SnapshotNextFrame();
                     requested = true;
                 }
-                double first = double.NaN;
-                while (m_Camera.FramesThisCapture < m_Args.BurstFrames
-                       && Time.realtimeSinceStartupAsDouble - start < BurstTimeoutSeconds && m_Bursting && !m_Quitting)
-                {
-                    if (double.IsNaN(first) && m_Camera.FramesThisCapture > 0) first = Time.realtimeSinceStartupAsDouble - start;
-                    if (!requested && m_Camera.FramesThisCapture >= m_Args.BurstFrames - 1)
-                    {
-                        m_Camera.SnapshotNextFrame();
-                        requested = true;
-                    }
-                    yield return null;
-                }
-                if (double.IsNaN(first) && m_Camera.FramesThisCapture > 0) first = Time.realtimeSinceStartupAsDouble - start;
-                int frames = m_Camera.FramesThisCapture;
-                double on = Time.realtimeSinceStartupAsDouble - start;
-                if (IsLocking && frames >= m_Args.BurstFrames) TrySendLockFrame();
-                if (m_Source.IsCapturing) StopCapture($"burst_{m_Bursts}");
-                m_LastCameraStop = Time.realtimeSinceStartupAsDouble;
-                if (frames == 0) NoteCameraFailure("no frames");
-                else if (m_CameraFailures > 0) { m_CameraFailures = 0; CameraStatus = ""; }
-                m_Log.Event("burst", frames >= m_Args.BurstFrames ? "OK" : frames > 0 ? "SHORT" : "NO_FRAMES",
-                    $"n={m_Bursts} frames={frames} first_s={GateRunLog.F(first, "F3")} on_s={on.ToString("F3", CultureInfo.InvariantCulture)} " +
-                    $"lag_growth_s={GateRunLog.F(m_Camera.LagGrowth, "F3")} cam_ts={m_Camera.LastTimestamp}");
-                double wait = m_Args.BurstEvery - (Time.realtimeSinceStartupAsDouble - start);
-                if (wait > 0) yield return new WaitForSecondsRealtime((float)wait);
-                else yield return null;
+                yield return null;
             }
+            if (double.IsNaN(first) && m_Camera.FramesThisCapture > 0) first = Time.realtimeSinceStartupAsDouble - start;
+            int frames = m_Camera.FramesThisCapture;
+            double on = Time.realtimeSinceStartupAsDouble - start;
+            if (IsLocking && frames >= m_Args.BurstFrames) TrySendLockFrame();
+            if (m_Source.IsCapturing) StopCapture($"burst_{m_Bursts}");
+            m_LastCameraStop = Time.realtimeSinceStartupAsDouble;
+            if (frames == 0) NoteCameraFailure("no frames");
+            else if (m_CameraFailures > 0) { m_CameraFailures = 0; CameraStatus = ""; }
+            m_Log.Event("burst", frames >= m_Args.BurstFrames ? "OK" : frames > 0 ? "SHORT" : "NO_FRAMES",
+                $"n={m_Bursts} frames={frames} first_s={GateRunLog.F(first, "F3")} on_s={on.ToString("F3", CultureInfo.InvariantCulture)} " +
+                $"lag_growth_s={GateRunLog.F(m_Camera.LagGrowth, "F3")} cam_ts={m_Camera.LastTimestamp}");
+            double wait = m_Args.BurstEvery - (Time.realtimeSinceStartupAsDouble - start);
+            if (wait > 0) yield return new WaitForSecondsRealtime((float)wait);
+            else yield return null;
         }
 
         /// <summary>

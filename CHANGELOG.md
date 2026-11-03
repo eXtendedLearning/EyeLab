@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.3.004<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.3.005<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -17,6 +17,19 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.3.005) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §22).
+  - **Frame age compensation.** The Eye frame is about 160 ms old when sent, estimated from
+    lock consistency in five runs (`python -m xreal_gates latency`). The lock now uses the
+    head pose of its capture (`-camLatency`, keys `,` `.`), cutting the lock-to-lock jump while
+    turning from 10-11 to 5-7 mm.
+  - **Motion gate relaxed** to 45 deg/s and 0.4 m/s.
+  - **Overheating fallback only when the Surface is hot** (temperature, or low clock under
+    load), and back to streaming when it cools; 0.3.004 fell back on a cold, idle Surface.
+  - **Blind comparison order seeded from a GUID** and logged.
+  - **Alignment keys angle first** (arrows yaw/pitch, Ctrl shift, Alt depth).
+  - `chain` reports the latency.
+  - **New plan `docs/tasks/T5.1-eye-latency.md`** for the 0.4.000 latency work.
+  - Rebuilt: `LATEST_BUILD.txt` 2026-11-03T09:26:40Z.
 - (0.3.004) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §21).
   - **Align and G5 use one chain.** Lens, RGB-from-head, tracking, render rate, camera mode and
     target are identical in the logs (`python -m xreal_gates chain`). The offset that did not

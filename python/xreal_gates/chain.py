@@ -17,7 +17,7 @@ from typing import Dict, List
 
 #: Fields that define the chain; a difference among them means the runs are not comparable.
 MUST_MATCH = ("lens", "rgb_from_head", "render_fps", "camera_mode", "targets")
-ALSO_SHOWN = ("tracking", "filter", "offset_start", "offset_end")
+ALSO_SHOWN = ("tracking", "filter", "cam_latency", "offset_start", "offset_end")
 
 
 def _rows(path: Path) -> List[dict]:
@@ -46,6 +46,7 @@ def fingerprint(run_dir: Path) -> Dict[str, str]:
         fp["targets"] = ", ".join(f"{t.get('name')} ({Path(str(t.get('source', ''))).name})" for t in names)
     for key in ("rgb_from_head", "tracking", "render_fps", "camera_mode", "filter", "offset_start", "offset_end"):
         fp.setdefault(key, "?")
+    fp["cam_latency"] = "0 ms (pose at sending; before 0.3.005)"
     fp.setdefault("targets", "?")
     for e in events:
         kind, result, detail = e["event"], e["result"], e["detail"]
@@ -57,6 +58,8 @@ def fingerprint(run_dir: Path) -> Dict[str, str]:
             fp["render_fps"] = str(result)
         elif kind == "camera_mode" and fp["camera_mode"] == "?":
             fp["camera_mode"] = result
+        elif kind == "cam_latency":
+            fp["cam_latency"] = f"{result} ms"
         elif kind == "lock_filter" and result != "ADJUST":
             fp["filter"] = result
         elif kind == "view_offset":

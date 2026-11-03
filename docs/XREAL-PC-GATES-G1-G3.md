@@ -1620,3 +1620,94 @@ variants, the other G5 combinations, the 6DoF demo, manual and the vendor sample
 The result to look for: the same offset in both runs would mean the glasses stayed put; a
 different one, with an identical chain, would support the eye-to-display explanation.
 If it holds, the next step is a SPAAM-style several-point alignment.
+
+## 22. Compare runs of 1-2 Nov, the 160 ms frame age, and 0.3.005
+
+### What ran (build `2026-11-01T14:25:10Z`)
+
+Plate A: compare 3DoF, compare 6DoF, demo. Also the 1 Nov tests on the older build.
+
+- **Operator: 3DoF super stable but blind to position; 6DoF less stable but in all six
+  DoF.**
+- **The 3DoF compare was not a fair test.**
+  - The overheating fallback switched it to bursts 40 s in: the CPU clock was 83-97 %
+    on a cold Surface (36 °C) under light load. Updates were then about 2 Hz.
+  - Its ratings (3.5 for every method) and scores do not separate the methods.
+- **The blind order was identical in both runs** (euro = A, latest = B, hysteresis = C,
+  order 1,2,0,0,2,1). `new System.Random()` is not a trustworthy seed.
+- **The 6DoF compare** ended at 289 s, without the app's quit sequence.
+
+  | 6DoF, still blocks | latest | euro | hysteresis |
+  |---|---|---|---|
+  | jitter (shown corners) | 11.8 mm/s | 3.1 mm/s | 3.0 mm/s |
+  | error | 1.5 mm | 1.9 mm | 3.0 mm |
+  | rating | 2.5 | 3 | 4 |
+
+- **The in-run alignment was consistent:** y −16 mm in both runs, x +8..+10 mm. Depth
+  varied (−14 and 0 mm): it is hard to judge by eye.
+- **The headset's 6DoF position noise while still is about 0.6 mm rms**, not the
+  dominant error.
+
+### The frame age
+
+The frame was paired with the head pose at sending. Re-chaining the target with the head
+pose L earlier, `python -m xreal_gates latency RUN`, minimises the lock-to-lock jumps
+while turning at **L = 140-200 ms** in all five stream-mode runs (3DoF and 6DoF):
+
+| | L = 0 | L ≈ 160 ms |
+|---|---|---|
+| lock-to-lock jump while turning | 10-11 mm | 5-7 mm |
+| lock-to-lock jump while still | 2.1 mm | 1.6 mm |
+
+**For comparison, the AR latency literature:**
+
+- Motion-to-photon about 20 ms or less (Oculus guidance; recent head-mounted AR work).
+- Detection thresholds down to about 3 ms in sensitive users (Jerald & Whitton, IEEE VR
+  2009; Ellis & Adelstein).
+- Optical see-through is stricter than VR because reality has no delay (Azuma 1997;
+  Lincoln et al., TVCG 2016).
+
+**What that means here.** The 160 ms is not the gate's motion-to-photon delay: XREAL
+renders head motion from its own tracking. It is the age of the camera correction.
+
+- For a fixed target it is harmless once each frame is paired with the head pose of its
+  capture, which 0.3.005 does.
+- It matters for anything that moves, and it limits how fast and how often the camera can
+  correct the drift of the head tracking.
+- The operator's assessment is that head tracking alone cannot hold millimetres, so
+  reducing it is the work of 0.4.000 (`docs/tasks/T5.1-eye-latency.md`).
+
+### Changes in 0.3.005 (build `2026-11-03T09:26:40Z`)
+
+- **Frame age compensation.**
+  - The head pose is taken `cam_latency` before sending (default 160 ms, `-camLatency s`,
+    keys `,` `.` ±10 ms), interpolated from 1 s of head history.
+  - Logged as `cam_latency`; `chain` reports it.
+  - `latency RUN` on a 0.3.005 run estimates the residual on top of it.
+- **Motion gate relaxed to 45°/s and 0.4 m/s,** so corrections continue during normal
+  head motion.
+- **Overheating fallback only when hot.**
+  - Hot means the hottest zone ≥ 65 °C for 10 s; without temperatures, a clock below
+    110 % at ≥ 60 % system load.
+  - It returns to streaming after 30 s below 60 °C (or clock ≥ 180 %).
+- **Blind order seeded from a GUID,** with the seed logged in `compare_mapping`.
+- **Alignment keys are angle first.**
+
+  | Key | Action |
+  |---|---|
+  | arrows | yaw / pitch (0.1°; Shift 0.5°) |
+  | Ctrl + arrows | shift (2 mm; Shift 10 mm) |
+  | Ctrl + PgUp / PgDn | roll |
+  | Alt + PgUp / PgDn | depth |
+
+  A fixed tilt of the display against the eyes is an angle, and holds at every distance.
+
+### Session 0.3.005
+
+Glasses on and untouched; furnished, evenly lit, static room; textured background behind
+the plate.
+
+1. **5**: compare in 3DoF. It now stays in stream mode: check that the HUD never shows
+   "SURFACE HOT" on a cool Surface.
+2. **6**: compare in 6DoF.
+3. **Z**. On the desktop, run `chain`, `filters` and `latency` on both runs.
