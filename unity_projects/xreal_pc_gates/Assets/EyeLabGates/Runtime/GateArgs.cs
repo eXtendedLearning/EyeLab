@@ -11,7 +11,7 @@ namespace EyeLabGates
     /// <summary>
     /// Command-line arguments of the gate player (docs/XREAL-PC-GATES-G1-G3.md §5):
     /// <c>-gate G1|G2|G3|G4|G5|calib|demo|manual|cooldown -order tracked|xrfirst|3dof|camfirst -reader vendor|drain -flushLag s -renderFps 30|60
-    /// -burstEvery s -burstFrames n -target plateA|plateL|board25[,...] -camMode stream|burst -lockFilter latest|euro|hysteresis -compare -camLatency s -port n -duration s -snapshotEvery s -label text -logRoot dir</c>. G1-G4 follow the timed protocols in
+    /// -burstEvery s -burstFrames n -target plateA|plateL|board25[,...] -camMode stream|burst -lockFilter latest|euro|hysteresis -compare -camLatency s (age base) -port n -duration s -snapshotEvery s -label text -logRoot dir</c>. G1-G4 follow the timed protocols in
     /// <see cref="GateProtocol"/>; <c>-duration</c> only applies to manual (it is recorded otherwise). G4 (light overlay)
     /// renders at 30 fps unless <c>-renderFps 60</c> is given, and reads <c>-order tracked</c> as 6DoF, <c>3dof</c> as 3DoF.
     /// Unknown arguments (e.g. Unity's own <c>-logFile</c>) are ignored.
@@ -42,8 +42,13 @@ namespace EyeLabGates
         public string LockFilter = "euro";
         /// <summary>G5 only: the blind filter comparison protocol instead of the standard one.</summary>
         public bool Compare;
-        /// <summary>Camera frame age at sending (s); the lock uses the head pose this much earlier (0.3.005).</summary>
-        public double CamLatency = 0.16;
+        /// <summary>
+        /// Base of the per-frame Eye frame age (s), T5.1 Phase 0 (0.3.007): a frame is paired with the head
+        /// pose <c>base + queue age + hold</c> before sending. 0.3.005-0.3.006 used this as a fixed age (0.16).
+        /// Default 0.09: best base of the Unity estimator replayed on the 2-6 Nov stream runs (85-100 ms).
+        /// </summary>
+        public double CamLatency = DefaultCamLatency;
+        public const double DefaultCamLatency = 0.09;
         /// <summary>G5: pose service port on 127.0.0.1.</summary>
         public int Port = 8765;
 
@@ -156,7 +161,7 @@ namespace EyeLabGates
                     case "-camlatency":
                         i++;
                         if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double cl) && cl >= 0 && cl <= 0.5) a.CamLatency = cl;
-                        else a.Warnings.Add($"bad -camLatency '{value}', using 0.16");
+                        else a.Warnings.Add($"bad -camLatency '{value}', using {DefaultCamLatency.ToString(CultureInfo.InvariantCulture)}");
                         break;
                     case "-compare":
                         a.Compare = true;

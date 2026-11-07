@@ -59,7 +59,8 @@ def fingerprint(run_dir: Path) -> Dict[str, str]:
         elif kind == "camera_mode" and fp["camera_mode"] == "?":
             fp["camera_mode"] = result
         elif kind == "cam_latency":
-            fp["cam_latency"] = f"{result} ms"
+            # 0.3.007: the logged value is the base of a per-frame age (T5.1 Phase 0).
+            fp["cam_latency"] = f"base {result} ms + per-frame queue age" if "base" in detail else f"{result} ms"
         elif kind == "lock_filter" and result != "ADJUST":
             fp["filter"] = result
         elif kind == "view_offset":

@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.3.005<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.3.007<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -17,6 +17,32 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.3.007) XREAL gates, T5.1 Phase 0 (`XREAL-PC-GATES-G1-G3.md` §24).
+  - **Each Eye frame is paired with its own age.** `age = base + queue age + hold`, where the
+    queue age is `arrival − cam_ts` above its causal 20 s minimum (`CameraProbe`) and the hold
+    is the time since arrival. It replaces the fixed 160 ms `cam_latency`.
+  - **Base 90 ms** by default (`-camLatency`, keys `,` `.`), the best base of the Unity
+    estimator replayed on the 2-6 Nov runs: turning jump 1.5-2.4 mm offline, against
+    5.7-12 mm as run.
+  - **Head history 2.0 s;** a pose older than it is counted as `head_clamped`.
+  - **Every lock logs** `t_send`, `age_ms`, `base_ms`, `queue_ms`, `hold_ms`.
+  - **`latency` scans three pairings:** as logged (now per lock), the service queue age,
+    and the Unity estimator rebuilt from `camera.csv`. `chain` shows the base.
+- (0.3.006) XREAL gate analysis of the 0.3.005 session (`XREAL-PC-GATES-G1-G3.md` §23).
+  - **The Eye frame age is a sawtooth, not a constant.** It is a base of 70-80 ms plus a
+    decode-queue age that ramps from 0 to about 0.45 s inside every stream window.
+  - **`latency` reports per-frame pairing.** Each frame is paired at `base + queue age`
+    (`t_host - cam_ts` above its rolling minimum). That cuts the lock-to-lock jump while
+    turning from 4.8-5.4 to 2.6-3.0 mm, offline, on three runs.
+  - **6DoF still jitter is about three times lower than in 0.3.004.** One Euro: 1.2 mm/s,
+    1.3 mm error, best rated. It stays the default.
+  - **The view offset is a boresight angle of about 1.3 deg.** It was set twice, as a shift
+    and as an angle, and the two agree.
+  - **Stream restarts leave 28-42 % of still time without a lock.** The decoder delivers
+    16-21 of 29.8 fps.
+  - **The zone temperature missed a throttle** in a 12.6 min demo.
+  - **`docs/tasks/T5.1-eye-latency.md` is revised for 0.4.000.** Per-frame age comes first,
+    then blind time, then latency and the decoder, with a baseline table to beat.
 - (0.3.005) XREAL gates (`XREAL-PC-GATES-G1-G3.md` §22).
   - **Frame age compensation.** The Eye frame is about 160 ms old when sent, estimated from
     lock consistency in five runs (`python -m xreal_gates latency`). The lock now uses the

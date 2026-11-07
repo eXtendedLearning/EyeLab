@@ -1711,3 +1711,192 @@ the plate.
    "SURFACE HOT" on a cool Surface.
 2. **6**: compare in 6DoF.
 3. **Z**. On the desktop, run `chain`, `filters` and `latency` on both runs.
+
+## 23. Compare runs of 4-6 Nov (0.3.005): the frame age is a sawtooth, not a constant
+
+### What ran (build `2026-11-03T09:26:40Z`)
+
+Plate A, Surface with fan:
+
+- 4 Nov: demo in 3DoF (46 s, then 12.6 min).
+- 6 Nov: compare in 3DoF (299 s), then compare in 6DoF (432 s).
+
+All four completed normally.
+
+- **No camera death.**
+- **No overheating fallback:** the clock stayed at 219 % in both G5 runs.
+- **`chain`: identical** across the two compare runs (lens fx 623.9, RGB-from-head, 30 fps,
+  stream, plate A measured target).
+
+### Lock filters
+
+| still blocks (mean) | latest | One Euro | hysteresis |
+|---|---|---|---|
+| 3DoF jitter / error | 9.3 mm/s / 1.0 mm | 5.2 mm/s / 1.4 mm | 4.9 mm/s / 2.6 mm |
+| 3DoF without block cmp3 | 5.2 mm/s | 1.3 mm/s | 0.9 mm/s |
+| 3DoF rating (1-5) | 4.0 | 3.5 | 4.0 |
+| 6DoF jitter / error | 3.3 mm/s / 0.7 mm | **1.2 mm/s / 1.3 mm** | 1.1 mm/s / 2.7 mm |
+| 6DoF rating (1-5) | 2.5 | **4.0** | 3.5 |
+| 6DoF, 0.3.004 (2 Nov) | 11.8 mm/s / 1.5 mm | 3.1 mm/s / 1.9 mm | 3.0 mm/s / 3.0 mm |
+
+Block cmp3 of the 3DoF run (24-30 mm/s for every method) is the operator moving, not a
+filter effect.
+
+- **6DoF improved about threefold** over 0.3.004 for every method. The change is the
+  capture-time head pose (`cam_latency`) and the relaxed motion gate.
+- **One Euro stays the default.**
+  - It ties hysteresis on jitter but has half its error: hysteresis holds a pose up to
+    5 mm stale.
+  - It is rated best in 6DoF, the mode EyeLab needs.
+- **Latest is acceptable only in 3DoF.**
+
+### Alignment: the view offset is an angle
+
+- **The 3DoF run kept the saved offset:** x +8, y −16 mm, aligned in 43 s.
+- **The 6DoF run re-aligned from the angle keys** (182 s, 90 key presses) and saved yaw
+  +0.5°, pitch +1.2°, with no shift.
+- **At the median plate distance of 0.73 m these are the same correction:** 6.4 mm right,
+  15.3 mm down.
+- So the offset is a boresight of about 1.3° between what the Eye sees and what the
+  operator's eye sees through the display. Keep it in angle form: an angle holds at every
+  distance, a shift only at the distance it was set.
+
+### Coverage: every stream restart costs about 2 s without a lock
+
+- **The decoder does not keep up even on a cool Surface at full clock.**
+  - The Eye produces 29.8 fps; Unity receives 16-21 fps (`perf.csv` `cam_fps`).
+  - So the SDK queue grows 0.07-0.11 s per second of streaming.
+  - The stream is restarted when it is 0.3 s behind: every 4.5-6 s.
+- **Each restart:** about 0.8 s off, then about 1.05 s to the first lock (median). The
+  lock-to-lock gap across a restart is 2.0 s.
+- **In the still blocks, 28 % (3DoF) and 42 % (6DoF) of the time lies in lock gaps longer
+  than 1 s.**
+  - That is the largest loss of correction in the current pipeline, larger than the
+    detection time.
+  - Gaps in the move blocks (about 80 %) are expected: the plate leaves the view.
+- **Pose service:** detection median 51-54 ms (p90 79-87); round trip 65-73 ms (p90
+  91-103).
+  - About 4.8 frames/s are sent, below the 8 Hz cap: one request in flight at a time.
+  - Median 3 markers, 20 points, 0.50 px RMS, plate at 0.45-0.95 m.
+
+### The frame age is not constant
+
+`python -m xreal_gates latency` now also reports a per-frame age.
+
+- **The queue age** is `t_host − cam_ts` (service receipt time minus device capture clock)
+  above its rolling ±20 s minimum. The minimum is the freshest frame. The two clocks drift
+  only about 20 ms in 5 min, and the rolling minimum absorbs that.
+- **Inside every stream window the queue age ramps from 0 to about 0.3-0.48 s.** Median
+  150-180 ms, p90 about 320 ms.
+- So the fixed `cam_latency` of 160 ms was the average of a sawtooth, wrong by up to about
+  ±150 ms per frame.
+
+Each frame is paired with the head pose `base + queue age` before sending, scanning
+`base`:
+
+| run | fixed delay, best | per-frame age, best |
+|---|---|---|
+| 2 Nov 6DoF (0.3.004) | 4.8 mm at 180 ms | **2.6 mm** at base 70 ms |
+| 6 Nov 3DoF | 5.4 mm at 300 ms | **3.0 mm** at base 80 ms |
+| 6 Nov 6DoF | 5.0 mm at 310 ms | **2.6 mm** at base 70 ms |
+
+The figures are the median lock-to-lock jump while turning. The jump while still drops too,
+from 1.2-1.6 to 0.9-1.0 mm.
+
+- The 2 Nov 3DoF run fell back to bursts and is not comparable.
+- **Findings:**
+  - The freshest frame is about 70-80 ms old when sent, and the base is the same in all
+    three runs.
+  - Per-frame pairing removes about 45 % of the turning error. It needs no new
+    measurement: `CameraProbe` already computes `t − cam_ts` per frame (`LagGrowth`).
+- **What this changes for the latency work.** For a fixed structure, the age of a correction
+  costs little once it is known exactly: SLAM drift over 0.3 s is about 1 mm standing.
+  What costs accuracy is:
+  - **a wrong age:** fixed by the per-frame age;
+  - **blind time:** the restarts;
+  - **the decoder's throughput.**
+
+  `docs/tasks/T5.1-eye-latency.md` is reordered accordingly.
+
+### Overheating: the zone temperature does not see the throttle
+
+- **In the 12.6 min demo the clock fell** from 210 % to 130 % (min 84 %) in the last
+  third. Received camera frames fell from 13 to 7 fps.
+- **The hottest thermal zone stayed at 52 °C,** under the 65 °C rule, so the fallback
+  never triggered. When temperatures exist the rule never looks at the clock.
+- This was a missed fallback, not a false one.
+- The signal that matters is received camera frames per second and queue growth, not a
+  zone temperature. See T5.1.
+
+### Other observations
+
+- **6DoF reported InsufficientLight 8 times** (the room at 14:51); 3DoF is not affected.
+- **Most failed frames are "no plate marker"** (plate out of view) and "1 marker, need 2"
+  (plate at the edge of the view).
+- **Unity renders at 26.5-27 fps** against the 30 fps target in every run.
+
+## 24. T5.1 toward 0.4.000: per-frame frame age (Phase 0, 0.3.007)
+
+`docs/tasks/T5.1-eye-latency.md` is worked phase by phase; this section collects each phase's change
+and its Surface results, and becomes the 0.4.000 write-up at Phase 4.
+
+### Phase 0: each frame paired with its own age (build `2026-11-07T17:03:44Z`, EyeLab 0.3.007)
+
+**What changed in the gate player.**
+
+- **`CameraProbe`** keeps, for every unique frame, `D = t_arrived − cam_ts·1e-9` and a causal
+  20 s minimum of `D` (a monotonic deque, carried across stream restarts). The frame's
+  **queue age** is `D − D_min`: how far behind the freshest frame of the last 20 s it arrived.
+- **`TrySendLockFrame`** pairs the frame with the head pose
+  `age = base + queue age + hold` before sending, where `hold = now − t_arrived` is the time the
+  frame waited in Unity. `base` is `-camLatency` (now default **90 ms**) and keys `,` `.` (±10 ms).
+  - Equivalently the capture instant is `cam_ts` mapped to the host clock through the freshest
+    frame's offset, minus `base`: the base is what happens before arrival of a fresh frame
+    (exposure, on-glasses encode, USB, FFmpeg decode, texture upload).
+  - With no queue age (frame not the probe's latest) the age falls back to `base` alone
+    (`age_src=base_only` in the lock line).
+- **Head history 2.0 s** (was 1.0 s), so frames up to about 1.9 s old still find a pose. A pose
+  older than the history uses the oldest sample and is counted (`head_clamped`, per lock and in
+  `lock_summary`).
+- **Logged per lock** (`lock` events): `t_send` (exact), `age_ms`, `base_ms`, `queue_ms`, `hold_ms`.
+  `cam_latency` now logs the base; `chain` shows it as "base N ms + per-frame queue age".
+- **HUD:** `frame age 90+Q ms` with Q the current queue age.
+
+**Why 90 ms and not the 70-80 ms of §23.** The §23 base was measured against the pose service's
+receipt time (`t_host`), which already includes our copy and send. Unity measures from the frame's
+arrival and adds the hold separately. `latency` now replays the Unity estimator on old runs from
+`camera.csv` (every arrived frame) and finds the best base at 85-100 ms:
+
+| run (0.3.004-0.3.005) | as run | service queue age, best | Unity estimator, best |
+|---|---|---|---|
+| 2 Nov 6DoF | 12.0 mm (age 0) | 2.6 mm at 70 ms | **1.9 mm** at 90 ms |
+| 6 Nov 3DoF | 6.9 mm (fixed 160 ms) | 3.0 mm at 80 ms | **2.4 mm** at 100 ms |
+| 6 Nov 6DoF | 5.7 mm (fixed 160 ms) | 2.6 mm at 70 ms | **1.5 mm** at 85 ms |
+
+Median lock-to-lock jump while turning; the jump while still drops to 0.8-0.9 mm. The Unity
+estimator does better than the service-side one because the arrival time is not blurred by the
+copy, the send and the one-Unity-frame delay of the old `t_send` estimate. (The "as run" figures are
+from today's `latency`, which slerps the head pose; T5.1's baseline table quotes 5.0-6.2 mm from an
+earlier variant. The Phase 0 gate, ≤ 3 mm, is unchanged.)
+
+**`python -m xreal_gates latency RUN`** now scans three pairings: `logged` (what the run did: age 0,
+a fixed `cam_latency`, or from 0.3.007 each lock's `age_ms`), `service` (§23) and `unity` (the
+estimator above, rebuilt from `camera.csv`). On a 0.3.007 run the `logged` residual should be within
+about ±10 ms of 0 and `unity` should agree with `logged` at the logged base.
+
+### Session 0.3.007 (Phase 0 gate)
+
+Same set-up as §22: glasses on and untouched; furnished, evenly lit, static room; textured
+background behind plate A; fan on the Surface; launcher shows `[OK]` for the new build.
+
+1. **5**: compare in 3DoF. Align as usual, then rate the blocks. In the move blocks, turn the head
+   at a normal pace while keeping the plate in view for part of each turn.
+2. **K** until "Cool enough".
+3. **6**: compare in 6DoF.
+4. **Z**, and bring the zip to the desktop (`GateRuns/_inbox`).
+
+Do not touch `,` `.` in these runs (the base must stay 90 ms for the comparison).
+
+**Done when** (T5.1 Phase 0), against the baseline: the median turning jump as run ≤ 3 mm in both
+runs, and the One Euro still-block error no worse than 1.3 mm (6DoF). Desktop:
+`python -m xreal_gates import`, then `latency`, `filters` and `chain` on both runs.

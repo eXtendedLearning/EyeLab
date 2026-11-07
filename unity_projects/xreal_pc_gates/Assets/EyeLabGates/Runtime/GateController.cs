@@ -46,7 +46,7 @@ namespace EyeLabGates
         // G5: a frame is sent for a lock only while the head is nearly still, so that the head pose at
         // receipt stands in for the (unmeasured) pose at exposure.
         // Relaxed 22 Oct: on 21 Oct 35-46 % of bursts were skipped, partly on drift-induced "motion".
-        // 0.3.005: with the frame paired to the head pose at its capture (CamLatency) a turning head no
+        // 0.3.005: with the frame paired to the head pose at its capture (frame age) a turning head no
         // longer misplaces the target by the turn during the frame's age, so corrections are allowed
         // during normal head motion; only fast moves (motion blur) are skipped.
         const float MaxLockDegPerSec = 45f;
@@ -72,7 +72,9 @@ namespace EyeLabGates
         const double HotLoadPct = 60.0;
         const double HotSeconds = 10.0;
         const double CoolSeconds = 30.0;
-        const float HeadHistorySeconds = 1.0f;
+        // T5.1 Phase 0: a frame can be base + up to ~0.5 s of decode queue old when sent (more if the
+        // flush threshold is raised in Phase 2), so the history must reach back that far.
+        const float HeadHistorySeconds = 2.0f;
         const float HeadSpeedWindow = 0.25f;
         const float TrackingReadyHold = 1f;
         const float NoReportFallbackSeconds = 15f;
@@ -135,8 +137,12 @@ namespace EyeLabGates
         double m_HotSince = double.NaN;
         double m_CoolSince = double.NaN;
         bool m_HotMode;
-        /// <summary>Age of a camera frame when it is sent (s): the head pose is taken this much earlier.</summary>
-        float m_CamLatency;
+        /// <summary>
+        /// Base of the per-frame Eye frame age (s). T5.1 Phase 0: a frame is paired with the head pose
+        /// <c>base + queue age + hold</c> before it is sent (see <see cref="TrySendLockFrame"/>).
+        /// </summary>
+        float m_AgeBase;
+        int m_HeadClamped;
         ViewOffset m_ViewOffset = new ViewOffset();
         bool m_ViewOffsetDirty;
         bool m_AlignConfirmed;
@@ -145,7 +151,12 @@ namespace EyeLabGates
         readonly Queue<HeadSample> m_HeadHistory = new Queue<HeadSample>();
 
         struct HeadSample { public double T; public Vector3 Position; public Quaternion Rotation; }
-        sealed class PendingLock { public long Seq; public double T; public Vector3 HeadPosition; public Quaternion HeadRotation; public ulong CamTs; }
+        sealed class PendingLock
+        {
+            public long Seq; public double T; public Vector3 HeadPosition; public Quaternion HeadRotation; public ulong CamTs;
+            // T5.1 Phase 0: when the frame was sent and how old it was taken to be (s).
+            public double TSend, Age, Base, Queue, Hold; public bool PerFrame, HeadClamped;
+        }
         int m_LastTick = -1;
         float m_StepSeconds;
         bool m_Quitting;
@@ -186,7 +197,7 @@ namespace EyeLabGates
         public string CameraStatus { get; private set; } = "";
         /// <summary>The head-frame view offset, with "(unsaved)" while changed and not saved.</summary>
         public string OffsetStatus => !IsLocking ? "" :
-            $"view offset {m_ViewOffset.Describe()}{(m_ViewOffsetDirty ? "  (unsaved: Enter)" : "")}   |   latency {Mathf.RoundToInt(m_CamLatency * 1000f)} ms" +
+            $"view offset {m_ViewOffset.Describe()}{(m_ViewOffsetDirty ? "  (unsaved: Enter)" : "")}   |   frame age {Mathf.RoundToInt(m_AgeBase * 1000f)}+{(double.IsNaN(m_Camera.QueueAge) ? "?" : Math.Round(m_Camera.QueueAge * 1000).ToString("F0", CultureInfo.InvariantCulture))} ms" +
             (IsCompare ? $"   |   {m_CompareLabel}" : $"   |   filter {FilterDescription()}  (F switch, [ ] tune)");
         /// <summary>Demo: show the latest Eye frame in a corner (key E).</summary>
         public bool ShowEyeView { get; private set; }
@@ -207,7 +218,7 @@ namespace EyeLabGates
             m_Perf = GetComponent<PerfProbe>();
             m_Display = GetComponent<DisplayProbe>();
             m_ActiveFilter = TargetLock.IndexOf(m_Args.LockFilter);
-            m_CamLatency = (float)m_Args.CamLatency;
+            m_AgeBase = (float)m_Args.CamLatency;
             m_Overlay = GetComponent<GateOverlay>();
             if (m_CameraTexture == null) m_CameraTexture = FindAnyObjectByType<XREALRGBCameraTexture>();
             if (m_HelloMR == null) m_HelloMR = FindAnyObjectByType<HelloMR>();
@@ -616,8 +627,8 @@ namespace EyeLabGates
             }
             ReadRgbFromHead();
             m_Log.Event("lock_filter", TargetLock.Names[m_ActiveFilter], IsCompare ? "compare: changes per block" : "key F switches");
-            m_Log.Event("cam_latency", (m_CamLatency * 1000f).ToString("F0", CultureInfo.InvariantCulture),
-                "ms: head pose taken this long before the frame is sent (keys , and . change it by 10 ms)");
+            m_Log.Event("cam_latency", (m_AgeBase * 1000f).ToString("F0", CultureInfo.InvariantCulture),
+                "base ms: per-frame age = base + queue age (arrival - cam_ts above its 20 s minimum) + hold (keys , and . change the base by 10 ms)");
             m_ViewOffset = ViewOffset.LoadOrZero(ViewOffset.DefaultPath, out string offsetStatus);
             m_Log.Event("view_offset", "LOADED", $"{offsetStatus}: {m_ViewOffset.Describe()}");
             UpdateLockStatus();
@@ -789,7 +800,7 @@ namespace EyeLabGates
             foreach (var kv in m_Anchors)
                 m_Log.Event("lock_summary", kv.Key,
                     $"applied latest={kv.Value.Filters[0].Applied} euro={kv.Value.Filters[1].Applied} hysteresis={kv.Value.Filters[2].Applied} " +
-                    $"sent={m_LocksSent} frames_posed={m_LocksPosed} bursts={m_Bursts} windows={m_StreamWindows} " +
+                    $"sent={m_LocksSent} frames_posed={m_LocksPosed} bursts={m_Bursts} windows={m_StreamWindows} head_clamped={m_HeadClamped} " +
                     $"final {FilterDescription()}");
             yield break;
         }
@@ -852,12 +863,13 @@ namespace EyeLabGates
         }
 
         /// <summary>
-        /// Head pose at time <paramref name="t"/> (realtime s), interpolated from the recorded history; the
-        /// current pose when the history does not reach back that far. 0.3.005: the Eye frame being sent is
-        /// about 160 ms old (offline estimate, 5 runs: lock-to-lock jumps while turning smallest at 140-200 ms),
-        /// so it must be paired with the head pose of its capture, not of its sending.
+        /// Head pose at time <paramref name="t"/> (realtime s), interpolated from the recorded history. The Eye
+        /// frame being sent is old (0.3.005: about 160 ms on average; T5.1 Phase 0: base + queue age per frame),
+        /// so it must be paired with the head pose of its capture, not of its sending. Returns false when the
+        /// history does not reach back to <paramref name="t"/>: the oldest sample is used then (the current
+        /// pose when there is no history).
         /// </summary>
-        void HeadAt(double t, Transform fallback, out Vector3 position, out Quaternion rotation)
+        bool HeadAt(double t, Transform fallback, out Vector3 position, out Quaternion rotation)
         {
             position = fallback.position;
             rotation = fallback.rotation;
@@ -873,12 +885,20 @@ namespace EyeLabGates
                 float a = (float)((t - before.T) / Math.Max(after.T - before.T, 1e-6));
                 position = Vector3.Lerp(before.Position, after.Position, a);
                 rotation = Quaternion.Slerp(before.Rotation, after.Rotation, a);
+                return true;
             }
-            else if (hasBefore)
+            if (hasBefore)
             {
                 position = before.Position;
                 rotation = before.Rotation;
+                return true;
             }
+            if (hasAfter)
+            {
+                position = after.Position;
+                rotation = after.Rotation;
+            }
+            return false;
         }
 
         /// <summary>Head angular and linear speed over the last <see cref="HeadSpeedWindow"/> s.</summary>
@@ -930,11 +950,21 @@ namespace EyeLabGates
             }
             m_LastSend = now;
             var img = new YGrayImage { Width = y.width, Height = y.height, Data = data, BottomUp = true, Sequence = ++m_LockSeq };
-            HeadAt(now - m_CamLatency, head, out Vector3 capPos, out Quaternion capRot);
+            // T5.1 Phase 0: the frame's own age. queue = how far behind the freshest frame of the last 20 s
+            // it arrived (the SDK decode queue, guide §23); hold = how long it has waited in Unity since;
+            // base = the rest (exposure, encode, USB, decode, upload), fitted offline (latency RUN).
+            bool perFrame = m_Camera.TryFrameAge(m_Source.Timestamp, out double arrived, out double queue);
+            double hold = perFrame ? Math.Max(0.0, now - arrived) : 0.0;
+            if (!perFrame) queue = 0.0;
+            double age = m_AgeBase + queue + hold;
+            bool inHistory = HeadAt(now - age, head, out Vector3 capPos, out Quaternion capRot);
+            if (!inHistory) m_HeadClamped++;
             m_Pending = new PendingLock
             {
-                Seq = img.Sequence, T = now - m_CamLatency, HeadPosition = capPos,
+                Seq = img.Sequence, T = now - age, HeadPosition = capPos,
                 HeadRotation = capRot, CamTs = m_Source.Timestamp,
+                TSend = now, Age = age, Base = m_AgeBase, Queue = queue, Hold = hold,
+                PerFrame = perFrame, HeadClamped = !inHistory,
             };
             m_LocksSent++;
             m_PoseTask = m_Bridge.EstimatePoseAsync(img, m_Source.Timestamp, m_BridgeCts.Token);
@@ -961,7 +991,7 @@ namespace EyeLabGates
                 string common = $"target={tp.Target} seq={pending.Seq} markers={tp.Markers} points={tp.Points} " +
                                 $"rms_px={tp.RmsPx.ToString("F2", CultureInfo.InvariantCulture)} " +
                                 $"service_ms={r.ServiceMs.ToString("F0", CultureInfo.InvariantCulture)} rt_ms={r.RoundTripMs.ToString("F0", CultureInfo.InvariantCulture)} " +
-                                $"cam_ts={pending.CamTs} head={V(pending.HeadPosition)}";
+                                $"cam_ts={pending.CamTs} head={V(pending.HeadPosition)} {AgeFields(pending)}";
                 if (!tp.Ok)
                 {
                     // An absent target is the normal case when another one is in view: log only real failures.
@@ -1008,6 +1038,13 @@ namespace EyeLabGates
             UpdateLockStatus();
         }
 
+        /// <summary>Per-lock frame age fields (T5.1 Phase 0), read by <c>python -m xreal_gates latency</c>.</summary>
+        static string AgeFields(PendingLock p) =>
+            $"t_send={p.TSend.ToString("F4", CultureInfo.InvariantCulture)} age_ms={(p.Age * 1000).ToString("F1", CultureInfo.InvariantCulture)} " +
+            $"base_ms={(p.Base * 1000).ToString("F0", CultureInfo.InvariantCulture)} queue_ms={(p.Queue * 1000).ToString("F1", CultureInfo.InvariantCulture)} " +
+            $"hold_ms={(p.Hold * 1000).ToString("F1", CultureInfo.InvariantCulture)}" +
+            (p.PerFrame ? "" : " age_src=base_only") + (p.HeadClamped ? " head_clamped=1" : "");
+
         /// <summary>
         /// Camera pose of a target to world: OpenCV to Unity (F R F), the vendor RGB-camera-from-head
         /// pose, the wearer's view offset (head frame), then the head pose at the frame's receipt.
@@ -1042,7 +1079,7 @@ namespace EyeLabGates
         /// is an angle and then holds at every distance (2 Nov: y -16 mm at 0.77 m in both runs = 1.2 deg).
         /// Ctrl+arrows shift it (2 mm; Shift 10 mm), Ctrl+PgUp/PgDn roll, Alt+PgUp/PgDn depth (2 mm; depth is
         /// hard to judge by eye, so it needs the extra key). Backspace zero, Enter save. Keys , and . change
-        /// the camera latency by 10 ms.
+        /// the base of the per-frame camera frame age by 10 ms.
         /// </summary>
         void HandleOffsetKeys()
         {
@@ -1065,9 +1102,9 @@ namespace EyeLabGates
             int lat = Input.GetKeyDown(KeyCode.Period) ? 1 : Input.GetKeyDown(KeyCode.Comma) ? -1 : 0;
             if (lat != 0)
             {
-                m_CamLatency = Mathf.Clamp(m_CamLatency + 0.01f * lat, 0f, 0.4f);
-                m_Log.Event("cam_latency", (m_CamLatency * 1000f).ToString("F0", CultureInfo.InvariantCulture), "key");
-                Say($"{Mathf.RoundToInt(m_CamLatency * 1000f)} milliseconds");
+                m_AgeBase = Mathf.Clamp(m_AgeBase + 0.01f * lat, 0f, 0.4f);
+                m_Log.Event("cam_latency", (m_AgeBase * 1000f).ToString("F0", CultureInfo.InvariantCulture), "key: base ms");
+                Say($"Base {Mathf.RoundToInt(m_AgeBase * 1000f)} milliseconds");
             }
             if (changed)
             {

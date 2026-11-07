@@ -66,7 +66,7 @@ echo  X  Older gates  G1, G2, G3, G4, other G5 variants, manual, vendor sample
 echo  Q  Quit
 echo.
 echo  In G5: F lock filter, ] smoother, [ more responsive; arrows turn the drawing, Ctrl+arrows shift it,
-echo  Alt+PgUp/PgDn depth, Enter saves; , and . camera latency -/+10 ms.
+echo  Alt+PgUp/PgDn depth, Enter saves; , and . frame age base -/+10 ms (default 90; per-frame queue age is added).
 choice /c DC123456KOZXQ /n /m "Select: "
 set "SEL=%errorlevel%"
 if "%SEL%"=="1" call :demo 3dof & goto menu

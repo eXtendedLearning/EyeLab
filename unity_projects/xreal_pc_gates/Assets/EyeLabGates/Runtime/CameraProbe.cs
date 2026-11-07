@@ -51,6 +51,45 @@ namespace EyeLabGates
 
         double m_FirstOffset = double.NaN;
 
+        /// <summary>
+        /// Window of the causal minimum of <c>D = arrival - cam_ts</c> (s). T5.1 Phase 0: the SDK decode
+        /// queue grows inside every stream window and a restart empties it (guide §23), so the freshest
+        /// frame of the last 20 s marks the queue's floor. The window spans several restarts (every
+        /// 4.5-6 s) and absorbs the slow host/device clock drift (about 20 ms in 5 min).
+        /// </summary>
+        public const double QueueAgeWindowSeconds = 20.0;
+
+        // Monotonic deque of (arrival, D): D increases from front to back, so the front is the minimum.
+        readonly LinkedList<(double T, double D)> m_OffsetFloor = new LinkedList<(double T, double D)>();
+
+        /// <summary>Realtime (s) at which the latest unique frame arrived in Unity.</summary>
+        public double LastArrival { get; private set; } = double.NaN;
+        /// <summary>
+        /// Decode-queue age of the latest unique frame at its arrival (s): its <c>arrival - cam_ts</c> above
+        /// the minimum of the same over the last <see cref="QueueAgeWindowSeconds"/>, carried across restarts.
+        /// </summary>
+        public double QueueAge { get; private set; } = double.NaN;
+
+        /// <summary>
+        /// Arrival time and queue age of the frame with timestamp <paramref name="ts"/>, if it is the latest
+        /// unique frame (the one a sender reads from the source). False otherwise.
+        /// </summary>
+        public bool TryFrameAge(ulong ts, out double arrival, out double queueAge)
+        {
+            arrival = LastArrival;
+            queueAge = QueueAge;
+            return UniqueFrames > 0 && ts == LastTimestamp && !double.IsNaN(arrival) && !double.IsNaN(queueAge);
+        }
+
+        void UpdateQueueAge(double t, double offset)
+        {
+            while (m_OffsetFloor.Count > 0 && m_OffsetFloor.Last.Value.D >= offset) m_OffsetFloor.RemoveLast();
+            m_OffsetFloor.AddLast((t, offset));
+            while (m_OffsetFloor.First.Value.T < t - QueueAgeWindowSeconds) m_OffsetFloor.RemoveFirst();
+            LastArrival = t;
+            QueueAge = offset - m_OffsetFloor.First.Value.D;
+        }
+
         /// <summary>Unique-timestamp frames per second over the last 2 s.</summary>
         public double Fps
         {
@@ -104,6 +143,7 @@ namespace EyeLabGates
             if (drained > 0) DrainedFrames += drained;
             if (!dup)
             {
+                UpdateQueueAge(t, offset);
                 UniqueFrames++;
                 FramesThisCapture++;
                 m_UniqueTimes.Enqueue(t);
