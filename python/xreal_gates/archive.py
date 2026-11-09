@@ -7,6 +7,7 @@ Layout under the GateRuns root (gitignored)::
     runs/<run_id>/ one folder per run: camera.csv, pose.csv, events.csv, perf.csv,
                    run.json, native.log, snapshots/, plus the matching player.log
     _unmatched/    player logs with no run folder (vendor sample, crashed starts)
+    timecode/      optical-timecode draw logs (timecode_<ts>.csv, T5.1 Phase 1), matched to runs by QPC time
 
 A run folder is ``<yyyymmdd>_<HHMMSS>_<gate>_<label>``; a player log is
 ``player_<label>_<yyyymmdd>_<HHMMSS>.log`` and is written by the launcher a few
@@ -40,9 +41,11 @@ class ImportReport:
     skipped: List[str] = field(default_factory=list)
     logs_attached: List[str] = field(default_factory=list)
     logs_unmatched: List[str] = field(default_factory=list)
+    timecodes: List[str] = field(default_factory=list)
 
     def lines(self) -> List[str]:
         return [
+            f"timecodes:      {len(self.timecodes)}",
             f"runs added:     {len(self.added)}",
             f"runs replaced:  {len(self.replaced)}",
             f"runs skipped:   {len(self.skipped)} (already present)",
@@ -112,6 +115,13 @@ def import_folder(source: Path, root: Path, report: Optional[ImportReport] = Non
             report.replaced.append(run.name)
         else:
             report.skipped.append(run.name)
+
+    for tc in sorted(source.rglob("timecode_*.csv")):
+        dest = root / "timecode" / tc.name
+        if not dest.exists() or tc.stat().st_size > dest.stat().st_size:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(tc, dest)
+            report.timecodes.append(tc.name)
 
     known = [p.name for p in runs_dir.iterdir() if p.is_dir()]
     for log in find_logs(source):

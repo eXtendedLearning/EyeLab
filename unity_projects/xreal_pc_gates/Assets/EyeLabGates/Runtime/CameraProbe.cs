@@ -64,6 +64,12 @@ namespace EyeLabGates
 
         /// <summary>Realtime (s) at which the latest unique frame arrived in Unity.</summary>
         public double LastArrival { get; private set; } = double.NaN;
+        /// <summary>T5.1 Phase 1, latest unique frame: arrival on the QPC clock, HMD time at arrival (0 when
+        /// unavailable), and the start of the Unity frame it arrived in and of the one before (QPC s).</summary>
+        public double LastArrivalQpc { get; private set; } = double.NaN;
+        public ulong LastHmdNs { get; private set; }
+        public double LastFrameQpc { get; private set; } = double.NaN;
+        public double LastPrevFrameQpc { get; private set; } = double.NaN;
         /// <summary>
         /// Decode-queue age of the latest unique frame at its arrival (s): its <c>arrival - cam_ts</c> above
         /// the minimum of the same over the last <see cref="QueueAgeWindowSeconds"/>, carried across restarts.
@@ -128,6 +134,8 @@ namespace EyeLabGates
         {
             if (m_Log == null) return;
             double t = Time.realtimeSinceStartupAsDouble;
+            double qpc = Clocks.Qpc;
+            ulong hmd = NativeClock.HmdNow();
             ulong ts = m_Source.Timestamp;
             Vector2Int res = m_Source.Resolution;
             bool dup = m_HasPrevTs && ts == m_PrevTs;
@@ -143,6 +151,10 @@ namespace EyeLabGates
             if (drained > 0) DrainedFrames += drained;
             if (!dup)
             {
+                LastArrivalQpc = qpc;
+                LastHmdNs = hmd;
+                LastFrameQpc = Clocks.FrameStart;
+                LastPrevFrameQpc = Clocks.PrevFrameStart;
                 UpdateQueueAge(t, offset);
                 UniqueFrames++;
                 FramesThisCapture++;
@@ -182,7 +194,8 @@ namespace EyeLabGates
             m_Log.Camera(
                 $"{GateRunLog.F(t)},{Time.frameCount},{ts.ToString(Inv)},{res.x},{res.y}," +
                 $"{GateRunLog.F(yMean, "F3")},{GateRunLog.F(yMad, "F3")},{(dup ? 1 : 0)}," +
-                $"{(drained >= 0 ? drained.ToString(Inv) : "")},{m_Source.SourceName}");
+                $"{(drained >= 0 ? drained.ToString(Inv) : "")},{m_Source.SourceName}," +
+                $"{Clocks.F(qpc)},{hmd.ToString(Inv)},{Clocks.F(Clocks.FrameStart)},{Clocks.F(Clocks.PrevFrameStart)}");
         }
 
         void Subsample(NativeArray<byte> data, int w, int h, out double mean)

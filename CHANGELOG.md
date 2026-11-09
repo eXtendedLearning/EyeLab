@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.3.007<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.3.008<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,31 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.3.008) XREAL gates, T5.1 Phase 1 and tester feedback (`XREAL-PC-GATES-G1-G3.md` §24).
+  - **Phase 0 result.** The turning jump as run was 2.0-2.9 mm in all five 7 Nov runs (gate
+    ≤ 3 mm; baseline 5.7-6.9). The 6DoF still check is repeated, because the wearer moved three
+    times more. The base is now **105 ms** (residual +10..+20 ms at 90).
+  - **Every stage of the correction path on one clock (QPC).** One `frame_timing.csv` row per sent
+    frame covers the poll interval, texture, hold, copy, send, service receipt, detection, reply,
+    apply and shown. `camera.csv` gains `qpc`, `hmd_ns`, `q_frame`, `q_frame_prev`; the pose
+    service logs and returns `q_recv`, `q_det0`, `q_det1`.
+  - **Native clock probes, read-only.** `GetHMDTimeNanos` and `GetHeadPoseAtTime` from
+    `XREALXRPlugin.dll` are logged per frame and per second (`clock.csv`).
+  - **`python -m xreal_gates stages RUN`** prints the stage table, checks whether `cam_ts` is on
+    the HMD clock, and finds the native pose convention.
+  - **Optical timecode (launcher T).** `python -m xreal_gates timecode` shows a draw-counter
+    marker on the Surface screen; G5 runs on the `timecode` target, and `stages` pairs ids with
+    draws for the camera-to-app latency. `import` files `timecode_*.csv` under `GateRuns/timecode`.
+  - **Compact display** in G5 and the demo: a short banner, problem-only status lines, and the
+    rest behind **H**.
+  - **Alignment.** **Tab** switches MOVE (left/right/up/down, farther/closer) and ROTATE (about the
+    drawing's own centre, on the head's three axes). Keys repeat while held.
+  - **Named movement cues** replace "move head slowly": turn, look up/down, tilt, plus slide,
+    rise/lower and lean in 6DoF. Each is spoken and logged as a `cue` event.
+  - **Thinner drawing.** Target lines are 1.2 mm and points 5 mm; **V** cycles the style. The demo
+    grid is 40 × 30 cm.
+  - **`latency`** counts a block as still only if the head speed is ≤ 0.03 m/s.
 
 - (0.3.007) XREAL gates, T5.1 Phase 0 (`XREAL-PC-GATES-G1-G3.md` §24).
   - **Each Eye frame is paired with its own age.** `age = base + queue age + hold`, where the

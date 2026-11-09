@@ -48,11 +48,11 @@ namespace EyeLabGates
         /// Default 0.09: best base of the Unity estimator replayed on the 2-6 Nov stream runs (85-100 ms).
         /// </summary>
         public double CamLatency = DefaultCamLatency;
-        public const double DefaultCamLatency = 0.09;
+        public const double DefaultCamLatency = 0.105;   // 0.3.008: Phase 0 residual +10..+20 ms at 90
         /// <summary>G5: pose service port on 127.0.0.1.</summary>
         public int Port = 8765;
 
-        public static readonly string[] Targets = { "plateA", "plateL", "board25" };
+        public static readonly string[] Targets = { "plateA", "plateL", "board25", "timecode" };
         public double Duration;
         public double SnapshotEvery = 2.0;
         public string Label = "run";

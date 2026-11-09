@@ -18,7 +18,9 @@ namespace EyeLabGates
     /// </summary>
     public sealed class GateRunLog
     {
-        public const string CameraHeader = "t_unity,frame,cam_ts,res_w,res_h,y_mean,y_mad_prev,dup_ts,drained,source";
+        // 0.3.008 (T5.1 Phase 1): qpc = arrival on the QPC clock (s), hmd_ns = GetHMDTimeNanos at arrival (0 when
+        // unavailable), q_frame / q_frame_prev = start of this and the previous Unity frame (QPC s).
+        public const string CameraHeader = "t_unity,frame,cam_ts,res_w,res_h,y_mean,y_mad_prev,dup_ts,drained,source,qpc,hmd_ns,q_frame,q_frame_prev";
         public const string PoseHeader = "t_unity,frame,phase,valid,tracking_state,pos_x,pos_y,pos_z,rot_x,rot_y,rot_z,rot_w," +
                                          "cam_pos_x,cam_pos_y,cam_pos_z,cam_rot_x,cam_rot_y,cam_rot_z,cam_rot_w,tracking_type,loader_active,tracking_reason";
         public const string EventsHeader = "t_unity,frame,event,result,detail";
@@ -38,6 +40,8 @@ namespace EyeLabGates
         readonly StringBuilder m_Events = new StringBuilder();
         readonly StringBuilder m_Perf = new StringBuilder();
         readonly StringBuilder m_Native = new StringBuilder();
+        // Extra CSVs (frame_timing.csv, clock.csv, ...): file name -> pending rows; the header is written on first use.
+        readonly Dictionary<string, StringBuilder> m_Extra = new Dictionary<string, StringBuilder>();
         readonly int m_MainThreadId;
         double m_LastFlush;
         bool m_RunInfoDirty;
@@ -81,6 +85,22 @@ namespace EyeLabGates
         public void Camera(string row) { lock (m_Lock) m_Camera.Append(row).Append('\n'); }
 
         public void Pose(string row) { lock (m_Lock) m_Pose.Append(row).Append('\n'); }
+
+        /// <summary>One row of an extra CSV in the run folder; the header goes in when the file is first used.</summary>
+        public void Table(string file, string header, string row)
+        {
+            lock (m_Lock)
+            {
+                if (!m_Extra.TryGetValue(file, out var sb))
+                {
+                    sb = new StringBuilder();
+                    m_Extra[file] = sb;
+                    try { File.WriteAllText(Path.Combine(Directory, file), header + "\n"); }
+                    catch (Exception e) { Debug.LogError($"[EyeLabGates] {file}: {e.Message}"); }
+                }
+                sb.Append(row).Append('\n');
+            }
+        }
 
         public void Perf(string row) { lock (m_Lock) m_Perf.Append(row).Append('\n'); }
 
@@ -130,8 +150,11 @@ namespace EyeLabGates
         public void Flush()
         {
             string cam, pose, ev, perf, native, json = null;
+            var extra = new List<KeyValuePair<string, string>>();
             lock (m_Lock)
             {
+                foreach (var kv in m_Extra)
+                    if (kv.Value.Length > 0) extra.Add(new KeyValuePair<string, string>(kv.Key, Take(kv.Value)));
                 cam = Take(m_Camera);
                 pose = Take(m_Pose);
                 ev = Take(m_Events);
@@ -151,6 +174,7 @@ namespace EyeLabGates
                 if (perf.Length > 0) File.AppendAllText(Path.Combine(Directory, "perf.csv"), perf);
                 if (native.Length > 0) File.AppendAllText(Path.Combine(Directory, "native.log"), native);
                 if (json != null) File.WriteAllText(Path.Combine(Directory, "run.json"), json);
+                foreach (var kv in extra) File.AppendAllText(Path.Combine(Directory, kv.Key), kv.Value);
             }
             catch (Exception e)
             {

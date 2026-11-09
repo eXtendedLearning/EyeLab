@@ -20,11 +20,17 @@ namespace EyeLabGates
         public readonly StepAction Action;
         /// <summary>Calibration: where the board should be in the camera image (normalised, y down); null = anywhere.</summary>
         public readonly Rect? Zone;
+        /// <summary>
+        /// 0.3.008 (testers: "move your head slowly" is too generic): named movements shown as the title, spoken and
+        /// logged (<c>cue</c> event) one after another, <see cref="GateProtocol.CueSeconds"/> each; null = none.
+        /// </summary>
+        public readonly MotionCue[] Cues;
 
         public ProtocolStep(string id, string title, string detail, float seconds,
-                            StepAction action = StepAction.None, string speech = null, Rect? zone = null)
+                            StepAction action = StepAction.None, string speech = null, Rect? zone = null, MotionCue[] cues = null)
         {
             Zone = zone;
+            Cues = cues;
             Id = id;
             Title = title;
             Detail = detail;
@@ -32,6 +38,13 @@ namespace EyeLabGates
             Action = action;
             Speech = speech ?? title;
         }
+    }
+
+    /// <summary>One named head movement inside a step: <see cref="Id"/> is logged, <see cref="Title"/> shown, <see cref="Speech"/> spoken.</summary>
+    public sealed class MotionCue
+    {
+        public readonly string Id, Title, Speech;
+        public MotionCue(string id, string title, string speech) { Id = id; Title = title; Speech = speech; }
     }
 
     /// <summary>
@@ -154,19 +167,65 @@ namespace EyeLabGates
 
         static Rect Z(float x, float y, float w, float h) => new Rect(x, y, w, h);
 
+        /// <summary>Seconds per motion cue: one slow movement there and back.</summary>
+        public const float CueSeconds = 4f;
+
+        /// <summary>
+        /// The named movements of a "move" step (0.3.008): in 3DoF the three rotations; in 6DoF also the three
+        /// translations, since 6DoF tracks those and the lock must hold through them.
+        /// </summary>
+        public static MotionCue[] MotionCues(bool sixDof)
+        {
+            var c = new List<MotionCue>
+            {
+                new MotionCue("turn", "TURN LEFT AND RIGHT", "Turn your head left and right, slowly"),
+                new MotionCue("nod", "LOOK UP AND DOWN", "Look up and down, slowly"),
+                new MotionCue("tilt", "TILT HEAD LEFT AND RIGHT", "Tilt your head left and right, ear towards shoulder"),
+            };
+            if (sixDof)
+            {
+                c.Add(new MotionCue("slide", "SLIDE LEFT AND RIGHT", "Slide your head left and right, without turning"));
+                c.Add(new MotionCue("rise", "RISE AND LOWER", "Move up and down, bend your knees a little"));
+                c.Add(new MotionCue("lean", "LEAN CLOSER AND BACK", "Lean closer to the target, then back"));
+            }
+            return c.ToArray();
+        }
+
+        static ProtocolStep MoveStep(string id, string titlePrefix, string detail, bool sixDof)
+        {
+            MotionCue[] cues = MotionCues(sixDof);
+            return new ProtocolStep(id, titlePrefix + cues[0].Title, detail, cues.Length * CueSeconds, cues: cues, speech: "");
+        }
+
+        /// <summary>
+        /// Timecode gate (T5.1 Phase 1, guide §25): the Eye looks at the Surface screen, which shows a marker whose id
+        /// counts drawn frames (<c>python -m xreal_gates timecode</c>); the service reads the id, so camera-to-app
+        /// latency is measured end to end. No alignment, no overlay. The turns give the native-pose check motion.
+        /// </summary>
+        public static List<ProtocolStep> Timecode()
+        {
+            return new List<ProtocolStep>
+            {
+                new ProtocolStep("acquire", "LOOK AT THE SURFACE SCREEN", "The black and white square, about 50 cm away", 10, speech: "Look at the Surface screen"),
+                new ProtocolStep("still", "HOLD STILL", "Square in the middle of your view", 40, speech: "Hold still, square in view"),
+                MoveStep("move", "", "Slowly, square in view", false),
+                new ProtocolStep("still_2", "HOLD STILL", "Square in the middle of your view", 20, speech: "Hold still"),
+            };
+        }
+
         /// <summary>
         /// G5 locked overlay, 3 min (rev. 22 Oct): the target(s) stand about 70 cm in front of A. The
         /// overlay follows the latest camera pose (LockAnchor). The frozen steps pause corrections while
         /// standing and during one side-step, which shows how far 6DoF alone drifts in this room; the
         /// 40 s walk of the first version is gone (21 Oct: metres of drift, nothing left to see).
         /// </summary>
-        public static List<ProtocolStep> G5()
+        public static List<ProtocolStep> G5(bool sixDof)
         {
             return new List<ProtocolStep>
             {
                 new ProtocolStep("acquire", "LOOK AT THE TARGET, HOLD STILL", "From A, about 70 cm away, until LOCKED", 15, speech: "Look at the target and hold still"),
                 new ProtocolStep("static", "HOLD STILL", "Do the points sit on the printed crosses?", 30, speech: "Hold still. Check the points on the crosses"),
-                new ProtocolStep("move_head", "MOVE HEAD SLOWLY", "Small nods and turns, target in view", 20, speech: "Move your head slowly"),
+                MoveStep("move_head", "", "Slowly, target in view", sixDof),
                 new ProtocolStep("side_left", "STEP LEFT, LOOK AT THE TARGET", "One step left, view it from the side", 15, speech: "Step left and look at the target"),
                 new ProtocolStep("side_right", "STEP RIGHT, LOOK AT THE TARGET", "Two steps right, view it from the other side", 15, speech: "Step right and look at the target"),
                 new ProtocolStep("closer", "COME CLOSER, ABOUT 40 CM", "Look at the target from close up", 15, speech: "Come closer"),
@@ -184,7 +243,7 @@ namespace EyeLabGates
         /// for a 1-5 rating on the keyboard. <paramref name="order"/> lists filter indices (latest, euro,
         /// hysteresis) per block; all three filters run on every measurement regardless.
         /// </summary>
-        public static List<ProtocolStep> G5Compare(int[] order, string[] labels)
+        public static List<ProtocolStep> G5Compare(int[] order, string[] labels, bool sixDof)
         {
             var s = new List<ProtocolStep>
             {
@@ -197,7 +256,7 @@ namespace EyeLabGates
                 string id = $"cmp{k + 1}_{label.Substring(label.Length - 1)}";
                 s.Add(new ProtocolStep($"{id}_still", $"{label}: HOLD STILL", "Is it steady? Does it sit on the plate?", 20, StepAction.Filter0 + m,
                                        $"{label}. Hold still"));
-                s.Add(new ProtocolStep($"{id}_move", $"{label}: MOVE HEAD SLOWLY", "Small nods and turns, plate in view", 10, speech: "Move your head slowly"));
+                s.Add(MoveStep($"{id}_move", $"{label}: ", "Slowly, plate in view", sixDof));
                 s.Add(new ProtocolStep($"{id}_rate", $"RATE {label}: KEYS 1 TO 5", "1 unusable, 3 acceptable, 5 rock steady", 6, speech: $"Rate {label}, one to five"));
             }
             return s;

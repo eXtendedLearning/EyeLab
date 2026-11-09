@@ -1835,7 +1835,7 @@ from 1.2-1.6 to 0.9-1.0 mm.
   (plate at the edge of the view).
 - **Unity renders at 26.5-27 fps** against the 30 fps target in every run.
 
-## 24. T5.1 toward 0.4.000: per-frame frame age (Phase 0, 0.3.007)
+## 24. T5.1 toward 0.4.000: per-frame frame age (Phase 0, 0.3.007), stage timing (Phase 1, 0.3.008)
 
 `docs/tasks/T5.1-eye-latency.md` is worked phase by phase; this section collects each phase's change
 and its Surface results, and becomes the 0.4.000 write-up at Phase 4.
@@ -1900,3 +1900,162 @@ Do not touch `,` `.` in these runs (the base must stay 90 ms for the comparison)
 **Done when** (T5.1 Phase 0), against the baseline: the median turning jump as run ≤ 3 mm in both
 runs, and the One Euro still-block error no worse than 1.3 mm (6DoF). Desktop:
 `python -m xreal_gates import`, then `latency`, `filters` and `chain` on both runs.
+
+### Phase 0 results (runs of 7 Nov, build `2026-11-07T17:03:44Z`)
+
+Five G5 compare runs, two wearers besides Jack. `latency` (0.3.008: "still" also requires a head
+speed ≤ 0.03 m/s, so a wearer drifting sideways no longer counts as still):
+
+| run | DoF | turning jump as run | still | best extra delay | logged age, median (p10-p90) |
+|---|---|---|---|---|---|
+| 181513 | 3DoF, short (n = 26) | 2.5 mm | 1.5 mm | +20 ms | 228 ms (122-359) |
+| 181714 | 3DoF | **2.1 mm** | 1.1 mm | +20 ms | 250 ms (128-377) |
+| 182425 | 6DoF | **2.3 mm** | 1.0 mm | +20 ms | 223 ms (118-371) |
+| 183223 | 3DoF, aborted (throttled) | 2.0 mm | 1.0 mm | +10 ms | 224 ms (111-389) |
+| 183833 | 3DoF, aborted (throttled) | 2.9 mm | 1.2 mm | +10 ms | 233 ms (121-380) |
+
+Baseline (6 Nov, same tool): 6.9 mm (3DoF), 5.7 mm (6DoF).
+
+- **Turning jump: passed.** It is 2.0-2.9 mm in every run, at or below the 3 mm gate.
+- **The logged age leaves a residual of +10 to +20 ms.** The Unity estimator replayed on the same
+  runs puts its best base at 100-110 ms. **0.3.008 sets the base to 105 ms.**
+- **Still error, 6DoF: not yet shown.**
+  - One Euro still-block error was 3.9 mm in 182425 (gate: ≤ 1.3 mm); latest 2.0 mm, hysteresis 6.5 mm.
+  - It is not caused by Phase 0. Re-pairing the same run with the old fixed 160 ms gives the same
+    scatter: 7.2 mm against 7.3 mm.
+  - The cause is the wearer. The head moved about three times more in the still blocks than in
+    the 6 Nov run.
+  - The 3DoF run 181714 is at 1.6 mm (One Euro), and its still scatter is 2.83 mm with the
+    per-frame age against 3.14 mm re-paired at a fixed 160 ms.
+  - **So this part of the gate is repeated in the 0.3.008 session**, with Jack holding still.
+- **Other.**
+  - 183223 and 183833 were aborted while the Surface throttled (clock 152 % and 112 %; camera 8-13 fps).
+  - 182425 had 72 stream windows at 14 fps.
+  - Alignment took 91-144 s and up to 165 key presses. One tester set it as a shift (x +40,
+    y −12 mm), another as a yaw (−5.2 deg).
+  - Ratings: One Euro 4.5 (3DoF) and 3.5 (6DoF), the best or tied best in both runs.
+
+### Tester feedback (7 Nov) and what 0.3.008 changes
+
+1. **"Too much writing in view."** The locking gates (G5, demo) now show a compact banner: the
+   title, a countdown and one short grey line, with a thin amber frame for a moment when it changes.
+   Removed from view:
+   - the gate header and "next";
+   - the tracking line while tracking is fine;
+   - the lock line while locked;
+   - the offset line, except while aligning or unsaved;
+   - the diagnostics block.
+
+   **H** brings them all back.
+2. **"Rotate on x/y/z when aligning."** **Tab** switches two modes:
+   - **MOVE:** arrows move the drawing left/right/up/down. This is stored as a boresight yaw/pitch,
+     0.1 deg, Shift 0.5 deg: §23 showed the offset is an angle. PgUp/PgDn move it farther/closer
+     (2 mm, Shift 10 mm).
+   - **ROTATE:** the drawing turns about its own centre (the mean of the target's drawn points),
+     about the head's axes. Left/Right turn it, Up/Down tip it, PgUp/PgDn roll it (0.2 deg, Shift 1 deg).
+     - With the offset `x' = R x + t` and the shown centre `c' = R c + t`, a step `dq` sets
+       `R' = dq R` and `t' = dq (t − c') + c'`, so the centre stays put.
+     - The result is stored back as yaw/pitch/roll and x/y/z, in the same `view_offset.json`.
+
+   Keys repeat while held (after 0.35 s, every 60 ms). Backspace zeroes, Enter saves. The old Ctrl/Alt
+   combinations are gone. Each change is logged with its mode (`view_offset CHANGED move: ...`, `align_mode`).
+3. **"Move your head slowly" is too generic.** Every move block is now a sequence of named
+   movements of 4 s each, shown as the title, spoken, and logged as a `cue` event inside the
+   unchanged step id:
+   - **3DoF:** turn left and right, look up and down, tilt the head left and right.
+   - **6DoF:** the same, then slide left and right, rise and lower, lean closer and back.
+
+   The compare move blocks are 12 s (3DoF) and 24 s (6DoF), up from 10 s. The G5 `move_head` step
+   uses the same cues. The step ids, and so `filters` and `latency`, are unchanged.
+4. **"Make the drawing smaller so the target shows."**
+   - Target lines are 1.2 mm (were 2.5 mm) and points 5 mm (were 8 mm).
+   - **V** cycles lines and points / points only / lines only.
+   - The demo grid is 40 × 30 cm with 2 mm lines (was 60 × 40 cm, 4 mm).
+
+### Phase 1: every stage on one clock (build `2026-11-09T11:35:30Z`, EyeLab 0.3.008)
+
+No behaviour change except the base (105 ms) and the feedback items above. Everything below is
+logging.
+
+**The clock is the Windows performance counter (QPC).** Unity reads it as
+`Stopwatch.GetTimestamp()/Frequency`. The pose service reads it as `time.perf_counter()`, which on
+Windows is the same counter in the same unit: on the desktop the two agree to 1 µs. So Unity and
+service times subtract directly.
+
+**`frame_timing.csv`**: one row per frame sent to the service, posed or not. It is written at the
+start of the Unity frame after the one that applied the result.
+`python -m xreal_gates stages RUN` turns it into this table:
+
+| stage | from → to | how |
+|---|---|---|
+| poll interval | `q_frame_prev` → `q_frame` | Unity frame starts around the arrival. The vendor texture polls `TryGetRGBCameraFrame` once per Update, so the SDK had the frame somewhere in this interval |
+| texture | `q_frame` → `q_arrived` | frame start to our `FrameArrived` handler (vendor `TryAcquireLatestImage` and three texture uploads) |
+| hold | `q_arrived` → `q_copy0` | waiting in Unity until the sender takes it |
+| copy | `q_copy0` → `q_copy1` | Y plane out of the texture |
+| send | `q_send0` → `q_send1` | building and sending the WebSocket message |
+| to service | `q_send1` → `q_recv` | service receipt (`pose_service.csv` and the reply carry `q_recv`, `q_det0`, `q_det1`) |
+| parse | `q_recv` → `q_det0` | frame packet built |
+| detection | `q_det0` → `q_det1` | all targets estimated |
+| reply | `q_det1` → `q_reply_recv` | reply back in the bridge |
+| apply wait | `q_reply_recv` → `q_applied` | until the next Update applies it |
+| display | `q_applied` → `q_shown` | to the next Unity frame start (rendered and presented in between) |
+
+The table also gives the totals copy → shown and frame age + copy → shown. The row also holds the
+frame's `age_ms`, `queue_ms`, `hold_ms`, `base_ms` and `ok`.
+
+**Native probes (read-only).** Two exports of `XREALXRPlugin.dll` that the C# wrapper does not
+bind are called through `DllImport`. The vendor binary is not modified. The signatures were read
+from the x64 export code:
+
+- `bool GetHMDTimeNanos(uint64_t*)`: the HMD clock. It is logged at every frame's arrival
+  (`camera.csv` `hmd_ns`), at every send (`hmd_send_ns`), and once per second in `clock.csv`, next to QPC.
+  - **If `cam_ts` is on this clock,** `hmd_ns − cam_ts` is each frame's exact age at arrival,
+    and its minimum is the true base. That would replace the fitted base.
+  - `stages` checks this: small, positive and slowly varying means the same clock.
+- `bool GetHeadPoseAtTime(uint64_t time_ns, float[16])`: a 64-byte pose matrix, called at HMD-now
+  (`native_now`) and at `cam_ts` (`native_cap`). `stages` finds which reading of the 16 floats
+  matches Unity's head rotation (`unity_head_now`), using relative rotations between rows.
+- **Every call is wrapped.** The first exception disables that call for the rest of the run;
+  `native_clock` logs how many calls succeeded.
+
+**`camera.csv`** gains `qpc` (arrival), `hmd_ns`, `q_frame`, `q_frame_prev`.
+
+**Optical timecode (launcher T).**
+- A fullscreen marker on the Surface screen, whose id is a draw counter mod 1000
+  (`python -m xreal_gates timecode`). Each draw is logged with its QPC time to
+  `GateRuns/timecode/timecode_<stamp>.csv`; **Z** exports it and `import` files it.
+- G5 then runs in 3DoF on the target `timecode`. The service reads the id in every frame it is
+  sent, and there is no alignment and no overlay.
+- `stages` pairs each frame's id with the latest draw of that id before the frame's arrival.
+  **Arrival minus draw is the camera-to-app latency, independent of the head.**
+- It includes the Surface panel's own presentation delay (one or two refreshes), so it is an upper
+  bound on exposure → arrival.
+- Protocol (80 s): look at the screen 10 s, hold still 40 s, the three 3DoF movements, hold still 20 s.
+
+### Session 0.3.008 (Phase 1 gate, and the repeat of Phase 0's still check)
+
+Same set-up as §22. Launcher shows `[OK]` for build `2026-11-09T11:35:30Z`. Jack wears the
+glasses for 1-3; other testers may use the demo afterwards.
+
+1. **T**: timecode. Lay the Surface flat or tilt it about 50 cm in front of you, screen towards
+   you, brightness high. Look at the black and white square for the whole run.
+   - If the app window covers it, click the square once.
+   - The run ends by itself (about 2.5 min with XR start). Then **K** until "Cool enough".
+2. **5**: compare in 3DoF.
+   - Align with the new keys: Tab, MOVE first and then ROTATE if the drawing is tilted, Enter.
+   - In the still blocks hold really still, standing, eyes on the plate. In the move blocks
+     follow the spoken movements.
+   - Then **K**.
+3. **6**: compare in 6DoF, same as 2. This repeats Phase 0's still check.
+4. Optional: **D** with the other testers, to judge the compact display, Tab alignment and V
+   styles. No metrics.
+5. **Z**, and bring the zip to the desktop (`GateRuns/_inbox`).
+
+Do not touch `,` `.` (the base must stay 105 ms).
+
+**Done when.**
+- **Phase 1:** `python -m xreal_gates stages` lists every stage's median and p90 over the two
+  compare runs (stream mode, more than 3 min each). The timecode run gives camera → arrival.
+  The native-clock lines say whether `cam_ts` is on the HMD clock.
+- **Phase 0, still part:** the One Euro still-block error in the 6DoF run is ≤ 1.3 mm.
+- Desktop: `python -m xreal_gates import`, then `stages`, `latency`, `filters` on the three G5 runs.

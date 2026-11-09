@@ -184,8 +184,13 @@ def pairing_times(run: dict, mode: str) -> Optional[np.ndarray]:
     raise ValueError(mode)
 
 
-def scan(run: dict, base_t: np.ndarray, delays_ms=range(0, 301, 10), turning_deg_s: float = 3.0):
-    """List of (L ms, median jump while turning mm, while still mm, n turning) for pairing ``base_t - L``."""
+def scan(run: dict, base_t: np.ndarray, delays_ms=range(0, 301, 10), turning_deg_s: float = 3.0,
+         still_m_s: float = 0.03):
+    """List of (L ms, median jump while turning mm, while still mm, n turning) for pairing ``base_t - L``.
+
+    Still = turning below ``turning_deg_s`` and the head moving below ``still_m_s`` (0.3.008: the 6DoF
+    protocol now slides the head, which is neither turning nor still).
+    """
     locks, head = run["locks"], run["head"]
 
     def turn_rate(t):
@@ -193,10 +198,15 @@ def scan(run: dict, base_t: np.ndarray, delays_ms=range(0, 301, 10), turning_deg
         _, q0 = head(t - 0.1)
         return np.degrees(2 * np.arccos(min(1.0, abs(float(np.dot(q0, q1)))))) / 0.1
 
+    def lin_speed(t):
+        return float(np.linalg.norm(head(t)[0] - head(t - 0.1)[0])) / 0.1
+
     T = np.array([k.t_send for k in locks])
     S = np.array([turn_rate(t) for t in T])
+    V = np.array([lin_speed(t) for t in T])
     close = np.diff(T) < 0.3
-    mv, st = close & (S[1:] > turning_deg_s), close & (S[1:] <= turning_deg_s)
+    mv = close & (S[1:] > turning_deg_s)
+    st = close & (S[1:] <= turning_deg_s) & (V[1:] <= still_m_s)
     out = []
     for L in delays_ms:
         W = []

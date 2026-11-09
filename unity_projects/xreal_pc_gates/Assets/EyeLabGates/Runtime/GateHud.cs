@@ -14,6 +14,9 @@ namespace EyeLabGates
     /// (only while frames arrive); diagnostics in small print. G4 (light): a smaller banner at the top,
     /// no preview (and no YUV conversion), so the world-locked grid in the middle stays clear.
     /// On the glasses black is transparent, so dark panels read as see-through.
+    /// <para>0.3.008 (testers: "too much writing"): the locking gates (G5, demo) show a compact banner (title,
+    /// countdown, one short line; a thin amber frame instead of the full flash), the tracking and lock lines only
+    /// when something is wrong, the offset line only while aligning or unsaved, diagnostics only after key H.</para>
     /// </summary>
     public sealed class GateHud : MonoBehaviour
     {
@@ -142,30 +145,41 @@ namespace EyeLabGates
             float pad = h * 0.015f;
 
             // ---- banner
-            bool flash = now - m_Gate.StepStart < FlashSeconds;
             bool light = m_Gate.IsLight;
+            bool compact = m_Gate.IsLocking;
+            // Compact: the step change is marked by a thin amber frame, the text keeps its colours.
+            bool flash = now - m_Gate.LastChange < FlashSeconds && !compact;
+            bool frame = now - m_Gate.LastChange < FlashSeconds && compact;
             var header = Style(Mathf.RoundToInt(h / (light ? 44f : 36f)), TextAnchor.UpperCenter, false);
-            var title = Style(Mathf.RoundToInt(h / (light ? 20f : 12f)), TextAnchor.MiddleCenter, true);
-            var detail = Style(Mathf.RoundToInt(h / (light ? 40f : 30f)), TextAnchor.UpperCenter, false);
-            var count = Style(Mathf.RoundToInt(h / (light ? 18f : 10f)), TextAnchor.MiddleRight, true);
+            var title = Style(Mathf.RoundToInt(h / (compact ? 26f : light ? 20f : 12f)), TextAnchor.MiddleCenter, true);
+            var detail = Style(Mathf.RoundToInt(h / (compact ? 48f : light ? 40f : 30f)), TextAnchor.UpperCenter, false);
+            var count = Style(Mathf.RoundToInt(h / (compact ? 24f : light ? 18f : 10f)), TextAnchor.MiddleRight, true);
 
-            float bw = v.width * (light ? 0.7f : 0.84f);
+            float bw = v.width * (compact ? 0.56f : light ? 0.7f : 0.84f);
             float bx = v.x + (v.width - bw) / 2f;
             float by = v.y + h * (light ? 0.02f : 0.05f);
             string stepNo = m_Gate.StepCount > 0 && m_Gate.StepIndex > 0 ? $"step {m_Gate.StepIndex}/{m_Gate.StepCount}" : "";
-            string headerText = $"{m_Gate.GateTitle}   {stepNo}";
-            string next = string.IsNullOrEmpty(m_Gate.NextTitle) ? "" : $"   next: {m_Gate.NextTitle}";
+            string headerText = compact ? "" : $"{m_Gate.GateTitle}   {stepNo}";
+            string next = compact || string.IsNullOrEmpty(m_Gate.NextTitle) ? "" : $"   next: {m_Gate.NextTitle}";
             string detailText = m_Gate.StepDetail + next;
 
-            float headerH = header.CalcHeight(new GUIContent(headerText), bw);
+            float headerH = headerText.Length > 0 ? header.CalcHeight(new GUIContent(headerText), bw) : 0f;
             float titleH = Mathf.Max(title.CalcHeight(new GUIContent(m_Gate.StepTitle), bw * 0.8f), count.fontSize * 1.2f);
-            float detailH = detail.CalcHeight(new GUIContent(detailText), bw);
-            float barH = h * 0.012f;
+            float detailH = detailText.Length > 0 ? detail.CalcHeight(new GUIContent(detailText), bw) : 0f;
+            float barH = h * (compact ? 0.006f : 0.012f);
             float bh = pad + headerH + titleH + detailH + barH + 2 * pad;
 
             Fill(new Rect(bx, by, bw, bh), flash ? Flash : Panel);
+            if (frame)
+            {
+                float t = Mathf.Max(2f, h * 0.004f);
+                Fill(new Rect(bx, by, bw, t), Amber);
+                Fill(new Rect(bx, by + bh - t, bw, t), Amber);
+                Fill(new Rect(bx, by, t, bh), Amber);
+                Fill(new Rect(bx + bw - t, by, t, bh), Amber);
+            }
             float y = by + pad;
-            Label(new Rect(bx, y, bw, headerH), headerText, header, flash ? Color.black : Grey);
+            if (headerH > 0) Label(new Rect(bx, y, bw, headerH), headerText, header, flash ? Color.black : Grey);
             y += headerH;
             Label(new Rect(bx + bw * 0.1f, y, bw * 0.8f, titleH), m_Gate.StepTitle, title, flash ? Color.black : Amber);
             if (!double.IsNaN(m_Gate.StepEnd))
@@ -175,7 +189,7 @@ namespace EyeLabGates
                 Label(new Rect(bx, y, bw - pad * 2, titleH), Math.Ceiling(left).ToString("F0", Inv), count, c);
             }
             y += titleH;
-            Label(new Rect(bx, y, bw, detailH), detailText, detail, flash ? Color.black : Color.white);
+            if (detailH > 0) Label(new Rect(bx, y, bw, detailH), detailText, detail, flash ? Color.black : (compact ? Grey : Color.white));
             y += detailH + pad;
             if (!double.IsNaN(m_Gate.StepEnd) && m_Gate.StepEnd > m_Gate.StepStart)
             {
@@ -185,7 +199,7 @@ namespace EyeLabGates
             }
 
             // ---- tracking line
-            var big = Style(Mathf.RoundToInt(h / (light ? 34f : 20f)), TextAnchor.MiddleCenter, true);
+            var big = Style(Mathf.RoundToInt(h / (compact ? 40f : light ? 34f : 20f)), TextAnchor.MiddleCenter, true);
             int reason = m_Pose.LastTrackingReason;
             string trackText;
             Color trackColor;
@@ -196,7 +210,8 @@ namespace EyeLabGates
             }
             else if (reason == NativeTracking.Ready)
             {
-                trackText = $"TRACKING READY ({m_Pose.LastTrackingType})";
+                // Compact: nothing to say while tracking is fine.
+                trackText = compact ? "" : $"TRACKING READY ({m_Pose.LastTrackingType})";
                 trackColor = Green;
             }
             else
@@ -214,7 +229,7 @@ namespace EyeLabGates
             }
 
             // ---- G5 lock status
-            if (m_Gate.IsLocking && m_Gate.LockStatus.Length > 0)
+            if (m_Gate.IsLocking && m_Gate.LockStatus.Length > 0 && (m_Gate.LockState != 1 || m_Gate.ShowDiagnostics))
             {
                 float lh = big.fontSize * 1.5f;
                 Color lc = m_Gate.LockState == 1 ? Green : m_Gate.LockState == 3 ? Amber : Red;
@@ -234,11 +249,12 @@ namespace EyeLabGates
                     ty += sh + pad;
                 }
                 string off = m_Gate.OffsetStatus;
-                if (off.Length > 0)
+                if (off.Length > 0 && (m_Gate.Aligning || m_Gate.OffsetDirty || m_Gate.ShowDiagnostics))
                 {
-                    Fill(new Rect(bx, ty, bw, sh), Panel);
-                    Label(new Rect(bx, ty, bw, sh), off, small, off.Contains("unsaved") ? Amber : Grey);
-                    ty += sh + pad;
+                    float oh = small.CalcHeight(new GUIContent(off), bw) + pad * 0.5f;
+                    Fill(new Rect(bx, ty, bw, oh), Panel);
+                    Label(new Rect(bx, ty, bw, oh), off, small, m_Gate.OffsetDirty ? Amber : Grey);
+                    ty += oh + pad;
                 }
             }
 
@@ -291,7 +307,8 @@ namespace EyeLabGates
                       $"Eye camera {m_Camera.Fps.ToString("F0", Inv)} fps{lagText}", small, lag > 1.0 ? Red : Grey);
             }
 
-            // ---- diagnostics (small, bottom left)
+            // ---- diagnostics (small, bottom left; locking gates: key H)
+            if (compact && !m_Gate.ShowDiagnostics) return;
             var diag = Style(Mathf.RoundToInt(h / 46f), TextAnchor.LowerLeft, false);
             Vector3 p = m_Pose.LastPosition * 1000f;
             Vector3 e = m_Pose.LastRotation.eulerAngles;
@@ -300,7 +317,7 @@ namespace EyeLabGates
                 $"cpu {m_Perf.CpuCoresBusy.ToString("F1", Inv)} cores  sys {Pct(m_Perf.SystemCpuPct)}  clock {Pct(m_Perf.CpuPerformancePct)}\n" +
                 $"glasses {(m_Gate.GlassesConnected ? "ok" : "-")}  XR {(m_Gate.XRActive ? "on" : "off")}  marks {m_Gate.Marks}  build {m_Build}\n" +
                 (light ? $"bursts {m_Gate.Bursts}  temp {(double.IsNaN(m_Perf.TempMaxC) ? "-" : m_Perf.TempMaxC.ToString("F0", Inv) + " C")}\n" : "") +
-                (light ? "Esc abort   M mark   P place grid" : "Esc abort   M mark");
+                (light ? "Esc abort   M mark   P place grid   H hide" : "Esc abort   M mark");
             float dw = v.width * 0.32f;
             float dh = diag.CalcHeight(new GUIContent(diagText), dw);
             Label(new Rect(v.x + pad * 2, v.yMax - dh - pad * 2, dw, dh), diagText, diag, Grey);

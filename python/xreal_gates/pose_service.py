@@ -15,8 +15,9 @@ Unity's JsonUtility reads neither nested arrays nor nulls):
   (6 floats per segment, 3 per point, target frame, metres)
 - client binary: 4-byte little-endian header length, JSON header
   ``{"seq", "cam_ts", "w", "h", "rows": "bottom_up"|"top_down"}``, then w*h bytes of Y
-- server ``{"type": "poses", "seq", "cam_ts", "ms", "results": [{"target", "ok", "reason", "R", "tvec", ...}]}``
-  (OpenCV camera frame of the upright image, metres)
+- server ``{"type": "poses", "seq", "cam_ts", "ms", "q_recv", "q_det0", "q_det1", "q_reply",
+  "results": [{"target", "ok", "reason", "R", "tvec", ...}]}`` (OpenCV camera frame of the upright image,
+  metres; ``q_*`` QPC seconds: received, detection start/end, reply sent, for T5.1's per-stage timing)
 
 Targets use disjoint marker IDs (board 0-16, plate A 30-32, plate L 40-43), so
 several can be served at once. Each (session, seq) is processed at most once, in
@@ -42,7 +43,10 @@ from .targets import TARGET_NAMES, make_target, overlay_counts
 
 DEFAULT_PORT = 8765
 LOG_FIELDS = ["t_host", "session", "seq", "cam_ts", "target", "ok", "reason", "n_markers", "n_points", "rms_px",
-              "ambiguity", "tx", "ty", "tz", "rx", "ry", "rz", "dist_m", "ms", "marker_ids"]
+              "ambiguity", "tx", "ty", "tz", "rx", "ry", "rz", "dist_m", "ms", "marker_ids",
+              "q_recv", "q_det0", "q_det1"]
+# q_*: QPC seconds (time.perf_counter() on Windows = QueryPerformanceCounter, the clock Unity logs with
+# Stopwatch.GetTimestamp()): frame fully received, detection start and end (T5.1 Phase 1).
 
 
 def parse_targets(text) -> List[str]:
@@ -124,9 +128,10 @@ class PoseService:
                            "description": self.camera.describe()},
                 "overlays": overlays}
 
-    def on_frame(self, payload: bytes) -> Optional[dict]:
+    def on_frame(self, payload: bytes, q_recv: Optional[float] = None) -> Optional[dict]:
         from frame_packet import FramePacket
 
+        q_recv = time.perf_counter() if q_recv is None else q_recv
         if self.camera is None:
             raise ValueError("frame before hello")
         header, img = parse_frame(payload)
@@ -137,7 +142,7 @@ class PoseService:
         self.last_seq = seq
         cam_ts = int(header.get("cam_ts", 0))
         packet = FramePacket(image=img, source_id="xreal_eye", session_id=self.session, sequence=seq,
-                             received_at=time.perf_counter(), image_mode="gray8",
+                             received_at=q_recv, image_mode="gray8",
                              device_time_s=cam_ts * 1e-9, device_clock="xreal_eye_cam_ts")
         t0 = time.perf_counter()
         results = []
@@ -145,16 +150,18 @@ class PoseService:
             ts = time.perf_counter()
             est = target.estimate(packet.image, self.camera.K, self.camera.dist)
             results.append((target.name, est, (time.perf_counter() - ts) * 1000.0))
-        ms = (time.perf_counter() - t0) * 1000.0
+        t1 = time.perf_counter()
+        ms = (t1 - t0) * 1000.0
         self.frames += 1
         out = []
         for name, est, t_ms in results:
             self.accepted[name] += int(est.ok)
             out.append(_no_null({"target": name, **est.to_json()}))
-            self._log_row(seq, cam_ts, name, est, t_ms)
-        return {"type": "poses", "seq": seq, "cam_ts": cam_ts, "ms": ms, "results": out}
+            self._log_row(seq, cam_ts, name, est, t_ms, (q_recv, t0, t1))
+        return {"type": "poses", "seq": seq, "cam_ts": cam_ts, "ms": ms, "results": out,
+                "q_recv": q_recv, "q_det0": t0, "q_det1": t1}
 
-    def _log_row(self, seq, cam_ts, name, est, ms) -> None:
+    def _log_row(self, seq, cam_ts, name, est, ms, q=(float("nan"),) * 3) -> None:
         if self.writer is None:
             return
         t = np.ravel(est.tvec) if est.tvec is not None else [float("nan")] * 3
@@ -166,7 +173,8 @@ class PoseService:
             "tx": f"{t[0]:.5f}", "ty": f"{t[1]:.5f}", "tz": f"{t[2]:.5f}",
             "rx": f"{r[0]:.5f}", "ry": f"{r[1]:.5f}", "rz": f"{r[2]:.5f}",
             "dist_m": f"{float(np.linalg.norm(t)):.4f}", "ms": f"{ms:.1f}",
-            "marker_ids": " ".join(str(i) for i in est.marker_ids)})
+            "marker_ids": " ".join(str(i) for i in est.marker_ids),
+            "q_recv": f"{q[0]:.6f}", "q_det0": f"{q[1]:.6f}", "q_det1": f"{q[2]:.6f}"})
         self.csv.flush()
 
     def close(self) -> None:
@@ -190,6 +198,7 @@ def serve(targets, calib_path: Optional[Path] = None, port: int = DEFAULT_PORT,
         try:
             while True:
                 kind, payload = conn.receive()
+                q_recv = time.perf_counter()
                 if kind == ws.OP_TEXT:
                     msg = json.loads(payload.decode("utf-8"))
                     if msg.get("type") == "hello":
@@ -202,11 +211,12 @@ def serve(targets, calib_path: Optional[Path] = None, port: int = DEFAULT_PORT,
                         break
                 else:
                     try:
-                        reply = service.on_frame(payload)
+                        reply = service.on_frame(payload, q_recv)
                     except Exception as e:
                         reply = {"type": "poses", "seq": 0, "ms": 0.0, "results": [],
                                  "message": f"{type(e).__name__}: {e}"}
                     if reply is not None:
+                        reply["q_reply"] = time.perf_counter()
                         conn.send_text(json.dumps(reply))
                         if service.frames % 10 == 1:
                             seen = [r["target"] for r in reply["results"] if r["ok"]]

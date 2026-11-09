@@ -50,6 +50,7 @@ if exist "%CALIB%" (echo  Eye calibration: %CALIB%) else (echo  Eye calibration:
 echo.
 echo  D  DEMO         world grid + plate A and 25 mm board locked by the camera + Eye view, 3DoF (until Esc)
 echo  C  Calibrate    Eye camera, with the 25 mm board, then compute   (about 3 min)
+echo  T  TIMECODE     latency: look at the Surface screen, 3DoF, no alignment   (about 3 min)
 echo.
 echo  Every G5 run starts by aligning the drawing by eye: keep the glasses on, Enter continues.
 echo  1  G5 plate A, 3DoF
@@ -65,22 +66,25 @@ echo  Z  Zip NEW runs for transfer (exported runs move to _exported)
 echo  X  Older gates  G1, G2, G3, G4, other G5 variants, manual, vendor sample
 echo  Q  Quit
 echo.
-echo  In G5: F lock filter, ] smoother, [ more responsive; arrows turn the drawing, Ctrl+arrows shift it,
-echo  Alt+PgUp/PgDn depth, Enter saves; , and . frame age base -/+10 ms (default 90; per-frame queue age is added).
-choice /c DC123456KOZXQ /n /m "Select: "
+echo  Align: Tab switches MOVE (arrows left/right/up/down, PgUp/PgDn farther/closer) and ROTATE (arrows turn
+echo  and tip, PgUp/PgDn roll); Shift big steps, keys repeat when held, Backspace zero, Enter saves.
+echo  In G5: H info on/off, V drawing style, F lock filter, ] smoother, [ more responsive,
+echo  , and . frame age base -/+10 ms (default 105; per-frame queue age is added).
+choice /c DCT123456KOZXQ /n /m "Select: "
 set "SEL=%errorlevel%"
 if "%SEL%"=="1" call :demo 3dof & goto menu
 if "%SEL%"=="2" call :calib & goto menu
-if "%SEL%"=="3" call :g5 plateA 3dof & goto menu
-if "%SEL%"=="4" call :g5 plateA tracked & goto menu
-if "%SEL%"=="5" call :g5 board25 3dof & goto menu
-if "%SEL%"=="6" call :g5 plateL 3dof & goto menu
-if "%SEL%"=="7" call :g5 plateA 3dof -compare & goto menu
-if "%SEL%"=="8" call :g5 plateA tracked -compare & goto menu
-if "%SEL%"=="9" call :gate cooldown cooldown & goto menu
-if "%SEL%"=="10" start "" explorer "%RUNROOT%" & goto menu
-if "%SEL%"=="11" call :zipruns & goto menu
-if "%SEL%"=="12" goto menu_old
+if "%SEL%"=="3" call :timecode & goto menu
+if "%SEL%"=="4" call :g5 plateA 3dof & goto menu
+if "%SEL%"=="5" call :g5 plateA tracked & goto menu
+if "%SEL%"=="6" call :g5 board25 3dof & goto menu
+if "%SEL%"=="7" call :g5 plateL 3dof & goto menu
+if "%SEL%"=="8" call :g5 plateA 3dof -compare & goto menu
+if "%SEL%"=="9" call :g5 plateA tracked -compare & goto menu
+if "%SEL%"=="10" call :gate cooldown cooldown & goto menu
+if "%SEL%"=="11" start "" explorer "%RUNROOT%" & goto menu
+if "%SEL%"=="12" call :zipruns & goto menu
+if "%SEL%"=="13" goto menu_old
 goto :eof
 
 :menu_old
@@ -169,7 +173,7 @@ if exist "%CALIB%" (set "CALARG=--calib "%CALIB%"") else (set "CALARG=")
 start "EyeLab pose service" /min /d "%REPO%\python" "%PY%" -m xreal_gates serve --target %TGT% --idle-timeout 120 %CALARG%
 exit /b 0
 
-rem ---- G5: %1 targets (plateA, plateL, board25, or joined by +), %2 order (tracked = 6DoF, 3dof).
+rem ---- G5: %1 targets (plateA, plateL, board25, timecode, or joined by +), %2 order (tracked = 6DoF, 3dof).
 :g5
 call :service %1
 if errorlevel 1 exit /b 0
@@ -180,12 +184,24 @@ if "%3"=="-compare" set "G5LABEL=%G5LABEL%_compare"
 call :gate G5 %G5LABEL% -target "%TGT%" -order %2 %3
 exit /b 0
 
+rem ---- Timecode (T5.1 Phase 1): a fullscreen marker on this screen whose id counts drawn frames, logged to
+rem RUNROOT\timecode (Z exports it); then G5 in 3DoF on the timecode target. The Eye looks at this screen.
+:timecode
+call :findpython
+if not defined PY exit /b 0
+echo Starting the timecode screen (window "EyeLab timecode", Esc ends it; it ends by itself after 4 min) ...
+start "EyeLab timecode" /d "%REPO%\python" "%PY%" -m xreal_gates --root "%RUNROOT%" timecode --seconds 240
+echo  Put the Surface about 50 cm in front of you, screen up. If the app window covers the
+echo  black and white square, click the square once to bring it to the front.
+call :g5 timecode 3dof
+exit /b 0
+
 rem ---- Demo: plate A and the 25 mm board until Esc. %1 = 3dof or tracked (6DoF). Keys: G grid, P place grid, E Eye view, T targets.
 :demo
 call :service plateA+board25
 if errorlevel 1 exit /b 0
 echo  Demo keys on this keyboard while it runs: G grid on/off, P place grid where the wearer looks,
-echo  E Eye view on/off, T target overlays on/off, arrows/PgUp/PgDn view offset (Enter saves), Esc end.
+echo  E Eye view on/off, T target overlays on/off, V drawing style, H info, arrows/PgUp/PgDn/Tab view offset (Enter saves), Esc end.
 set "DLABEL=demo"
 if "%1"=="3dof" set "DLABEL=demo_3dof"
 call :gate demo %DLABEL% -target "%TGT%" -order %1

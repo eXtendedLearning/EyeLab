@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Unity.Collections;
@@ -145,6 +146,9 @@ namespace EyeLabGates
         int m_HeadClamped;
         ViewOffset m_ViewOffset = new ViewOffset();
         bool m_ViewOffsetDirty;
+        bool m_AlignRotate;           // alignment keys: false = MOVE, true = ROTATE (Tab)
+        readonly Dictionary<KeyCode, double> m_KeyHeld = new Dictionary<KeyCode, double>();
+        const double KeyRepeatDelay = 0.35, KeyRepeatEvery = 0.06;
         bool m_AlignConfirmed;
 
         sealed class LastLock { public PendingLock Pending; public TargetPose Pose; }
@@ -156,7 +160,20 @@ namespace EyeLabGates
             public long Seq; public double T; public Vector3 HeadPosition; public Quaternion HeadRotation; public ulong CamTs;
             // T5.1 Phase 0: when the frame was sent and how old it was taken to be (s).
             public double TSend, Age, Base, Queue, Hold; public bool PerFrame, HeadClamped;
+            // T5.1 Phase 1 (frame_timing.csv): QPC stage times (s) and the native clock/pose probes.
+            public double QFramePrev = double.NaN, QFrame = double.NaN, QArrived = double.NaN, QCopy0 = double.NaN, QCopy1 = double.NaN;
+            public double QApplied = double.NaN;
+            public ulong HmdArrived, HmdSend;
+            public float[] NativeCap, NativeNow;
+            public string UnityHeadNow = "";
+            public PoseResult Result;
+            public bool Ok;
         }
+        PendingLock m_TimingRow;      // applied this frame; its row is written at the next frame start
+        double m_LastClockRow = double.NegativeInfinity;
+        const string FrameTimingHeader =
+            "seq,cam_ts,hmd_arrived_ns,q_frame_prev,q_frame,q_arrived,q_copy0,q_copy1,q_send0,q_send1,q_recv,q_det0,q_det1," +
+            "q_reply,q_reply_recv,q_applied,q_shown,age_ms,queue_ms,hold_ms,base_ms,ok,hmd_send_ns,native_cap,native_now,unity_head_now";
         int m_LastTick = -1;
         float m_StepSeconds;
         bool m_Quitting;
@@ -195,10 +212,29 @@ namespace EyeLabGates
         public bool IsLocking => IsG5 || IsDemo;
         /// <summary>Camera state for the HUD (locking gates): empty when fine.</summary>
         public string CameraStatus { get; private set; } = "";
-        /// <summary>The head-frame view offset, with "(unsaved)" while changed and not saved.</summary>
-        public string OffsetStatus => !IsLocking ? "" :
-            $"view offset {m_ViewOffset.Describe()}{(m_ViewOffsetDirty ? "  (unsaved: Enter)" : "")}   |   frame age {Mathf.RoundToInt(m_AgeBase * 1000f)}+{(double.IsNaN(m_Camera.QueueAge) ? "?" : Math.Round(m_Camera.QueueAge * 1000).ToString("F0", CultureInfo.InvariantCulture))} ms" +
-            (IsCompare ? $"   |   {m_CompareLabel}" : $"   |   filter {FilterDescription()}  (F switch, [ ] tune)");
+        /// <summary>
+        /// Alignment keys and the head-frame view offset (shown while aligning, while unsaved, or with H). 0.3.008: the
+        /// key help names the current mode (Tab: MOVE / ROTATE); frame age and filter only with H.
+        /// </summary>
+        public string OffsetStatus => !IsLocking || IsTimecode ? "" :
+            (m_AlignRotate
+                ? "ROTATE   arrows: turn / tip   PgUp PgDn: roll   (Tab: move)"
+                : "MOVE   arrows: left / right / up / down   PgUp PgDn: farther / closer   (Tab: rotate)") +
+            "   Shift: big steps   Backspace: zero   Enter: save\n" +
+            $"offset {m_ViewOffset.Describe()}{(m_ViewOffsetDirty ? "  (unsaved: Enter)" : "")}" +
+            (!ShowDiagnostics ? "" :
+                $"\nframe age {Mathf.RoundToInt(m_AgeBase * 1000f)}+{(double.IsNaN(m_Camera.QueueAge) ? "?" : Math.Round(m_Camera.QueueAge * 1000).ToString("F0", CultureInfo.InvariantCulture))} ms" +
+                (IsCompare ? $"   |   {m_CompareLabel}" : $"   |   filter {FilterDescription()}  (F switch, [ ] tune)") +
+                $"   |   overlay {GateOverlay.StyleNames[m_Overlay.Style]} (V)");
+        public bool OffsetDirty => m_ViewOffsetDirty;
+        /// <summary>True during the alignment steps (the HUD then shows the alignment keys).</summary>
+        public bool Aligning => m_StepId.StartsWith("align", StringComparison.Ordinal);
+        /// <summary>Locking gates: diagnostics and the full status lines (key H).</summary>
+        public bool ShowDiagnostics { get; private set; }
+        /// <summary>When the banner last changed (step or motion cue): the HUD marks it for a moment.</summary>
+        public double LastChange { get; private set; } = double.NegativeInfinity;
+        /// <summary>G5 on the timecode target (T5.1 Phase 1): no alignment, no overlay.</summary>
+        public bool IsTimecode => m_Args != null && Array.IndexOf(m_Args.TargetList, "timecode") >= 0;
         /// <summary>Demo: show the latest Eye frame in a corner (key E).</summary>
         public bool ShowEyeView { get; private set; }
         public bool IsCalib => m_Args != null && m_Args.Gate == GateKind.Calib;
@@ -220,6 +256,7 @@ namespace EyeLabGates
             m_ActiveFilter = TargetLock.IndexOf(m_Args.LockFilter);
             m_AgeBase = (float)m_Args.CamLatency;
             m_Overlay = GetComponent<GateOverlay>();
+            gameObject.AddComponent<FrameStartProbe>();   // T5.1 Phase 1: QPC at each Unity frame start
             if (m_CameraTexture == null) m_CameraTexture = FindAnyObjectByType<XREALRGBCameraTexture>();
             if (m_HelloMR == null) m_HelloMR = FindAnyObjectByType<HelloMR>();
 
@@ -357,6 +394,14 @@ namespace EyeLabGates
                 StartCoroutine(FlushCamera());
             }
 
+            WriteTimingRow();
+            if (IsLocking && now - m_LastClockRow >= 1.0)
+            {
+                m_LastClockRow = now;
+                m_Log.Table("clock.csv", "t_unity,qpc,hmd_ns,unix_ms",
+                    $"{GateRunLog.F(now)},{Clocks.F(Clocks.Qpc)},{NativeClock.HmdNow().ToString(CultureInfo.InvariantCulture)}," +
+                    $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)}");
+            }
             RecordHead(now);
             foreach (var kv in m_Anchors)
             {
@@ -535,9 +580,17 @@ namespace EyeLabGates
         /// </summary>
         IEnumerator RunG5()
         {
-            Say(IsCompare ? "Gate five. Filter comparison." : $"Gate five. Locked overlay on {SpokenTargets()}.");
-            yield return StartLocking(m_Args.Order == "3dof" ? TrackingType.MODE_3DOF : TrackingType.MODE_6DOF);
+            bool sixDof = m_Args.Order != "3dof";
+            Say(IsTimecode ? "Gate five. Timecode latency." : IsCompare ? "Gate five. Filter comparison." : $"Gate five. Locked overlay on {SpokenTargets()}.");
+            yield return StartLocking(sixDof ? TrackingType.MODE_6DOF : TrackingType.MODE_3DOF);
             if (m_Quitting) yield break;
+            if (IsTimecode)
+            {
+                yield return RunProtocol(GateProtocol.Timecode());
+                yield return StopLocking();
+                yield return Quit("COMPLETED");
+                yield break;
+            }
             yield return AlignStep();
             if (m_Quitting) yield break;
             if (IsCompare)
@@ -556,11 +609,11 @@ namespace EyeLabGates
                 m_CompareLabels = labels;
                 m_Log.Event("compare_mapping", seed, $"{TargetLock.Names[0]}={labels[0]} {TargetLock.Names[1]}={labels[1]} " +
                     $"{TargetLock.Names[2]}={labels[2]} order={string.Join(",", order)}");
-                yield return RunProtocol(GateProtocol.G5Compare(order.ToArray(), labels));
+                yield return RunProtocol(GateProtocol.G5Compare(order.ToArray(), labels, sixDof));
             }
             else
             {
-                yield return RunProtocol(GateProtocol.G5());
+                yield return RunProtocol(GateProtocol.G5(sixDof));
             }
             yield return StopLocking();
             yield return Quit("COMPLETED");
@@ -577,7 +630,7 @@ namespace EyeLabGates
             Say("EyeLab demo.");
             yield return StartLocking(m_Args.Order == "3dof" ? TrackingType.MODE_3DOF : TrackingType.MODE_6DOF);
             if (m_Quitting) yield break;
-            Show("demo", "EYELAB DEMO", "G grid   P place grid   E eye view   T targets   Esc end", "");
+            Show("demo", "EYELAB DEMO", "G grid   P place grid   E eye view   T targets   V style   H info   Esc end", "");
             PlaceOverlay("demo_start", DemoGridDistance);
             m_InProtocol = true; // "Tracking lost" cues
             while (!m_Quitting) yield return null;
@@ -662,9 +715,8 @@ namespace EyeLabGates
             }
             double t0 = Time.realtimeSinceStartupAsDouble;
             m_Log.Event("align", "BEGIN", m_ViewOffset.Describe());
-            Show("align", "ALIGN THE DRAWING, THEN ENTER",
-                 "Arrows: turn  Ctrl+arrows: shift  Alt+PgUp/PgDn: depth  Shift: big steps  Backspace: zero  Enter: done. Do not touch the glasses.", "HANDS-OFF CHECK");
-            Say("Align the drawing on the target with the arrow keys, then press Enter.");
+            Show("align", "ALIGN THE DRAWING, THEN ENTER", "Tab switches MOVE and ROTATE. Do not touch the glasses.", "HANDS-OFF CHECK");
+            Say("Align the drawing on the target. Arrows move it, Tab switches to rotate. Enter when done.");
             m_AlignConfirmed = false;
             while (!m_AlignConfirmed && !m_Quitting) yield return null;
             if (m_Quitting) yield break;
@@ -797,6 +849,8 @@ namespace EyeLabGates
             }
             m_Bursting = false;
             if (m_Source.IsCapturing) StopCapture("end");
+            WriteTimingRow();
+            m_Log.Event("native_clock", NativeClock.TimeOk > 0 ? "OK" : "UNAVAILABLE", NativeClock.Describe());
             foreach (var kv in m_Anchors)
                 m_Log.Event("lock_summary", kv.Key,
                     $"applied latest={kv.Value.Filters[0].Applied} euro={kv.Value.Filters[1].Applied} hysteresis={kv.Value.Filters[2].Applied} " +
@@ -809,7 +863,8 @@ namespace EyeLabGates
         {
             var names = new List<string>();
             foreach (string t in m_Args.TargetList)
-                names.Add(t == "plateA" ? "plate A" : t == "plateL" ? "plate L" : t == "board25" ? "the calibration board" : t);
+                names.Add(t == "plateA" ? "plate A" : t == "plateL" ? "plate L" : t == "board25" ? "the calibration board"
+                        : t == "timecode" ? "the timecode screen" : t);
             return string.Join(" and ", names);
         }
 
@@ -938,11 +993,13 @@ namespace EyeLabGates
                 }
                 return false;
             }
+            double qCopy0 = Clocks.Qpc;
             NativeArray<byte> raw = y.GetRawTextureData<byte>();
             int n = y.width * y.height;
             if (raw.Length < n) return false;
             var data = new byte[n];
             NativeArray<byte>.Copy(raw, data, n);
+            double qCopy1 = Clocks.Qpc;
             if (now - m_LastLockSnapshot >= LockSnapshotEvery)
             {
                 m_LastLockSnapshot = now;
@@ -965,7 +1022,23 @@ namespace EyeLabGates
                 HeadRotation = capRot, CamTs = m_Source.Timestamp,
                 TSend = now, Age = age, Base = m_AgeBase, Queue = queue, Hold = hold,
                 PerFrame = perFrame, HeadClamped = !inHistory,
+                QCopy0 = qCopy0, QCopy1 = qCopy1,
             };
+            if (perFrame)
+            {
+                m_Pending.QArrived = m_Camera.LastArrivalQpc;
+                m_Pending.QFrame = m_Camera.LastFrameQpc;
+                m_Pending.QFramePrev = m_Camera.LastPrevFrameQpc;
+                m_Pending.HmdArrived = m_Camera.LastHmdNs;
+            }
+            // Native probes (read-only exports, Clocks.cs): HMD time now, the native head pose now and at cam_ts
+            // (meaningful only if cam_ts is on the HMD clock, which stages checks), and Unity's head pose now.
+            m_Pending.HmdSend = NativeClock.HmdNow();
+            m_Pending.NativeNow = NativeClock.HeadPoseAt(m_Pending.HmdSend);
+            m_Pending.NativeCap = NativeClock.HeadPoseAt(m_Source.Timestamp);
+            Vector3 hp = head.position; Quaternion hq = head.rotation;
+            m_Pending.UnityHeadNow = string.Join(" ", new[] { hp.x, hp.y, hp.z, hq.x, hq.y, hq.z, hq.w }
+                .Select(v => v.ToString("G7", CultureInfo.InvariantCulture)));
             m_LocksSent++;
             m_PoseTask = m_Bridge.EstimatePoseAsync(img, m_Source.Timestamp, m_BridgeCts.Token);
             return true;
@@ -974,6 +1047,8 @@ namespace EyeLabGates
         void ApplyLock(Task<PoseResult> task, PendingLock pending)
         {
             if (pending == null) return;
+            pending.QApplied = Clocks.Qpc;
+            m_TimingRow = pending;
             if (task.IsFaulted || task.IsCanceled)
             {
                 string why = task.IsFaulted ? task.Exception?.GetBaseException().Message : "cancelled";
@@ -983,6 +1058,7 @@ namespace EyeLabGates
                 return;
             }
             PoseResult r = task.Result;
+            pending.Result = r;
             if (!string.IsNullOrEmpty(r.Error)) m_Log.Event("lock", "SERVICE_ERROR", $"seq={pending.Seq} {r.Error}");
             bool anyPose = false;
             foreach (TargetPose tp in r.Targets)
@@ -1035,7 +1111,36 @@ namespace EyeLabGates
                     : $"LOCKED, camera {jump} from shown";
             }
             if (anyPose) m_LocksPosed++;
+            pending.Ok = anyPose;
             UpdateLockStatus();
+        }
+
+        /// <summary>
+        /// T5.1 Phase 1: one frame_timing.csv row per sent frame (posed or not, timecode included), written at the
+        /// start of the Unity frame after the one that applied it, so <c>q_shown</c> = that frame start (the applied
+        /// pose was rendered and presented in between). Read by <c>python -m xreal_gates stages</c>.
+        /// </summary>
+        void WriteTimingRow()
+        {
+            PendingLock p = m_TimingRow;
+            if (p == null) return;
+            m_TimingRow = null;
+            PoseResult r = p.Result;
+            double nan = double.NaN;
+            string row = string.Join(",", new[]
+            {
+                p.Seq.ToString(CultureInfo.InvariantCulture), p.CamTs.ToString(CultureInfo.InvariantCulture),
+                p.HmdArrived.ToString(CultureInfo.InvariantCulture),
+                Clocks.F(p.QFramePrev), Clocks.F(p.QFrame), Clocks.F(p.QArrived), Clocks.F(p.QCopy0), Clocks.F(p.QCopy1),
+                Clocks.F(r?.QSend0 ?? nan), Clocks.F(r?.QSend1 ?? nan), Clocks.F(r?.QRecv ?? nan), Clocks.F(r?.QDet0 ?? nan),
+                Clocks.F(r?.QDet1 ?? nan), Clocks.F(r?.QReply ?? nan), Clocks.F(r?.QReplyRecv ?? nan),
+                Clocks.F(p.QApplied), Clocks.F(Clocks.FrameStart),
+                (p.Age * 1000).ToString("F2", CultureInfo.InvariantCulture), (p.Queue * 1000).ToString("F2", CultureInfo.InvariantCulture),
+                (p.Hold * 1000).ToString("F2", CultureInfo.InvariantCulture), (p.Base * 1000).ToString("F0", CultureInfo.InvariantCulture),
+                p.Ok ? "1" : "0", p.HmdSend.ToString(CultureInfo.InvariantCulture),
+                NativeClock.Text(p.NativeCap), NativeClock.Text(p.NativeNow), p.UnityHeadNow,
+            });
+            m_Log.Table("frame_timing.csv", FrameTimingHeader, row);
         }
 
         /// <summary>Per-lock frame age fields (T5.1 Phase 0), read by <c>python -m xreal_gates latency</c>.</summary>
@@ -1074,31 +1179,43 @@ namespace EyeLabGates
         }
 
         /// <summary>
-        /// View-offset keys (G5, demo), wearer looking at the target. 0.3.005: arrows turn the drawing about
-        /// the head (yaw/pitch, 0.1 deg; Shift 0.5 deg), because a fixed tilt of the display against the eyes
-        /// is an angle and then holds at every distance (2 Nov: y -16 mm at 0.77 m in both runs = 1.2 deg).
-        /// Ctrl+arrows shift it (2 mm; Shift 10 mm), Ctrl+PgUp/PgDn roll, Alt+PgUp/PgDn depth (2 mm; depth is
-        /// hard to judge by eye, so it needs the extra key). Backspace zero, Enter save. Keys , and . change
-        /// the base of the per-frame camera frame age by 10 ms.
+        /// View-offset keys (G5, demo), wearer looking at the target. 0.3.008 (testers wanted rotation about x/y/z):
+        /// Tab switches two modes. MOVE: arrows move the drawing left/right/up/down (stored as a yaw/pitch about the
+        /// head, 0.1 deg, Shift 0.5 deg: a fixed tilt of the display against the eyes is an angle and holds at every
+        /// distance, 2 Nov), PgUp/PgDn farther/closer (2 mm, Shift 10 mm). ROTATE: the drawing turns about its own
+        /// centre, about the head's axes: Left/Right about the vertical, Up/Down about the horizontal, PgUp/PgDn roll
+        /// (0.2 deg, Shift 1 deg). Keys repeat while held. Backspace zero, Enter save. Keys , and . change the base
+        /// of the per-frame camera frame age by 10 ms.
         /// </summary>
         void HandleOffsetKeys()
         {
+            if (IsTimecode) return;
             bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
-            bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
-            bool alt = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
-            float mm = shift ? 10f : 2f, deg = shift ? 0.5f : 0.1f;
-            var o = m_ViewOffset;
-            bool changed = true;
-            if (Input.GetKeyDown(KeyCode.LeftArrow)) { if (ctrl) o.dx_mm -= mm; else o.yaw_deg -= deg; }
-            else if (Input.GetKeyDown(KeyCode.RightArrow)) { if (ctrl) o.dx_mm += mm; else o.yaw_deg += deg; }
-            else if (Input.GetKeyDown(KeyCode.UpArrow)) { if (ctrl) o.dy_mm += mm; else o.pitch_deg -= deg; }
-            else if (Input.GetKeyDown(KeyCode.DownArrow)) { if (ctrl) o.dy_mm -= mm; else o.pitch_deg += deg; }
-            else if (Input.GetKeyDown(KeyCode.PageUp) && ctrl) o.roll_deg += deg;
-            else if (Input.GetKeyDown(KeyCode.PageDown) && ctrl) o.roll_deg -= deg;
-            else if (Input.GetKeyDown(KeyCode.PageUp) && alt) o.dz_mm += mm;
-            else if (Input.GetKeyDown(KeyCode.PageDown) && alt) o.dz_mm -= mm;
-            else if (Input.GetKeyDown(KeyCode.Backspace)) m_ViewOffset = new ViewOffset();
-            else changed = false;
+            if (Input.GetKeyDown(KeyCode.Tab))
+            {
+                m_AlignRotate = !m_AlignRotate;
+                m_Log.Event("align_mode", m_AlignRotate ? "ROTATE" : "MOVE", m_StepId);
+                Say(m_AlignRotate ? "Rotate" : "Move");
+            }
+            int h = Repeat(KeyCode.RightArrow) - Repeat(KeyCode.LeftArrow);
+            int v = Repeat(KeyCode.UpArrow) - Repeat(KeyCode.DownArrow);
+            int d = Repeat(KeyCode.PageUp) - Repeat(KeyCode.PageDown);
+            bool changed = h != 0 || v != 0 || d != 0;
+            if (changed && !m_AlignRotate)
+            {
+                float deg = shift ? 0.5f : 0.1f, mm = shift ? 10f : 2f;
+                m_ViewOffset.yaw_deg += h * deg;
+                m_ViewOffset.pitch_deg -= v * deg;
+                m_ViewOffset.dz_mm += d * mm;
+            }
+            else if (changed)
+            {
+                float deg = shift ? 1f : 0.2f;
+                // Left/Right about the head's vertical, Up/Down about its horizontal (top towards the wearer), PgUp/PgDn roll.
+                RotateAboutTarget(Quaternion.AngleAxis(h * deg, Vector3.up) * Quaternion.AngleAxis(-v * deg, Vector3.right)
+                                  * Quaternion.AngleAxis(-d * deg, Vector3.forward));
+            }
+            if (Input.GetKeyDown(KeyCode.Backspace)) { m_ViewOffset = new ViewOffset(); changed = true; }
             int lat = Input.GetKeyDown(KeyCode.Period) ? 1 : Input.GetKeyDown(KeyCode.Comma) ? -1 : 0;
             if (lat != 0)
             {
@@ -1110,7 +1227,7 @@ namespace EyeLabGates
             {
                 m_ViewOffsetDirty = true;
                 ReapplyOffset();
-                m_Log.Event("view_offset", "CHANGED", m_ViewOffset.Describe());
+                m_Log.Event("view_offset", "CHANGED", (m_AlignRotate ? "rotate: " : "move: ") + m_ViewOffset.Describe());
             }
             if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
             {
@@ -1129,6 +1246,69 @@ namespace EyeLabGates
                     Say("Could not save the offset");
                 }
             }
+        }
+
+        /// <summary>1 on press and, while held, every <see cref="KeyRepeatEvery"/> s after <see cref="KeyRepeatDelay"/> s; else 0.</summary>
+        int Repeat(KeyCode key)
+        {
+            double now = Time.realtimeSinceStartupAsDouble;
+            if (Input.GetKeyDown(key)) { m_KeyHeld[key] = now + KeyRepeatDelay; return 1; }
+            if (!Input.GetKey(key)) { m_KeyHeld.Remove(key); return 0; }
+            if (m_KeyHeld.TryGetValue(key, out double next) && now >= next) { m_KeyHeld[key] = next + KeyRepeatEvery; return 1; }
+            return 0;
+        }
+
+        /// <summary>
+        /// Turns the drawing by <paramref name="dq"/> (head frame) about the shown centre of the last locked target:
+        /// with the offset x' = R x + t and the centre c' = R c + t, the new offset is R' = dq R, t' = dq (t - c') + c',
+        /// so c' stays put. Without a lock, about the head origin. R' goes back to yaw/pitch/roll as
+        /// <see cref="ViewOffset.Rotation"/> reads them (Quaternion.Euler(pitch, yaw, roll)).
+        /// </summary>
+        void RotateAboutTarget(Quaternion dq)
+        {
+            Quaternion r = m_ViewOffset.Rotation;
+            Vector3 t = m_ViewOffset.Translation;
+            Vector3 c = Vector3.zero;
+            if (TryTargetCentreInHead(out Vector3 centre)) c = r * centre + t;
+            Quaternion r2 = dq * r;
+            Vector3 t2 = dq * (t - c) + c;
+            Vector3 e = r2.eulerAngles;
+            m_ViewOffset.pitch_deg = WrapDeg(e.x);
+            m_ViewOffset.yaw_deg = WrapDeg(e.y);
+            m_ViewOffset.roll_deg = WrapDeg(e.z);
+            m_ViewOffset.dx_mm = t2.x * 1000f;
+            m_ViewOffset.dy_mm = t2.y * 1000f;
+            m_ViewOffset.dz_mm = t2.z * 1000f;
+        }
+
+        static float WrapDeg(float d) => d > 180f ? d - 360f : d;
+
+        /// <summary>Centre of the most recently locked target's drawing in the head frame, before the view offset.</summary>
+        bool TryTargetCentreInHead(out Vector3 centre)
+        {
+            centre = Vector3.zero;
+            LastLock best = null;
+            foreach (var l in m_LastRaw.Values)
+                if (best == null || l.Pending.Seq > best.Pending.Seq) best = l;
+            if (best == null || m_WsBridge == null) return false;
+            Vector3 ct = Vector3.zero;   // target frame (OpenCV-handed): the mean of the drawn points
+            foreach (var g in m_WsBridge.Overlays)
+            {
+                if (g.Target != best.Pose.Target) continue;
+                int n = 0;
+                for (int i = 0; i + 2 < g.Points.Length; i += 3, n++) ct += new Vector3(g.Points[i], g.Points[i + 1], g.Points[i + 2]);
+                for (int i = 0; i + 5 < g.Segments.Length && n == 0; i += 6)
+                    ct += 0.5f * new Vector3(g.Segments[i] + g.Segments[i + 3], g.Segments[i + 1] + g.Segments[i + 4], g.Segments[i + 2] + g.Segments[i + 5]);
+                int m = n > 0 ? n : g.Segments.Length / 6;
+                if (m > 0) ct /= m;
+            }
+            float[] R = best.Pose.RotationRowMajor;
+            Vector3 tc = best.Pose.TranslationCv;
+            Vector3 cv = new Vector3(R[0] * ct.x + R[1] * ct.y + R[2] * ct.z + tc.x,
+                                     R[3] * ct.x + R[4] * ct.y + R[5] * ct.z + tc.y,
+                                     R[6] * ct.x + R[7] * ct.y + R[8] * ct.z + tc.z);
+            centre = m_RgbFromHead.rotation * new Vector3(cv.x, -cv.y, cv.z) + m_RgbFromHead.position;
+            return true;
         }
 
         void UpdateLockStatus()
@@ -1524,7 +1704,25 @@ namespace EyeLabGates
                 m_Audio.PlayOneShot(m_Beep);
                 Say(step.Speech);
                 Screenshot(step.Id, force: i == 0);
-                yield return new WaitForSecondsRealtime(step.Seconds);
+                if (step.Cues == null || step.Cues.Length == 0)
+                {
+                    yield return new WaitForSecondsRealtime(step.Seconds);
+                    continue;
+                }
+                // Named movements, one after another; the title shows the current one (prefix kept, e.g. "METHOD A: ").
+                string prefix = step.Title.EndsWith(step.Cues[0].Title, StringComparison.Ordinal)
+                    ? step.Title.Substring(0, step.Title.Length - step.Cues[0].Title.Length) : "";
+                float each = step.Seconds / step.Cues.Length;
+                for (int c = 0; c < step.Cues.Length && !m_Quitting; c++)
+                {
+                    MotionCue cue = step.Cues[c];
+                    StepTitle = prefix + cue.Title;
+                    LastChange = Time.realtimeSinceStartupAsDouble;
+                    m_Log.Event("cue", cue.Id, $"step={step.Id} {each.ToString(CultureInfo.InvariantCulture)}s {cue.Title}");
+                    if (c > 0) m_Audio.PlayOneShot(m_Tick);
+                    Say(cue.Speech);
+                    yield return new WaitForSecondsRealtime(each);
+                }
             }
             m_InProtocol = false;
             CalibZone = null;
@@ -1565,6 +1763,7 @@ namespace EyeLabGates
             StepDetail = detail;
             NextTitle = next;
             StepStart = Time.realtimeSinceStartupAsDouble;
+            LastChange = StepStart;
             StepEnd = double.NaN;
             m_StepSeconds = 0;
         }
@@ -1763,6 +1962,17 @@ namespace EyeLabGates
                 m_Audio.PlayOneShot(m_Tick);
             }
             if (IsLocking && XRActive) { HandleOffsetKeys(); HandleFilterKeys(); }
+            if (IsLocking && Input.GetKeyDown(KeyCode.H))
+            {
+                ShowDiagnostics = !ShowDiagnostics;
+                m_Log.Event("key", "H", ShowDiagnostics ? "diagnostics on" : "diagnostics off");
+            }
+            if (IsLocking && Input.GetKeyDown(KeyCode.V))
+            {
+                string style = m_Overlay.NextStyle();
+                m_Log.Event("key", "V", "overlay " + style);
+                Say(style);
+            }
             if (Input.GetKeyDown(KeyCode.C) && !IsLocking)
             {
                 m_Log.Event("key", "C", "");

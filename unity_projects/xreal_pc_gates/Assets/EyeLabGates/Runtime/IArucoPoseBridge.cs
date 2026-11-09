@@ -40,6 +40,13 @@ namespace EyeLabGates
         public float RoundTripMs;
         /// <summary>Set when the frame failed as a whole (transport, service error).</summary>
         public string Error = "";
+        /// <summary>
+        /// T5.1 Phase 1 stage times, QPC seconds (<see cref="Clocks.Qpc"/>; NaN when the bridge cannot tell):
+        /// send started and done, the bridge's receipt of the reply, and the estimator's own times (frame
+        /// received, detection start and end, reply sent). An in-process bridge sets the estimator times too.
+        /// </summary>
+        public double QSend0 = double.NaN, QSend1 = double.NaN, QReplyRecv = double.NaN;
+        public double QRecv = double.NaN, QDet0 = double.NaN, QDet1 = double.NaN, QReply = double.NaN;
         public readonly List<TargetPose> Targets = new List<TargetPose>();
     }
 

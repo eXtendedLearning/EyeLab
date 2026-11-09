@@ -36,7 +36,7 @@ MIN_BOARD_CORNERS = 6
 MIN_PLATE_SADDLES = 6
 MIN_PLATE_MARKERS = 2
 
-TARGET_NAMES = ("plateA", "plateL", "board25")
+TARGET_NAMES = ("plateA", "plateL", "board25", "timecode")  # timecode: T5.1 latency, never a pose
 
 
 @dataclass
@@ -259,6 +259,9 @@ def make_target(name: str) -> GateTarget:
         return PlateTarget("L")
     if name == "board25":
         return BoardTarget()
+    if name == "timecode":
+        from .timecode import TimecodeTarget
+        return TimecodeTarget()
     raise ValueError(f"unknown target {name!r}; expected one of {', '.join(TARGET_NAMES)}")
 
 

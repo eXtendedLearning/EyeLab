@@ -187,6 +187,9 @@ class ServiceTest(unittest.TestCase):
             self.assertFalse(res["board25"]["ok"])
             self.assertEqual(res["board25"]["rms_px"], -1.0)                 # never null
             self.assertLess(abs(res["plateA"]["tvec"][2] - tvec[2]) * 1000, 5.0)
+            # T5.1 Phase 1: the service's QPC stage times travel in the reply, in order
+            self.assertLessEqual(reply["q_recv"], reply["q_det0"])
+            self.assertLessEqual(reply["q_det0"], reply["q_det1"])
             self.assertIsNone(svc.on_frame(msg))            # same seq: processed once only
             svc.close()
             rows = (Path(tmp) / "pose_service.csv").read_text().splitlines()

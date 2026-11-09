@@ -68,6 +68,20 @@ class ImportTest(unittest.TestCase):
             self.assertTrue((root / "_imported" / zpath.name).exists())
             self.assertFalse(zpath.exists())
 
+    def test_timecode_logs_are_imported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            export = tmp / "export"
+            _make_run(export, "20261110_101500_G5_g5_timecode_3dof")
+            (export / "timecode").mkdir()
+            (export / "timecode" / "timecode_20261110_101455.csv").write_text(
+                "qpc_draw,qpc_shown,counter,id\n1.0,1.001,0,0\n", encoding="utf-8")
+            root = tmp / "GateRuns"
+            first = import_folder(export, root)
+            self.assertEqual(first.timecodes, ["timecode_20261110_101455.csv"])
+            self.assertTrue((root / "timecode" / "timecode_20261110_101455.csv").exists())
+            self.assertEqual(import_folder(export, root).timecodes, [])   # same file again: kept
+
     def test_larger_copy_replaces_and_keeps_player_log(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)

@@ -64,6 +64,7 @@ namespace EyeLabGates
             try
             {
                 var sw = Stopwatch.StartNew();
+                result.QSend0 = Clocks.Qpc;
                 string header = "{\"seq\":" + frame.Sequence.ToString(CultureInfo.InvariantCulture) +
                                 ",\"cam_ts\":" + frameTimestampNs.ToString(CultureInfo.InvariantCulture) +
                                 ",\"w\":" + frame.Width.ToString(CultureInfo.InvariantCulture) +
@@ -76,13 +77,16 @@ namespace EyeLabGates
                 Buffer.BlockCopy(h, 0, msg, 4, h.Length);
                 Buffer.BlockCopy(frame.Data, 0, msg, 4 + h.Length, n);
                 await m_Socket.SendAsync(new ArraySegment<byte>(msg), WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
+                result.QSend1 = Clocks.Qpc;
 
                 while (true)
                 {
                     string text = await ReceiveTextAsync(ct).ConfigureAwait(false);
                     var r = JsonUtility.FromJson<PosesReply>(text);
                     if (r == null || r.type != "poses" || (r.seq != 0 && r.seq != frame.Sequence)) continue;
+                    result.QReplyRecv = Clocks.Qpc;
                     result.RoundTripMs = (float)sw.Elapsed.TotalMilliseconds;
+                    if (r.q_recv > 0) { result.QRecv = r.q_recv; result.QDet0 = r.q_det0; result.QDet1 = r.q_det1; result.QReply = r.q_reply; }
                     result.ServiceMs = r.ms;
                     result.Error = r.message ?? "";
                     OnLatencyMeasured?.Invoke(result.RoundTripMs);
@@ -192,6 +196,7 @@ namespace EyeLabGates
             public string type, message;
             public long seq;
             public float ms;
+            public double q_recv, q_det0, q_det1, q_reply;   // QPC s (0.3.008 service; 0 from older ones)
             public PoseJson[] results;
         }
 #pragma warning restore 0649

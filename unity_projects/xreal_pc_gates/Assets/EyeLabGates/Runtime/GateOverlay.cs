@@ -4,16 +4,16 @@ using UnityEngine;
 namespace EyeLabGates
 {
     /// <summary>
-    /// G4/demo world grid and G5/demo target overlays. The grid: a world-locked 60 x 40 cm grid (10 cm cells) with square points at the corners and
-    /// the centre, the stand-in for the measurement wireframe. One static mesh of thin quads (4 mm
-    /// lines, double-sided, unlit); nothing is updated per frame, so the cost is one draw call per eye.
+    /// G4/demo world grid and G5/demo target overlays. The grid: a world-locked 40 x 30 cm grid (10 cm cells) with square points at the corners and
+    /// the centre, the stand-in for the measurement wireframe (0.3.008: was 60 x 40 cm with 4 mm lines; testers wanted
+    /// to see more of the background). One static mesh of thin quads (2 mm lines, double-sided, unlit); nothing is updated per frame, so the cost is one draw call per eye.
     /// <see cref="PlaceInFront"/> puts it on the gaze line at a fixed distance, upright and facing the
     /// viewer. The material is assigned by GateSceneBuilder so its shader is included in the build.
     /// </summary>
     public sealed class GateOverlay : MonoBehaviour
     {
-        public const float Width = 0.60f, Height = 0.40f, Cell = 0.10f;
-        const float Line = 0.004f, Point = 0.02f;
+        public const float Width = 0.40f, Height = 0.30f, Cell = 0.10f;
+        const float Line = 0.002f, Point = 0.012f;
 
         [SerializeField] Material m_Material;
 
@@ -44,7 +44,11 @@ namespace EyeLabGates
 
         // ---------------------------------------------------------------- G5 / demo target overlays
 
-        const float TargetLine = 0.0025f, TargetPoint = 0.008f;
+        // 0.3.008: thinner lines and smaller points (were 2.5 mm and 8 mm), so the printed target stays visible.
+        const float TargetLine = 0.0012f, TargetPoint = 0.005f;
+        /// <summary>Target overlay style: 0 lines and points, 1 points only, 2 lines only (key V).</summary>
+        public static readonly string[] StyleNames = { "lines and points", "points only", "lines only" };
+        public int Style { get; private set; }
         static readonly Color[] TargetColours = { new Color(0.2f, 1f, 0.35f), new Color(0.3f, 0.8f, 1f), new Color(1f, 0.8f, 0.2f) };
         readonly Dictionary<string, GameObject> m_Targets = new Dictionary<string, GameObject>();
 
@@ -52,7 +56,7 @@ namespace EyeLabGates
 
         /// <summary>
         /// Builds one target's overlay from the pose service's geometry (target frame, OpenCV-handed,
-        /// metres): each segment as two crossed 2.5 mm strips and each point as two crossed 8 mm squares,
+        /// metres): each segment as two crossed 1.2 mm strips and each point as two crossed 5 mm squares,
         /// so they read from any angle. Vertices are converted with F = diag(1, -1, 1); the object's
         /// rotation is then F R F (see <see cref="SetTargetPose"/>). Each target gets its own colour
         /// (green, blue, amber in hello order). Hidden until the first lock.
@@ -60,11 +64,19 @@ namespace EyeLabGates
         public void BuildTarget(TargetOverlayGeometry geometry)
         {
             if (m_Targets.TryGetValue(geometry.Target, out var old)) Destroy(old);
+            var mat = m_Material != null ? new Material(m_Material) : new Material(Shader.Find("Unlit/Color"));
+            mat.color = TargetColours[m_Targets.Count % TargetColours.Length];
+            var go = new GameObject("GateTarget_" + geometry.Target);
+
             var verts = new List<Vector3>();
             var tris = new List<int>();
             float[] s = geometry.Segments;
             for (int i = 0; i + 5 < s.Length; i += 6)
                 Strip(verts, tris, Flip(s[i], s[i + 1], s[i + 2]), Flip(s[i + 3], s[i + 4], s[i + 5]), TargetLine);
+            Part(go, "lines", verts, tris, mat);
+
+            verts.Clear();
+            tris.Clear();
             float[] p = geometry.Points;
             for (int i = 0; i + 2 < p.Length; i += 3)
             {
@@ -73,20 +85,42 @@ namespace EyeLabGates
                 Strip(verts, tris, c - Vector3.right * h, c + Vector3.right * h, TargetPoint);
                 Strip(verts, tris, c - Vector3.up * h, c + Vector3.up * h, TargetPoint);
             }
-            var mesh = new Mesh { name = "GateTarget_" + geometry.Target, indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+            Part(go, "points", verts, tris, mat);
+            ApplyStyle(go);
+            go.SetActive(false);
+            m_Targets[geometry.Target] = go;
+        }
+
+        /// <summary>One child mesh (lines or points) of a target overlay; none when empty.</summary>
+        static void Part(GameObject parent, string name, List<Vector3> verts, List<int> tris, Material mat)
+        {
+            if (verts.Count == 0) return;
+            var mesh = new Mesh { name = parent.name + "_" + name, indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
             mesh.SetVertices(verts);
             mesh.SetTriangles(tris, 0);
             mesh.RecalculateBounds();
-            var go = new GameObject("GateTarget_" + geometry.Target);
+            var go = new GameObject(name);
+            go.transform.SetParent(parent.transform, false);
             go.AddComponent<MeshFilter>().sharedMesh = mesh;
             var renderer = go.AddComponent<MeshRenderer>();
             renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             renderer.receiveShadows = false;
-            var mat = m_Material != null ? new Material(m_Material) : new Material(Shader.Find("Unlit/Color"));
-            mat.color = TargetColours[m_Targets.Count % TargetColours.Length];
             renderer.sharedMaterial = mat;
-            go.SetActive(false);
-            m_Targets[geometry.Target] = go;
+        }
+
+        /// <summary>Next overlay style (key V); returns its name.</summary>
+        public string NextStyle()
+        {
+            Style = (Style + 1) % StyleNames.Length;
+            foreach (var go in m_Targets.Values) ApplyStyle(go);
+            return StyleNames[Style];
+        }
+
+        void ApplyStyle(GameObject target)
+        {
+            Transform lines = target.transform.Find("lines"), points = target.transform.Find("points");
+            if (lines != null) lines.gameObject.SetActive(Style != 1);
+            if (points != null) points.gameObject.SetActive(Style != 2);
         }
 
         public void SetTargetPose(string target, Vector3 position, Quaternion rotation)
