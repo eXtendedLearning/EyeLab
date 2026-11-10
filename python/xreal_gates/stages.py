@@ -1,8 +1,11 @@
 """Per-stage latency of the Eye correction path (T5.1 Phase 1). ``python -m xreal_gates stages RUN``.
 
 Reads ``frame_timing.csv`` (one row per frame sent to the pose service, build 0.3.008 and later). Every
-time in it is QPC seconds, the one clock that Unity (``Stopwatch.GetTimestamp()``) and the pose service
-(``time.perf_counter()`` on Windows) share, so stages across the process boundary subtract directly.
+time in it is QPC seconds: the pose service logs ``time.perf_counter()``, and the XREAL HMD clock
+(``cam_ts``, ``GetHMDTimeNanos``) is the same counter in ns (9 Nov Surface runs: equal to 1 us over a run).
+Build 0.3.008 read Unity's side with Mono's ``Stopwatch``, which counts from process start, not boot;
+:func:`align_clocks` shifts those columns by ``hmd_arrived_ns - q_arrived`` (constant to 1 us). From 0.3.009
+Unity reads ``QueryPerformanceCounter`` directly and the shift is zero.
 
 Stages, in path order (columns ``q_*``):
 
@@ -54,6 +57,10 @@ STAGES: Sequence[Tuple[str, str, str]] = (
 )
 
 
+UNITY_COLS = ("q_frame_prev", "q_frame", "q_arrived", "q_copy0", "q_copy1", "q_send0", "q_send1", "q_reply_recv",
+              "q_applied", "q_shown")
+
+
 def _rows(path: Path) -> List[dict]:
     path = Path(path)
     if not path.exists():
@@ -77,6 +84,33 @@ def _stat(ms: np.ndarray) -> Optional[Tuple[float, float, int]]:
     return float(np.median(ms)), float(np.percentile(ms, 90)), int(ms.size)
 
 
+def align_clocks(rows: List[dict]) -> float:
+    """Shift Unity's ``q_*`` columns onto absolute QPC in place; returns the shift in s (0 when already there).
+
+    The shift is the median of ``hmd_arrived_ns * 1e-9 - q_arrived`` (both read at each frame's arrival);
+    it is applied only when it exceeds 1 s, i.e. when Unity's clock was process-relative (0.3.008).
+    """
+    d = np.array([_f(r, "hmd_arrived_ns") * 1e-9 - _f(r, "q_arrived") for r in rows
+                  if _f(r, "hmd_arrived_ns") > 0])
+    d = d[np.isfinite(d)]
+    if d.size == 0 or abs(float(np.median(d))) < 1.0:
+        return 0.0
+    off = float(np.median(d))
+    for r in rows:
+        for k in UNITY_COLS:
+            v = _f(r, k)
+            if np.isfinite(v):
+                r[k] = f"{v + off:.6f}"
+    return off
+
+
+def _exact(rows: List[dict]) -> bool:
+    """True when ``q_*`` and ``cam_ts`` share one clock (HMD clock logged and Unity on absolute QPC)."""
+    d = np.array([_f(r, "q_arrived") - _f(r, "cam_ts") * 1e-9 for r in rows])
+    d = d[np.isfinite(d)]
+    return d.size > 0 and 0.0 < float(np.median(d)) < 5.0
+
+
 def stage_table(rows: List[dict]) -> List[Tuple[str, Optional[Tuple[float, float, int]]]]:
     """(stage, (median ms, p90 ms, n)) in path order, from frame_timing rows."""
     out = []
@@ -90,6 +124,11 @@ def stage_table(rows: List[dict]) -> List[Tuple[str, Optional[Tuple[float, float
     out.append(("copy start -> shown", _stat(send_to_shown)))
     total = np.array([_f(r, "age_ms") + (_f(r, "q_shown") - _f(r, "q_copy0")) * 1000 for r in rows])
     out.append(("exposure -> shown (total)", _stat(total)))
+    if _exact(rows):
+        cam = np.array([_f(r, "cam_ts") * 1e-9 for r in rows])
+        out.append(("cam_ts -> arrival (HMD clock, exact)", _stat((np.array([_f(r, "q_arrived") for r in rows]) - cam) * 1000)))
+        out.append(("cam_ts -> sent (exact frame age)", _stat((np.array([_f(r, "q_send0") for r in rows]) - cam) * 1000)))
+        out.append(("cam_ts -> shown (exact total)", _stat((np.array([_f(r, "q_shown") for r in rows]) - cam) * 1000)))
     return out
 
 
@@ -103,8 +142,8 @@ def timecode_latency(rows: List[dict], service: List[dict], draws) -> Dict[str, 
     ids = {}
     for r in service:
         if r.get("target") == "timecode" and r.get("marker_ids"):
-            ids[int(r["seq"])] = int(r["marker_ids"].split()[0])
-    d_draw, d_shown = [], []
+            ids[int(r["seq"])] = int(r["marker_ids"].replace(",", " ").split()[0])
+    d_draw, d_shown, d_cam = [], [], []
     for r in rows:
         seq = int(r["seq"])
         if seq not in ids:
@@ -115,7 +154,11 @@ def timecode_latency(rows: List[dict], service: List[dict], draws) -> Dict[str, 
             continue
         d_draw.append((t_arr - hit[0]) * 1000)
         d_shown.append((t_arr - hit[1]) * 1000)
+        cam = _f(r, "cam_ts") * 1e-9
+        if np.isfinite(cam):
+            d_cam.append((cam - hit[1]) * 1000)
     return {"draw -> arrival": _stat(np.array(d_draw)), "waitKey return -> arrival": _stat(np.array(d_shown)),
+            "waitKey return -> cam_ts (screen + exposure)": _stat(np.array(d_cam)),
             "frames read": (float(len(d_draw)), 0.0, len(ids))}
 
 
@@ -229,6 +272,9 @@ def report(run_dir: Path, timecode: Optional[Sequence[Path]] = None) -> List[str
     if not rows:
         return [f"{name}: no frame_timing.csv (build 0.3.008 or later)"]
     lines = [f"{name}: {len(rows)} frames sent; stage latency in ms (median / p90 / n), QPC clock"]
+    off = align_clocks(rows)
+    if off:
+        lines.append(f"  Unity clock was process-relative (build 0.3.008): shifted by {off:.3f} s from hmd_arrived_ns")
     for stage, st in stage_table(rows):
         lines.append(f"  {stage:40s} " + ("-" if st is None else f"{st[0]:7.1f} / {st[1]:7.1f}  (n={st[2]})"))
     tcs = list(timecode) if timecode else find_timecodes(run_dir, rows)
@@ -254,4 +300,4 @@ def report(run_dir: Path, timecode: Optional[Sequence[Path]] = None) -> List[str
     return lines
 
 
-__all__ = ["report", "stage_table", "timecode_latency", "hmd_clock", "native_pose", "qrot"]
+__all__ = ["report", "stage_table", "align_clocks", "timecode_latency", "hmd_clock", "native_pose", "qrot"]

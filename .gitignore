@@ -62,6 +62,9 @@ python/validation_runs/
 **/sysinfo.txt
 **/*.apk
 **/*.aab
+# Android signing keys stay outside the repo (AGENTS.md, Unity)
+**/*.keystore
+**/*.jks
 **/*.unitypackage
 
 # Local vendor SDKs

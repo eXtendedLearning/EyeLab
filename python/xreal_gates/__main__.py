@@ -8,6 +8,7 @@
 - ``chain RUN [RUN ...]``: is the registration chain the same in these runs?
 - ``latency RUN [RUN ...]``: estimate the Eye frame age at sending from lock consistency.
 - ``stages RUN [RUN ...] [--timecode CSV ...]``: per-stage latency of the correction path (0.3.008+).
+- ``blind RUN [RUN ...]``: time without locks per block kind, camera fps and stream windows (0.3.009).
 - ``timecode [--seconds S]``: fullscreen optical timecode for the camera-to-app latency (T5.1 Phase 1).
 - ``serve --target plateA[,board25] [--calib YAML] [--port 8765]``: the G5 and demo pose service (ADR-001 Step C).
 """
@@ -49,6 +50,8 @@ def main(argv=None) -> int:
     p_stg = sub.add_parser("stages", help="per-stage latency of the Eye correction path (0.3.008+)")
     p_stg.add_argument("runs", nargs="+", type=Path)
     p_stg.add_argument("--timecode", type=Path, nargs="*", help="timecode CSVs (default: GateRuns/timecode, by time)")
+    p_bl = sub.add_parser("blind", help="time without locks per block kind, camera health")
+    p_bl.add_argument("runs", nargs="+", type=Path)
     p_tc = sub.add_parser("timecode", help="fullscreen optical timecode on this screen (Esc ends)")
     p_tc.add_argument("--seconds", type=float, default=0.0)
     p_chn = sub.add_parser("chain", help="compare the registration chain of runs")
@@ -107,6 +110,12 @@ def main(argv=None) -> int:
         from .stages import report as stages_report
         for run in args.runs:
             for line in stages_report(run, args.timecode):
+                print(line)
+        return 0
+    if args.cmd == "blind":
+        from .blind import report as blind_report
+        for run in args.runs:
+            for line in blind_report(run):
                 print(line)
         return 0
     if args.cmd == "timecode":

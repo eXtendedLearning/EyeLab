@@ -6,11 +6,11 @@ Read this file first and in full. It is short on purpose; everything else is lin
 
 ## What EyeLab is
 
-An XR spatial-localization aid for Experimental Modal Analysis impact-hammer testing. It parses Simcenter Testlab `.unv` geometry, registers it to the physical specimen via ArUco markers, and overlays the measurement wireframe on a live camera feed. Phase 1 (webcam, Python/OpenCV) is feature-complete in `python/`. Phase 2 (Unity + XREAL One Pro + Eye, generic Android APK) is scaffolded in `eyelab_xreal/` and not yet implemented.
+An XR spatial-localization aid for Experimental Modal Analysis impact-hammer testing. It parses Simcenter Testlab `.unv` geometry, registers it to the physical specimen via ArUco markers, and overlays the measurement wireframe on a live camera feed. Phase 1 (webcam, Python/OpenCV) is feature-complete in `python/`. Phase 2 (Unity + XREAL One Pro + Eye on an XREAL Beam Pro, Android APK) is scaffolded in `eyelab_xreal/` and not yet implemented. The PC-beta gate project (`unity_projects/xreal_pc_gates/`, Surface) proved the correction chain and is paused (2026-11-10). **New work must also run on One Pro + Eye + Beam Pro;** the hand-over is `docs/BEAMPRO-HANDOVER-2026-11-10.md`.
 
 ## Hardware in hand — read before any XREAL work
 
-**`docs/HARDWARE.md`** is the single source for the machines and the glasses, and what each can do. In short: XREAL One Pro + Eye; desktop `lagann-0526` (RTX 5060, no iGPU) has USB data to the glasses but **cannot drive them as a display**; the **Surface Pro 7** drives them as a display (USB-C DP Alt Mode) and has a built-in webcam. A Thunderbolt DP-in card for the desktop was an open purchase decision (ADR-003, open question 6); **decided 2026-10-14: not buying** — the pipeline is made light enough for the Surface and the Beam Pro instead (`docs/HARDWARE.md`). Update that file whenever hardware or a verified capability changes.
+**`docs/HARDWARE.md`** is the single source for the machines and the glasses, and what each can do. In short: XREAL One Pro + Eye; desktop `lagann-0526` (RTX 5060, no iGPU) has USB data to the glasses but **cannot drive them as a display**; the **Surface Pro 7** drives them as a display (USB-C DP Alt Mode) and has a built-in webcam. A Thunderbolt DP-in card for the desktop was an open purchase decision (ADR-003, open question 6); **decided 2026-10-14: not buying** — the pipeline is made light enough for the Surface and the Beam Pro instead (`docs/HARDWARE.md`). **A Beam Pro arrives around 2026-11-17** and becomes the target host. Update that file whenever hardware or a verified capability changes.
 
 ## Document precedence
 
@@ -50,11 +50,36 @@ When two documents disagree, the one higher in this list wins. When a document d
 
 ## Unity
 
-`eyelab_xreal/` targets Unity 6000.4.5f1, URP, generic Android APK — **not** Beam-Pro-specific. The XREAL SDK lives at `eyelab_xreal/Packages/com.xreal.xr/` and is gitignored (no redistribution licence for modified vendor binaries): install XREAL XR Plugin 3.1.0 locally, then run `tools/patch_xreal_sdk.ps1`. Namespace is `Unity.XR.XREAL`; **no legacy `NR*` names exist in this version** — if a doc uses them, it predates the verified surface in CONTEXT.md.
+`eyelab_xreal/` targets Unity 6000.4.5f1, URP, an Android APK. **The XREAL Beam Pro is the reference host (Jack, 2026-11-10; this replaces the 2026-05-08 "generic APK, not Beam-Pro-specific" decision).**
 
-An agent cannot launch the Editor, enter Play mode, build an APK, or deploy. The loop is: agent writes C# → Jack runs it in Unity → agent reads `Logs/Editor.log` or `adb logcat`.
+- Beam-Pro-specific settings are allowed when the Beam Pro needs them: manifest entries, permissions, ABI, graphics and performance settings, its input (touchscreen, controller mode).
+- Record each one, with its reason, in CONTEXT.md.
+- Other Android hosts are not a goal; do not break them without a reason.
 
-**Scoped exception (2026-10-09):** for the PC-beta gate project `unity_projects/xreal_pc_gates/` only, a local agent with the Unity CLI may create the project, run the Editor in batch mode, compile and build Windows players, as specified in `docs/XREAL-PC-GATES-G1-G3.md` §1. Play mode needs Jack's explicit go-ahead; entering XR on the desktop, firmware updates and USB-configuration changes stay forbidden. `eyelab_xreal/` is unaffected.
+The XREAL SDK lives at `eyelab_xreal/Packages/com.xreal.xr/` and is gitignored (no redistribution licence for modified vendor binaries): install XREAL XR Plugin 3.1.0 locally, then run `tools/patch_xreal_sdk.ps1`. Namespace is `Unity.XR.XREAL`; **no legacy `NR*` names exist in this version** — if a doc uses them, it predates the verified surface in CONTEXT.md.
+
+**What a local agent may do (2026-11-10, Jack)**, for `eyelab_xreal/`, the gate project and any Unity project under `unity_projects/`:
+
+- **Unity CLI in batch mode:** open or create the project, compile, run EditMode tests, build Windows players and **Android APKs**.
+- **Sign** with the Unity debug key or a local keystore outside the repo. Never commit keystores or passwords. APKs are build artefacts: gitignored, under the project's `Builds/` or `build/`.
+- **Deploy to the Beam Pro over `adb`**, once Jack has connected it and it shows in `adb devices`:
+  - `adb install -r` of an EyeLab APK;
+  - start and stop the EyeLab app (`am start`, `am force-stop`);
+  - `pm grant` of permissions the EyeLab manifest declares;
+  - `adb logcat`;
+  - `adb pull` and `adb push` inside the EyeLab app's own storage (run logs out; config and calibration files in).
+- **The loop:** agent builds and installs → Jack runs the protocol wearing the glasses → agent pulls the logs and analyses them.
+
+**Still Jack's:**
+
+- Editor Play mode (needs his go-ahead); entering XR on the desktop (forbidden).
+- Wearing the glasses and running a protocol.
+- Anything on the device outside the EyeLab app: enabling USB debugging or pairing, `adb root`/remount, system settings, uninstalling or touching other apps, factory reset.
+- Firmware or OS updates of the glasses or the Beam Pro.
+- USB-configuration changes on the glasses.
+- Deciding to change the ADR-001 bridge (Step C → A → B).
+
+*History:* 2026-10-09 to 2026-11-10 the Unity CLI was allowed only for the PC gate project (`docs/XREAL-PC-GATES-G1-G3.md` §1), and an agent could not build an APK or deploy. The rules above replace that.
 
 ## Commits
 

@@ -40,11 +40,20 @@ namespace EyeLabGates
         public string CamMode = "stream";
         /// <summary>Lock filter shown at start: latest, euro (default) or hysteresis; all three always run (guide §20).</summary>
         public string LockFilter = "euro";
-        /// <summary>G5 only: the blind filter comparison protocol instead of the standard one.</summary>
+        /// <summary>G5 only: the lock-filter comparison protocol (0.3.009: named methods, one block each) instead of the standard one.</summary>
         public bool Compare;
         /// <summary>
-        /// Base of the per-frame Eye frame age (s), T5.1 Phase 0 (0.3.007): a frame is paired with the head
-        /// pose <c>base + queue age + hold</c> before sending. 0.3.005-0.3.006 used this as a fixed age (0.16).
+        /// Stream mode: restart the camera when its frames have fallen this many seconds behind (the SDK decoder
+        /// queue). 0.3.002-0.3.008: 0.3 s. 0.3.009: 1.0 s, since the exact frame age (HMD clock) pairs an older
+        /// frame with its own head pose and each restart costs about 2 s without locks (T5.1 Phase 2).
+        /// </summary>
+        public double StreamLag = 1.0;
+        /// <summary>Stream mode: restart the camera at least this often (s). 0.3.002-0.3.008: 8 s.</summary>
+        public double StreamWindow = 30.0;
+        /// <summary>
+        /// Base of the estimated Eye frame age (s), T5.1 Phase 0 (0.3.007): a frame is paired with the head
+        /// pose <c>base + queue age + hold</c> before sending. From 0.3.009 only the fallback: the age is
+        /// HMD-now minus <c>cam_ts</c> whenever <c>GetHMDTimeNanos</c> answers. 0.3.005-0.3.006 used this as a fixed age (0.16).
         /// Default 0.09: best base of the Unity estimator replayed on the 2-6 Nov stream runs (85-100 ms).
         /// </summary>
         public double CamLatency = DefaultCamLatency;
@@ -165,6 +174,16 @@ namespace EyeLabGates
                         break;
                     case "-compare":
                         a.Compare = true;
+                        break;
+                    case "-streamlag":
+                        i++;
+                        if (TryPositive(value, out double sl) && sl <= 3.0) a.StreamLag = sl;
+                        else a.Warnings.Add($"bad -streamLag '{value}', using {a.StreamLag.ToString(CultureInfo.InvariantCulture)}");
+                        break;
+                    case "-streamwindow":
+                        i++;
+                        if (TryPositive(value, out double sw)) a.StreamWindow = sw;
+                        else a.Warnings.Add($"bad -streamWindow '{value}', using {a.StreamWindow.ToString(CultureInfo.InvariantCulture)}");
                         break;
                     case "-cammode":
                         i++;

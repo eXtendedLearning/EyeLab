@@ -48,7 +48,7 @@ echo  Run folder: %RUNROOT%
 echo.
 if exist "%CALIB%" (echo  Eye calibration: %CALIB%) else (echo  Eye calibration: none yet - run C first, G5 and the demo would use the vendor values)
 echo.
-echo  D  DEMO         world grid + plate A and 25 mm board locked by the camera + Eye view, 3DoF (until Esc)
+echo  D  DEMO         starts with all off: G grid, T plate + board overlay, E Eye view, F lock method, 3DoF (until Esc)
 echo  C  Calibrate    Eye camera, with the 25 mm board, then compute   (about 3 min)
 echo  T  TIMECODE     latency: look at the Surface screen, 3DoF, no alignment   (about 3 min)
 echo.
@@ -57,8 +57,8 @@ echo  1  G5 plate A, 3DoF
 echo  2  G5 plate A, 6DoF
 echo  3  G5 25 mm board, 3DoF
 echo  4  G5 plate L, 3DoF
-echo  5  COMPARE lock filters, plate A, 3DoF   blind: methods A/B/C, rate each 1-5 (about 5 min)
-echo  6  COMPARE lock filters, plate A, 6DoF
+echo  5  COMPARE lock filters, plate A, 3DoF   named: one euro, hysteresis, latest; rate each 1-5 (about 3 min)
+echo  6  COMPARE lock filters, plate A, 6DoF   (about 4 min)
 echo.
 echo  K  Cool-down    sustained CPU clock check, run between XR gates   (until cool, max 10 min)
 echo  O  Open run folder
@@ -69,7 +69,7 @@ echo.
 echo  Align: Tab switches MOVE (arrows left/right/up/down, PgUp/PgDn farther/closer) and ROTATE (arrows turn
 echo  and tip, PgUp/PgDn roll); Shift big steps, keys repeat when held, Backspace zero, Enter saves.
 echo  In G5: H info on/off, V drawing style, F lock filter, ] smoother, [ more responsive,
-echo  , and . frame age base -/+10 ms (default 105; per-frame queue age is added).
+echo  , and . frame age trim -/+10 ms (default 0: the age comes from the glasses clock).
 choice /c DCT123456KOZXQ /n /m "Select: "
 set "SEL=%errorlevel%"
 if "%SEL%"=="1" call :demo 3dof & goto menu
@@ -196,12 +196,12 @@ echo  black and white square, click the square once to bring it to the front.
 call :g5 timecode 3dof
 exit /b 0
 
-rem ---- Demo: plate A and the 25 mm board until Esc. %1 = 3dof or tracked (6DoF). Keys: G grid, P place grid, E Eye view, T targets.
+rem ---- Demo: plate A and the 25 mm board until Esc. %1 = 3dof or tracked (6DoF). All off at start. Keys: G grid, P place grid, E Eye view, T targets, F method.
 :demo
 call :service plateA+board25
 if errorlevel 1 exit /b 0
-echo  Demo keys on this keyboard while it runs: G grid on/off, P place grid where the wearer looks,
-echo  E Eye view on/off, T target overlays on/off, V drawing style, H info, arrows/PgUp/PgDn/Tab view offset (Enter saves), Esc end.
+echo  Demo keys on this keyboard while it runs (everything starts OFF): G grid on/off, P place grid where the wearer looks,
+echo  E Eye view on/off, T target overlays on/off, F lock method (one euro, hysteresis, latest), V drawing style, H info, arrows/PgUp/PgDn/Tab view offset (Enter saves), Esc end.
 set "DLABEL=demo"
 if "%1"=="3dof" set "DLABEL=demo_3dof"
 call :gate demo %DLABEL% -target "%TGT%" -order %1

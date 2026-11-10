@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.3.008<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.3.009<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,30 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.3.009) XREAL gates, T5.1 Phase 1 result and Phase 2's first step (`XREAL-PC-GATES-G1-G3.md` §25).
+  - **The Eye's `cam_ts` is the PC's performance counter.** The HMD clock is QPC in ns, and the
+    timecode puts `cam_ts` at the exposure. Each frame's age is now **exact**, HMD-now − `cam_ts`,
+    instead of base + queue estimate (kept as the fallback). Keys `,` `.` trim it (default 0).
+  - **Stage table (9 Nov):** exposure → overlay shown takes about 330 ms median: about 80 ms
+    camera path, about 105 ms decode queue, 55 ms plate detection, about 45 ms Unity cadence.
+  - **Stream restarts at 1.0 s of lag (was 0.3) and every 30 s at most (was 8),** to cut blind
+    time (50 % of 6DoF still time on 9 Nov). New `-streamLag`, `-streamWindow`.
+  - **The filter comparison names its methods** (ONE EURO, HYSTERESIS, LATEST) and runs each once,
+    instead of blind letters twice.
+  - **Demo starts with everything off** (grid, overlays, Eye view). **F** switches the lock method,
+    and the banner names it.
+  - **Direction change:** the PC-only work stops after this session. The Beam Pro hand-over is
+    `docs/BEAMPRO-HANDOVER-2026-11-10.md`. It includes a paste-ready prompt, and its first task is
+    analysing this session.
+  - **AGENTS.md "Unity" rewritten.** The Beam Pro is the reference host, which replaces the
+    "generic APK" rule. Agents may build APKs with the Unity CLI and deploy them to the Beam Pro
+    over adb, within listed limits. `*.keystore` and `*.jks` are gitignored.
+  - **`python -m xreal_gates blind RUN`:** time without locks per block kind (still, move, rate),
+    camera fps and CPU clock by fifth of the run, and the stream windows. It reproduces the
+    baselines: 28 % / 42 % (6 Nov) and 22 % / 50 % (9 Nov).
+  - `stages` shifts 0.3.008's process-relative Unity times, and prints exact ages and the
+    timecode's draw → `cam_ts`. `latency` scans the exact age and negative residuals.
 
 - (0.3.008) XREAL gates, T5.1 Phase 1 and tester feedback (`XREAL-PC-GATES-G1-G3.md` §24).
   - **Phase 0 result.** The turning jump as run was 2.0-2.9 mm in all five 7 Nov runs (gate

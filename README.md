@@ -1,4 +1,4 @@
-# EyeLab v<!-- eyelab-version -->0.3.008<!-- /eyelab-version -->
+# EyeLab v<!-- eyelab-version -->0.3.009<!-- /eyelab-version -->
 
 **EyeLab** is an XR-based spatial localization system designed to assist engineers performing
 Experimental Modal Analysis (EMA) impact hammer testing. It overlays the measurement geometry

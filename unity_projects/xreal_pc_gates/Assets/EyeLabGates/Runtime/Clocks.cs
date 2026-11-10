@@ -9,16 +9,53 @@ namespace EyeLabGates
 {
     /// <summary>
     /// T5.1 Phase 1: the clocks every stage of the Eye correction path is measured on.
-    /// <para><see cref="Qpc"/>: QueryPerformanceCounter in seconds (<see cref="Stopwatch.GetTimestamp"/>). The pose
-    /// service logs <c>time.perf_counter()</c>, which on Windows is the same counter in the same unit, so
-    /// Unity and service times subtract directly (verified on the desktop, 2026-11-09: equal to 1 µs).</para>
+    /// <para><see cref="Qpc"/>: QueryPerformanceCounter in seconds since boot, read through kernel32. The pose
+    /// service logs <c>time.perf_counter()</c> and the XREAL HMD clock (<c>cam_ts</c>, <c>GetHMDTimeNanos</c>) is
+    /// the same counter in ns, so Unity, service and camera times subtract directly. 0.3.008 used Mono's
+    /// <see cref="Stopwatch.GetTimestamp"/>, which in the player counts from process start (9 Nov Surface runs:
+    /// a constant 1 654 890.8 s behind the HMD clock); <c>stages</c> shifts those runs.</para>
     /// </summary>
     public static class Clocks
     {
-        static readonly double s_Tick = 1.0 / Stopwatch.Frequency;
+        [DllImport("kernel32.dll")]
+        static extern bool QueryPerformanceCounter(out long count);
 
-        /// <summary>QPC now, seconds.</summary>
-        public static double Qpc => Stopwatch.GetTimestamp() * s_Tick;
+        [DllImport("kernel32.dll")]
+        static extern bool QueryPerformanceFrequency(out long frequency);
+
+        static readonly double s_Tick = InitTick();
+        static bool s_Native = true;
+
+        static double InitTick()
+        {
+            try
+            {
+                if (QueryPerformanceFrequency(out long f) && f > 0) return 1.0 / f;
+            }
+            catch (Exception) { }
+            s_Native = false;
+            return 1.0 / Stopwatch.Frequency;
+        }
+
+        /// <summary>True when <see cref="Qpc"/> reads the absolute counter (kernel32); false = Stopwatch fallback.</summary>
+        public static bool Absolute => s_Native;
+
+        /// <summary>QPC now, seconds since boot.</summary>
+        public static double Qpc
+        {
+            get
+            {
+                if (s_Native)
+                {
+                    try
+                    {
+                        if (QueryPerformanceCounter(out long c)) return c * s_Tick;
+                    }
+                    catch (Exception) { s_Native = false; }
+                }
+                return Stopwatch.GetTimestamp() * s_Tick;
+            }
+        }
 
         /// <summary>QPC at the start of this Unity frame (<see cref="FrameStartProbe"/>), seconds; NaN before the first.</summary>
         public static double FrameStart { get; internal set; } = double.NaN;

@@ -7,12 +7,16 @@ For trial delays L the target is re-chained with the head pose L earlier than th
 and the median lock-to-lock jump is measured, separately while turning and while still; the minimum
 while turning estimates the error of that pairing.
 
-Three pairings are scanned:
+Four pairings are scanned:
 
 ``logged``
     What the run did. 0.3.004 and earlier: the head pose at sending (age 0). 0.3.005-0.3.006: a fixed
-    ``cam_latency`` (160 ms). 0.3.007 and later: each lock's own ``age_ms`` (T5.1 Phase 0). The best L
-    is then the residual on top of what ran, and should be near 0.
+    ``cam_latency`` (160 ms). 0.3.007 and later: each lock's own ``age_ms`` (T5.1 Phase 0; from 0.3.009
+    the exact age below, ``age_src=hmd``). The best L is then the residual on top of what ran, and should
+    be near 0; the scan starts at -60 ms so a residual of either sign shows.
+``hmd``
+    The exact age (0.3.008 and later, ``frame_timing.csv``): ``hmd_send_ns - cam_ts``. ``cam_ts`` is on the
+    HMD clock and the HMD clock is QPC (9 Nov Surface runs), so no base is fitted.
 ``service``
     ``base + queue age`` with the queue age from the pose service's log: ``t_host - cam_ts`` above its
     minimum within +-20 s (non-causal, sent frames only). Guide section 23.
@@ -153,7 +157,13 @@ def load(run_dir: Path):
         return pp[i - 1] * (1 - a) + pp[i] * a, q / np.linalg.norm(q)
 
     per_lock_logged = any(e["event"] == "lock" and "age_ms=" in e["detail"] for e in events)
-    return dict(locks=locks, head=head, t_hc=t_hc, q_hc=q_hc, service=service,
+    timing = {}
+    for r in _rows(run_dir / "frame_timing.csv"):
+        try:
+            timing[int(r["seq"])] = r
+        except (KeyError, ValueError):
+            pass
+    return dict(locks=locks, head=head, t_hc=t_hc, q_hc=q_hc, service=service, timing=timing,
                 camera=_rows(run_dir / "camera.csv"), fixed_ms=None if per_lock_logged else fixed)
 
 
@@ -165,6 +175,19 @@ def pairing_times(run: dict, mode: str) -> Optional[np.ndarray]:
     locks = run["locks"]
     if mode == "logged":
         return np.array([k.t_send - k.age_logged for k in locks])
+    if mode == "hmd":
+        ft = run.get("timing") or {}
+        out = []
+        for k in locks:
+            r = ft.get(k.seq)
+            try:
+                hs, ct = int(r["hmd_send_ns"]), int(r["cam_ts"])
+            except (TypeError, KeyError, ValueError):
+                return None
+            if not 0 < hs - ct < 3_000_000_000:
+                return None
+            out.append(k.t_send - (hs - ct) * 1e-9)
+        return np.array(out)
     if mode == "service":
         qa = queue_age(run["service"])
         if not qa:
@@ -245,14 +268,15 @@ def report(run_dir: Path) -> List[str]:
     if len(run["locks"]) < 10:
         return [f"{name}: too few locks for a latency estimate"]
     fixed = run["fixed_ms"]
-    rows = scan(run, pairing_times(run, "logged"))
+    rows = scan(run, pairing_times(run, "logged"), delays_ms=range(-60, 301, 10))
     what = f"logged cam_latency {fixed:.0f} ms" if fixed is not None else "logged per-frame age (age_ms per lock)"
     lines = [f"{name}: {what}; extra delay tried on top of it ->"]
     for L, mv, st, n in rows[::2]:
-        lines.append(f"  +{L:3d} ms: lock-to-lock jump while turning {mv:5.1f} mm (n={n}), still {st:4.1f} mm")
+        lines.append(f"  {L:+4d} ms: lock-to-lock jump while turning {mv:5.1f} mm (n={n}), still {st:4.1f} mm")
     best = _best(rows)
+    as_run = next(r for r in rows if r[0] == 0)
     if best:
-        lines.append(f"  as run: turning {rows[0][1]:.1f} mm, still {rows[0][2]:.1f} mm; best: +{best[0]} ms "
+        lines.append(f"  as run: turning {as_run[1]:.1f} mm, still {as_run[2]:.1f} mm; best: {best[0]:+d} ms "
                      f"(turning {best[1]:.1f} mm)"
                      + (f" -> frame age at sending about {fixed + best[0]:.0f} ms" if fixed is not None
                         else " = residual on top of the per-frame age"))
@@ -260,6 +284,15 @@ def report(run_dir: Path) -> List[str]:
         ages = np.array([k.age_logged for k in run["locks"]]) * 1000
         lines.append(f"  logged age: median {np.median(ages):.0f} ms, p10 {np.percentile(ages, 10):.0f}, "
                      f"p90 {np.percentile(ages, 90):.0f}")
+    hmd_t = pairing_times(run, "hmd")
+    if hmd_t is not None:
+        ph = scan(run, hmd_t, delays_ms=range(-60, 61, 10))
+        hb = _best(ph)
+        h0 = next(r for r in ph if r[0] == 0)
+        lines.append("  exact age (HMD clock - cam_ts), residual tried: "
+                     + "  ".join(f"{L:+d}:{mv:.1f}" for L, mv, _, _ in ph[::2]) + "  (ms: turning mm)")
+        if hb:
+            lines.append(f"    at 0: turning {h0[1]:.1f} mm, still {h0[2]:.1f} mm; best {hb[0]:+d} ms -> turning {hb[1]:.1f} mm")
     for mode, label in (("service", "service queue age (t_host - cam_ts, +-20 s min)"),
                         ("unity", "Unity estimator (camera.csv, causal 20 s min, + hold)")):
         base_t = pairing_times(run, mode)

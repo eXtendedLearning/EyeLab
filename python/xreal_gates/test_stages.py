@@ -8,7 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from xreal_gates.stages import STAGES, hmd_clock, report, stage_table, timecode_latency
+from xreal_gates.stages import STAGES, align_clocks, hmd_clock, report, stage_table, timecode_latency
 from xreal_gates.timecode import TimecodeTarget, draw_time, frame_for, index_draws, load_draws
 
 COLS = ["seq", "cam_ts", "hmd_arrived_ns", "q_frame_prev", "q_frame", "q_arrived", "q_copy0", "q_copy1", "q_send0",
@@ -58,6 +58,24 @@ class StageTableTest(unittest.TestCase):
             self.assertTrue(lines[0].endswith("QPC clock"))
             self.assertTrue(any("detection" in ln for ln in lines))
             self.assertTrue(any("HMD clock: not logged" in ln for ln in lines))
+
+
+class ClockAlignTest(unittest.TestCase):
+    def test_process_relative_unity_clock_is_shifted(self):
+        # 0.3.008: Unity's q_* count from process start; hmd_arrived_ns (QPC since boot) at the same arrival.
+        rows = _rows()
+        off = 1_654_890.825
+        for r in rows:
+            r["hmd_arrived_ns"] = str(int(round((float(r["q_arrived"]) + off) * 1e9)))
+            r["cam_ts"] = str(int(round((float(r["q_arrived"]) + off - 0.150) * 1e9)))
+            for k in ("q_recv", "q_det0", "q_det1"):   # the service already logs absolute QPC
+                r[k] = f"{float(r[k]) + off:.6f}"
+        shift = align_clocks(rows)
+        self.assertAlmostEqual(shift, off, places=4)
+        table = dict(stage_table(rows))
+        self.assertAlmostEqual(table["to service"][0], 1, delta=0.05)
+        self.assertAlmostEqual(table["cam_ts -> arrival (HMD clock, exact)"][0], 150, delta=0.05)
+        self.assertEqual(align_clocks(rows), 0.0)          # already absolute: no second shift
 
 
 class TimecodeTest(unittest.TestCase):

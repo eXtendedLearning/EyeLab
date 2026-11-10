@@ -5,7 +5,7 @@
 > each machine can and cannot do with the glasses. Update it whenever hardware is
 > bought, lent, or a capability is verified or refuted.
 >
-> Last updated: 2026-10-16 (fan: light G4 runtime sustainable for 5 min. Earlier: 2026-10-14 afternoon: Eye stream arrives at 30 fps over USB but is decoded on the host CPU, which falls behind with 6DoF even unthrottled; radiator doubles the first run's full-clock time; desktop DP-in card not to be bought. Earlier the same day: Surface throttles under sustained XR load; Eye buffer is bottom-up. Earlier: 2026-10-13 Surface runs of the PC beta 3.1.2 gate harness: Smart App Control must be off; Eye frames and 6DoF each observed, concurrent use degrades. Earlier: 2026-10-09 desktop USB/NCM and TCP preflight; PC beta sample inspected; emulator assessment corrected).
+> Last updated: 2026-11-10 (Beam Pro arriving in about a week; PC-only work stops, features must also run on One Pro + Eye + Beam Pro. Earlier: 2026-10-16 (fan: light G4 runtime sustainable for 5 min. Earlier: 2026-10-14 afternoon: Eye stream arrives at 30 fps over USB but is decoded on the host CPU, which falls behind with 6DoF even unthrottled; radiator doubles the first run's full-clock time; desktop DP-in card not to be bought. Earlier the same day: Surface throttles under sustained XR load; Eye buffer is bottom-up. Earlier: 2026-10-13 Surface runs of the PC beta 3.1.2 gate harness: Smart App Control must be off; Eye frames and 6DoF each observed, concurrent use degrades. Earlier: 2026-10-09 desktop USB/NCM and TCP preflight; PC beta sample inspected; emulator assessment corrected).)
 
 ## Glasses
 
@@ -21,7 +21,10 @@
   Do not let Nebula
   update the firmware again until the camera/IMU access routes are confirmed —
   the unofficial routes depend on firmware behaviour.
-- **XREAL Beam Pro:** ordered 2026-05-14, **not arrived** (confirmed
+- **XREAL Beam Pro: arriving.** Jack picks it up in about a week (expected around 2026-11-17;
+  record the date and model, 8 GB / 256 GB, on arrival). **Direction (2026-11-10, Jack):** stop
+  PC-only work and build features that also run on XREAL One Pro + Eye + Beam Pro; hand-over in
+  `BEAMPRO-HANDOVER-2026-11-10.md`. Earlier: ordered 2026-05-14, not arrived (confirmed
   2026-10-06). **No Android phone with USB-C video output** is available
   either. The established Android SDK 3.1.0 camera route has no host today.
   **PC beta update (2026-10-09):** XREAL-hosted 3.1.2 packages are downloadable

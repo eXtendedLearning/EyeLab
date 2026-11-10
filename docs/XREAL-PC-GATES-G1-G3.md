@@ -1982,6 +1982,11 @@ logging.
 Windows is the same counter in the same unit: on the desktop the two agree to 1 µs. So Unity and
 service times subtract directly.
 
+> **Correction (10 Nov, from the 9 Nov Surface runs):** in the player, Mono's `Stopwatch` counts from
+> process start, not boot, so 0.3.008's Unity times sit a constant offset behind the service's. The
+> HMD clock *is* boot QPC in ns. `stages` shifts 0.3.008 runs, and 0.3.009 reads
+> `QueryPerformanceCounter` directly (§25).
+
 **`frame_timing.csv`**: one row per frame sent to the service, posed or not. It is written at the
 start of the Unity frame after the one that applied the result.
 `python -m xreal_gates stages RUN` turns it into this table:
@@ -2059,3 +2064,191 @@ Do not touch `,` `.` (the base must stay 105 ms).
   The native-clock lines say whether `cam_ts` is on the HMD clock.
 - **Phase 0, still part:** the One Euro still-block error in the 6DoF run is ≤ 1.3 mm.
 - Desktop: `python -m xreal_gates import`, then `stages`, `latency`, `filters` on the three G5 runs.
+
+## 25. Session of 9 Nov (0.3.008): the camera timestamp is the PC clock; T5.1 Phase 2 begins (0.3.009)
+
+### What ran (build `2026-11-09T11:35:30Z`, EyeLab 0.3.008)
+
+Three gate runs, then two demo runs.
+
+| run | what |
+|---|---|
+| `20261109_144141_G5_g5_timecode_3dof` | timecode, 183 frames sent, 23 with the marker read |
+| `20261109_144348_G5_g5_plateA_3dof_compare` | compare, 3DoF, 1786 frames sent, 1307 measurements |
+| `20261109_145026_G5_g5_plateA_compare` | compare, 6DoF, 1469 frames sent, 857 measurements |
+| `20261109_145700_Demo_demo_3dof`, `20261109_145754_Demo_demo_3dof` | demo, no metrics |
+
+Jack's verdict: "all great improvements". The compact display, Tab alignment, named moves and
+thinner drawing stay. **The blind letters and the second round go** (0.3.009): a tester needs to
+know which method is on, and a repeat is just another run.
+
+### The HMD clock is QPC, and `cam_ts` is on it
+
+This is the main result of Phase 1.
+
+- `GetHMDTimeNanos` returned true on every call (`native_clock`), and
+  `hmd_ns − cam_ts` at arrival is small, positive and slowly varying: min 78-104 ms, median
+  185-267 ms. **`cam_ts` is on the HMD clock.**
+- **The HMD clock is the Windows performance counter, in ns since boot.** The pose service's
+  `time.perf_counter()` and `cam_ts` lie on one timeline: a frame with `cam_ts` 1 654 912.34 s was
+  received by the service at 1 654 912.54 s.
+- **Unity's side was not.** Mono's `Stopwatch.GetTimestamp()` counts from process start in the
+  player. It sat a constant 1 654 890.825 s behind the HMD clock, the same to 1 µs over a run.
+  - This corrects §24, which said Unity and service QPC agree to 1 µs. That was measured in the
+    Editor on the desktop, not in the player.
+  - `stages` now shifts 0.3.008 runs by `hmd_arrived_ns − q_arrived`. 0.3.009 reads
+    `QueryPerformanceCounter` directly (`qpc` event `ABSOLUTE`).
+- **So every frame's age is known exactly:** HMD-now − `cam_ts`. No fitted base.
+- **The timecode confirms that `cam_ts` is the exposure.** The marker id a frame shows was drawn
+  36-68 ms before its `cam_ts` (median 44 ms, n = 23). That is the Surface's presentation delay
+  (one compositor frame plus 0-17 ms to the next refresh, and the panel) plus part of a camera
+  frame.
+- **`GetHeadPoseAtTime` works.** Read as column-major with z flipped, it matches Unity's head
+  rotation to 0.00-0.07° (n = 1469-1786). The pairing keeps Unity's own head history, which is the
+  same pose.
+
+### Stage table (Phase 1 gate)
+
+Median / p90 in ms, from `python -m xreal_gates stages`, on the two compare runs (stream mode,
+more than 3 min each).
+
+| stage | 3DoF | 6DoF | how |
+|---|---|---|---|
+| **cam_ts → arrival** (exposure, encode, USB, decode queue, decode, upload) | **187 / 345** | **185 / 355** | HMD clock, exact |
+| of which the minimum (no queue) | 84 | 78 | HMD clock |
+| poll interval | 33.4 / 33.6 | 33.3 / 33.6 | Unity frame starts |
+| texture | 0.4 / 0.5 | 0.4 / 0.5 | QPC |
+| hold | 0.9 / 33.4 | 0.9 / 33.6 | QPC |
+| copy | 0.2 / 0.4 | 0.2 / 0.4 | QPC |
+| send | 4.7 / 6.3 | 5.0 / 7.1 | QPC |
+| to service | 3.4 / 5.9 | 4.0 / 7.4 | QPC, both processes |
+| parse | 1.0 / 1.7 | 1.1 / 2.0 | QPC (service) |
+| **detection** | **55.7 / 89.6** | **55.3 / 98.8** | QPC (service) |
+| reply | 1.0 / 1.6 | 1.0 / 1.7 | QPC, both processes |
+| apply wait | 10.4 / 31.1 | 10.7 / 32.3 | QPC |
+| display | 32.5 / 33.3 | 32.5 / 33.3 | QPC |
+| **cam_ts → shown (total)** | **336 / 494** | **331 / 509** | HMD clock + QPC, exact |
+
+Timecode run (3DoF, the Surface screen): cam_ts → arrival 248 / 400 ms, draw → arrival 284 / 444 ms
+(n = 23 frames with the marker read; the other 160 did not read it). Detection of
+the timecode marker took 18 ms, against 55 ms for the plate.
+
+**Where the time goes.** Of the 330 ms from exposure to the overlay, about 80 ms is the fixed
+camera path, **about 105 ms (median) is the SDK decode queue**, 55 ms is the plate detection and
+about 45 ms is Unity's frame cadence (apply wait and display). Our copy, send and transport add
+about 10 ms. **Phase 1 is done.**
+
+### Frame age: exact age against the estimate
+
+`latency` replays the pairing with the exact age (`hmd_send_ns − cam_ts`), trying a residual on
+top:
+
+| run | as run (estimated, base 105) | exact age, residual 0 | best residual of exact |
+|---|---|---|---|
+| 3DoF | 2.5 mm turning, 1.1 still | 2.0 mm, 1.0 | −20 ms: 1.8 mm |
+| 6DoF | 2.1 mm, 1.1 | **1.8 mm, 1.0** | 0 ms: 1.8 mm |
+
+The 0.3.008 estimate ran 13 ms too old (median), in line with the Unity estimator's best base of
+80-90 ms on these runs. The exact age needs no fit and lands within 0-20 ms of the best. **0.3.009
+uses it** (`age_src=hmd` per lock), with the estimate as the fallback if `GetHMDTimeNanos` ever
+fails. Keys `,` `.` now trim the age by 10 ms (default 0).
+
+### Lock filters (named in 0.3.009; these runs were still blind)
+
+`filters`, mean over the still blocks (jitter mm/s / error mm):
+
+| | latest | One Euro | hysteresis | ratings (1-5) |
+|---|---|---|---|---|
+| 3DoF | 6.7 / 0.8 | **1.1 / 0.8** | 0.6 / 1.3 | euro 3.5, hysteresis 3.0, latest 2.5 |
+| 6DoF | 7.6 / 1.8 | 2.5 / 2.6 | 2.8 / 3.5 | euro 2.0, hysteresis 3.0, latest 3.0 |
+
+- **3DoF beats the baseline** (One Euro 1.2 mm/s / 1.3 mm): 1.1 / 0.8.
+- **6DoF does not:** the One Euro error is 2.6 mm against ≤ 1.3. The measurements themselves
+  scatter twice as much (latest error 1.8 mm against 0.8 in 3DoF), so the filter is not the cause.
+  The 6DoF run was **blind half the still time and the camera was starved** (next section). One
+  Euro then glides between sparse, older locks.
+- Phase 0's still check therefore stays open. It is repeated after the blind-time change, in the
+  0.3.009 session.
+
+### Blind time: the decoder starves when the Surface warms
+
+Share of each block type spent in lock gaps over 1 s:
+
+| | still | move | rate | camera fps (median, by fifth of the run) | restarts | median window |
+|---|---|---|---|---|---|---|
+| 3DoF 9 Nov | **22 %** (baseline 28) | 76 % | 32 % | 22-23.5 | 47 | 7.2 s |
+| 6DoF 9 Nov | **50 %** (baseline 42) | 81 % | 52 % | 23 → 13 → 11 | 82 | 3.5 s |
+| 6DoF 6 Nov | 42 % | 79 % | 56 % | 17-20 → 11 | 86 | 3.9 s |
+
+- In the 6DoF run the CPU clock fell from 220 % to 190 % after the first minute. **Decoded frames
+  fell from 23 to 11 per second**, the queue grew three times faster, and the 0.3 s threshold
+  restarted the camera every 3.5 s. **Each restart costs about 2 s without locks.**
+- The zone temperature stayed at 52 °C, so the heat rule did not fire. That matches §23.
+- **The 0.3 s threshold was there for accuracy.** An older frame was paired with a wrongly aged
+  head pose. With the exact age it is paired correctly, so 0.3.009 raises the threshold to
+  **1.0 s** and the forced window from 8 s to **30 s** (`-streamLag`, `-streamWindow`). The head
+  history (2.0 s) still covers the oldest frame.
+- **The trade-off:** a 1.0 s threshold is expected to let the median frame age grow (from about 0.2 s).
+  For a fixed target that is correct, but the overlay reacts later to a bumped plate. The session
+  measures still-phase error and blind time against the 9 Nov runs.
+
+### Phase 2 gates against these numbers
+
+| gate | Phase 2 target | 9 Nov |
+|---|---|---|
+| still-phase time in gaps > 1 s | ≤ 14 % (3DoF), ≤ 21 % (6DoF) | 22 %, 50 % |
+| median exposure → applied | ≤ ½ of Phase 1: ≤ 150 ms | 300 ms (shown 331-336) |
+| still error / jitter | no worse than 1.3 mm / 1.2 mm/s | 3DoF met; 6DoF 2.6 / 2.5 |
+
+**The two halves of the latency gate pull apart.** A higher restart threshold cuts the blind time
+but lengthens the decode queue, which is the largest part of the latency. Under the current decoder
+both can be met only if the decoder keeps up. That needs a cooler, lighter host, less of our own CPU
+(detection is 55 ms per frame at 5-6 frames/s, about a third of a core), or Phase 3. **0.3.009 does the
+blind time first, as T5.1 orders.** The detection fast path (markers and PnP first, saddles later or
+only when still) is next and also frees CPU for the decoder.
+
+### Changes in 0.3.009 (build `2026-11-10T10:02:25Z`)
+
+- **Exact frame age.** HMD-now − `cam_ts` + trim; the fallback is base 105 + queue + hold.
+  - Logged per lock (`age_src`, `trim_ms`) and in `frame_timing.csv` (`age_src`, `trim_ms`, `qpc_abs`).
+  - HUD with H: "frame age N ms (glasses clock, trim 0 ms , .)".
+- **Absolute QPC in Unity** (`QueryPerformanceCounter` via kernel32). Unity, service and camera
+  times subtract directly. `stages` also shifts 0.3.008 runs.
+- **Stream restarts:** threshold 1.0 s (was 0.3), forced window 30 s (was 8). Arguments
+  `-streamLag S` and `-streamWindow S`.
+- **Compare, named and once.** Each block names its method on the banner and in speech (ONE EURO,
+  HYSTERESIS, LATEST), in that fixed order, one block each. Ratings stay. Step ids are
+  `cmpN_<method>_still|move|rate`.
+- **Demo (Jack, 10 Nov): everything starts off.** Grid, plate and board overlays and the Eye view
+  are off at start; G, T and E turn them on. **F switches the lock method** (One Euro → hysteresis →
+  latest), and the banner names the method and what is on. The demo always used the active lock
+  filter; it now says which.
+- **`stages`:** exact lines (cam_ts → arrival, → sent, → shown) and the timecode's draw → `cam_ts`.
+- **`latency`:** an exact-age scan, and residuals from −60 ms.
+
+### Session 0.3.009 (Phase 2, blind time)
+
+Same set-up as §22. Launcher shows `[OK]` for build `2026-11-10T10:02:25Z`. Start cool (**K** first).
+
+1. **5**: compare in 3DoF.
+   - Align (Tab, MOVE then ROTATE, Enter). Hold really still in the still blocks, follow the moves.
+   - The banner names each method: rate each 1-5 as you see it.
+   - Then **K**.
+2. **6**: compare in 6DoF, the same way. This is Phase 0's still check again, with fewer restarts.
+   - Then **K**.
+3. Optional: **D** for 5-10 minutes (heat: does the camera keep up, does the overlay keep locking?).
+4. **Z**, and bring the zip to `GateRuns/_inbox`.
+
+Leave `,` `.` alone (trim 0). No timecode run is needed this time.
+
+> **After this session the PC-only (Surface) work stops** (Jack, 10 Nov). A Beam Pro is due in about a
+> week, and new work goes to features that also run on XREAL One Pro + Eye + Beam Pro. The
+> hand-over is `docs/BEAMPRO-HANDOVER-2026-11-10.md`. This session is still worth running: its
+> numbers are the PC reference the Beam Pro is compared against.
+
+**Done when** (desktop: `import`, then `stages`, `latency`, `filters` on both runs):
+
+- the still-phase time in lock gaps over 1 s is at or below 14 % (3DoF) and 21 % (6DoF);
+- the One Euro still error in 6DoF is ≤ 1.3 mm, and 3DoF stays ≤ 1.3 mm;
+- the turning jump stays ≤ 3 mm with `age_src=hmd`;
+- the frame age and decode queue at 1.0 s are recorded, for the latency half of Phase 2.

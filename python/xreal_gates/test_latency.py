@@ -101,11 +101,12 @@ class LoggedPerFrameAgeTest(unittest.TestCase):
         self._write("pose.csv", pose[0], pose[1:])
         (self.dir / "run.json").write_text(json.dumps({"device_xr": {"rgb_camera_pose_from_head": {
             "position_m": [0, 0, 0], "rotation_xyzw": [0, 0, 0, 1]}}}), encoding="utf-8")
-        events, svc = [], []
+        events, svc, ages = [], [], []
         rng = np.random.default_rng(1)
         for seq in range(1, 80):
             t_send = 2.0 + seq * 0.2
             age = 0.09 + float(rng.uniform(0, 0.4))
+            ages.append((seq, age))
             t_cap = t_send - age
             # Camera-frame target position (OpenCV: y down) from the head pose at capture.
             q = q_at(t_cap)
@@ -124,6 +125,15 @@ class LoggedPerFrameAgeTest(unittest.TestCase):
         self.assertEqual(best[0], 0)
         self.assertLess(best[1], 0.1)  # head interpolation at 60 Hz only
         self.assertGreater(dict((r[0], r[1]) for r in rows)[50], 10 * best[1])
+
+        # 0.3.008+: the exact age from the HMD clock (frame_timing.csv) pairs the same way with no base.
+        cam0 = 1_654_900_000_000_000_000
+        self._write("frame_timing.csv", ["seq", "cam_ts", "hmd_send_ns"],
+                    [[seq, cam0 + seq * 100_000_000, cam0 + seq * 100_000_000 + int(round(age * 1e9))] for seq, age in ages])
+        rows, _ = estimate(self.dir, delays_ms=range(-50, 51, 10), mode="hmd")
+        best = min(rows, key=lambda r: r[1])
+        self.assertEqual(best[0], 0)
+        self.assertLess(best[1], 0.1)
 
 
 if __name__ == "__main__":

@@ -238,12 +238,13 @@ namespace EyeLabGates
         }
 
         /// <summary>
-        /// Blind lock-filter comparison (guide §20): after acquiring, each block shows one filter under a
-        /// letter (the wearer does not know which) for 20 s holding still and 10 s moving the head, then asks
-        /// for a 1-5 rating on the keyboard. <paramref name="order"/> lists filter indices (latest, euro,
-        /// hysteresis) per block; all three filters run on every measurement regardless.
+        /// Lock-filter comparison (guide §20): after acquiring, each block shows one filter, named on the banner
+        /// and spoken (0.3.009; it was blind under letters A/B/C, twice), for 20 s holding still and the named
+        /// moves, then asks for a 1-5 rating on the keyboard. <paramref name="order"/> lists filter indices
+        /// (into <paramref name="labels"/> and <paramref name="keys"/>) per block; all three filters run on every
+        /// measurement regardless.
         /// </summary>
-        public static List<ProtocolStep> G5Compare(int[] order, string[] labels, bool sixDof)
+        public static List<ProtocolStep> G5Compare(int[] order, string[] labels, string[] keys, bool sixDof)
         {
             var s = new List<ProtocolStep>
             {
@@ -253,7 +254,7 @@ namespace EyeLabGates
             {
                 int m = order[k];
                 string label = labels[m];
-                string id = $"cmp{k + 1}_{label.Substring(label.Length - 1)}";
+                string id = $"cmp{k + 1}_{keys[m]}";
                 s.Add(new ProtocolStep($"{id}_still", $"{label}: HOLD STILL", "Is it steady? Does it sit on the plate?", 20, StepAction.Filter0 + m,
                                        $"{label}. Hold still"));
                 s.Add(MoveStep($"{id}_move", $"{label}: ", "Slowly, plate in view", sixDof));

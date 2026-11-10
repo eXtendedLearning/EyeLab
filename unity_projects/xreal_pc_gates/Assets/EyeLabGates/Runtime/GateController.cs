@@ -56,8 +56,7 @@ namespace EyeLabGates
         // Camera handling for the locking gates (rev. 3, 22 Oct). A restart 0.18 s after a stop left
         // the RGB camera unable to start for the rest of the 22 Oct G5 run (NativeRGBCamera+Start).
         const float MinCameraOffSeconds = 0.6f;
-        const float StreamFlushLag = 0.3f;        // restart the stream when its frames fall this far behind
-        const float StreamWindowSeconds = 8f;     // and at least this often
+        // Stream restart thresholds: GateArgs.StreamLag / StreamWindow (0.3.009: 1.0 s / 30 s, were 0.3 s / 8 s).
         const float StreamNoFrameTimeout = 4f;
         const float MaxSendHz = 8f;
         const float AlignLockTimeout = 30f;
@@ -143,6 +142,13 @@ namespace EyeLabGates
         /// <c>base + queue age + hold</c> before it is sent (see <see cref="TrySendLockFrame"/>).
         /// </summary>
         float m_AgeBase;
+        /// <summary>
+        /// T5.1 Phase 2 (0.3.009): added to every frame age (s), keys , and . (10 ms). With the HMD clock the age is
+        /// exact, so this stays 0 unless a run shows a residual (9 Nov: best residual -10..0 ms).
+        /// </summary>
+        float m_AgeTrim;
+        double m_LastAgeMs = double.NaN;
+        string m_LastAgeSrc = "";
         int m_HeadClamped;
         ViewOffset m_ViewOffset = new ViewOffset();
         bool m_ViewOffsetDirty;
@@ -159,7 +165,8 @@ namespace EyeLabGates
         {
             public long Seq; public double T; public Vector3 HeadPosition; public Quaternion HeadRotation; public ulong CamTs;
             // T5.1 Phase 0: when the frame was sent and how old it was taken to be (s).
-            public double TSend, Age, Base, Queue, Hold; public bool PerFrame, HeadClamped;
+            public double TSend, Age, Base, Queue, Hold, Trim; public bool PerFrame, HeadClamped;
+            public string AgeSrc = "";   // hmd (exact, 0.3.009), per_frame (base + queue + hold), base_only
             // T5.1 Phase 1 (frame_timing.csv): QPC stage times (s) and the native clock/pose probes.
             public double QFramePrev = double.NaN, QFrame = double.NaN, QArrived = double.NaN, QCopy0 = double.NaN, QCopy1 = double.NaN;
             public double QApplied = double.NaN;
@@ -173,7 +180,8 @@ namespace EyeLabGates
         double m_LastClockRow = double.NegativeInfinity;
         const string FrameTimingHeader =
             "seq,cam_ts,hmd_arrived_ns,q_frame_prev,q_frame,q_arrived,q_copy0,q_copy1,q_send0,q_send1,q_recv,q_det0,q_det1," +
-            "q_reply,q_reply_recv,q_applied,q_shown,age_ms,queue_ms,hold_ms,base_ms,ok,hmd_send_ns,native_cap,native_now,unity_head_now";
+            "q_reply,q_reply_recv,q_applied,q_shown,age_ms,queue_ms,hold_ms,base_ms,ok,hmd_send_ns,native_cap,native_now,unity_head_now," +
+            "age_src,trim_ms,qpc_abs";
         int m_LastTick = -1;
         float m_StepSeconds;
         bool m_Quitting;
@@ -207,7 +215,7 @@ namespace EyeLabGates
         public bool IsG5 => m_Args != null && m_Args.Gate == GateKind.G5;
         public bool IsDemo => m_Args != null && m_Args.Gate == GateKind.Demo;
         /// <summary>G5 and demo: camera bursts feed the pose bridge.</summary>
-        /// <summary>G5 filter comparison (blind): the shown filter changes per block and is not named.</summary>
+        /// <summary>G5 filter comparison: the shown filter changes per block and is named on the banner (0.3.009).</summary>
         public bool IsCompare => m_Args != null && m_Args.Gate == GateKind.G5 && m_Args.Compare;
         public bool IsLocking => IsG5 || IsDemo;
         /// <summary>Camera state for the HUD (locking gates): empty when fine.</summary>
@@ -223,7 +231,8 @@ namespace EyeLabGates
             "   Shift: big steps   Backspace: zero   Enter: save\n" +
             $"offset {m_ViewOffset.Describe()}{(m_ViewOffsetDirty ? "  (unsaved: Enter)" : "")}" +
             (!ShowDiagnostics ? "" :
-                $"\nframe age {Mathf.RoundToInt(m_AgeBase * 1000f)}+{(double.IsNaN(m_Camera.QueueAge) ? "?" : Math.Round(m_Camera.QueueAge * 1000).ToString("F0", CultureInfo.InvariantCulture))} ms" +
+                $"\nframe age {(double.IsNaN(m_LastAgeMs) ? "-" : m_LastAgeMs.ToString("F0", CultureInfo.InvariantCulture))} ms " +
+                $"({(m_LastAgeSrc == "hmd" ? "glasses clock" : m_LastAgeSrc == "" ? "-" : "estimated")}, trim {Mathf.RoundToInt(m_AgeTrim * 1000f)} ms , .)" +
                 (IsCompare ? $"   |   {m_CompareLabel}" : $"   |   filter {FilterDescription()}  (F switch, [ ] tune)") +
                 $"   |   overlay {GateOverlay.StyleNames[m_Overlay.Style]} (V)");
         public bool OffsetDirty => m_ViewOffsetDirty;
@@ -347,7 +356,8 @@ namespace EyeLabGates
                 case GateKind.G3: m_Sequence = StartCoroutine(RunG3()); break;
                 case GateKind.G4: m_Sequence = StartCoroutine(RunG4()); break;
                 case GateKind.G5: m_Sequence = StartCoroutine(RunG5()); break;
-                case GateKind.Demo: ShowEyeView = true; m_Sequence = StartCoroutine(RunDemo()); break;
+                // 0.3.009 (Jack, 10 Nov): the demo starts with everything off (Eye view, plate, grid); keys turn them on.
+                case GateKind.Demo: ShowEyeView = false; m_ShowTargets = false; m_Sequence = StartCoroutine(RunDemo()); break;
                 case GateKind.Calib: m_Sequence = StartCoroutine(RunCalib()); break;
                 case GateKind.Cooldown: m_Sequence = StartCoroutine(RunCooldown()); break;
                 default:
@@ -595,21 +605,14 @@ namespace EyeLabGates
             if (m_Quitting) yield break;
             if (IsCompare)
             {
-                // Blind: methods get random letters; round 2 repeats round 1 in reverse order.
-                int seed = Guid.NewGuid().GetHashCode();   // 2 Nov: two runs got the same order from new Random()
-                var rng = new System.Random(seed);
-                var letters = new List<string> { "A", "B", "C" };
-                var labels = new string[3];
-                for (int i = 0; i < 3; i++) { int k = rng.Next(letters.Count); labels[i] = "METHOD " + letters[k]; letters.RemoveAt(k); }
-                var round = new List<int> { 0, 1, 2 };
-                for (int i = round.Count - 1; i > 0; i--) { int k = rng.Next(i + 1); (round[i], round[k]) = (round[k], round[i]); }
-                var order = new List<int>(round);
-                round.Reverse();
-                order.AddRange(round);
+                // 0.3.009 (Jack, 10 Nov): named methods, one block each, fixed order (the blind letters confused
+                // the testers, and a second round is just another run). Labels are indexed like TargetLock.Names.
+                var labels = new string[TargetLock.Names.Length];
+                for (int i = 0; i < labels.Length; i++) labels[i] = CompareName(TargetLock.Names[i]);
+                int[] order = { TargetLock.IndexOf("euro"), TargetLock.IndexOf("hysteresis"), TargetLock.IndexOf("latest") };
                 m_CompareLabels = labels;
-                m_Log.Event("compare_mapping", seed, $"{TargetLock.Names[0]}={labels[0]} {TargetLock.Names[1]}={labels[1]} " +
-                    $"{TargetLock.Names[2]}={labels[2]} order={string.Join(",", order)}");
-                yield return RunProtocol(GateProtocol.G5Compare(order.ToArray(), labels, sixDof));
+                m_Log.Event("compare_mapping", "NAMED", $"order={string.Join(",", order.Select(i => TargetLock.Names[i]))}");
+                yield return RunProtocol(GateProtocol.G5Compare(order, labels, TargetLock.Names, sixDof));
             }
             else
             {
@@ -630,8 +633,8 @@ namespace EyeLabGates
             Say("EyeLab demo.");
             yield return StartLocking(m_Args.Order == "3dof" ? TrackingType.MODE_3DOF : TrackingType.MODE_6DOF);
             if (m_Quitting) yield break;
-            Show("demo", "EYELAB DEMO", "G grid   P place grid   E eye view   T targets   V style   H info   Esc end", "");
-            PlaceOverlay("demo_start", DemoGridDistance);
+            DemoBanner();
+            m_Log.Event("demo", "ALL_OFF", $"grid off, targets off, eye view off; method {TargetLock.Names[m_ActiveFilter]} (F switches)");
             m_InProtocol = true; // "Tracking lost" cues
             while (!m_Quitting) yield return null;
         }
@@ -681,13 +684,15 @@ namespace EyeLabGates
             ReadRgbFromHead();
             m_Log.Event("lock_filter", TargetLock.Names[m_ActiveFilter], IsCompare ? "compare: changes per block" : "key F switches");
             m_Log.Event("cam_latency", (m_AgeBase * 1000f).ToString("F0", CultureInfo.InvariantCulture),
-                "base ms: per-frame age = base + queue age (arrival - cam_ts above its 20 s minimum) + hold (keys , and . change the base by 10 ms)");
+                "0.3.009: age = HMD now - cam_ts + trim (exact; the HMD clock is QPC); fallback base ms + queue age + hold " +
+                "when GetHMDTimeNanos does not answer (keys , and . change the trim by 10 ms)");
+            m_Log.Event("qpc", Clocks.Absolute ? "ABSOLUTE" : "STOPWATCH", $"qpc={Clocks.F(Clocks.Qpc)} hmd_ns={NativeClock.HmdNow()}");
             m_ViewOffset = ViewOffset.LoadOrZero(ViewOffset.DefaultPath, out string offsetStatus);
             m_Log.Event("view_offset", "LOADED", $"{offsetStatus}: {m_ViewOffset.Describe()}");
             UpdateLockStatus();
             m_Log.Event("camera_mode", m_Args.CamMode,
                 m_Args.CamMode == "stream"
-                    ? $"flush_lag={StreamFlushLag.ToString(CultureInfo.InvariantCulture)}s window={StreamWindowSeconds.ToString(CultureInfo.InvariantCulture)}s max_send_hz={MaxSendHz.ToString(CultureInfo.InvariantCulture)}"
+                    ? $"flush_lag={m_Args.StreamLag.ToString(CultureInfo.InvariantCulture)}s window={m_Args.StreamWindow.ToString(CultureInfo.InvariantCulture)}s max_send_hz={MaxSendHz.ToString(CultureInfo.InvariantCulture)}"
                     : $"every={m_Args.BurstEvery.ToString(CultureInfo.InvariantCulture)}s frames={m_Args.BurstFrames}");
             StartCoroutine(m_Args.CamMode == "stream" ? StreamLoop() : BurstLoop());
         }
@@ -754,8 +759,8 @@ namespace EyeLabGates
         /// <summary>
         /// Stream mode for the locking gates: capture continuously and send the newest frame whenever the
         /// service is free and the head nearly still (up to <see cref="MaxSendHz"/>); restart the camera
-        /// when its frames fall <see cref="StreamFlushLag"/> s behind (the SDK decoder queue, §16) or after
-        /// <see cref="StreamWindowSeconds"/> s. A restart costs about 1.1 s without frames.
+        /// when its frames fall <see cref="GateArgs.StreamLag"/> s behind (the SDK decoder queue, §16) or after
+        /// <see cref="GateArgs.StreamWindow"/> s. A restart costs about 1.1 s without frames (2 s between locks).
         /// </summary>
         IEnumerator StreamLoop()
         {
@@ -799,8 +804,8 @@ namespace EyeLabGates
                         CameraStatus = "";
                     }
                     double lag = m_Camera.LagGrowth - lag0;
-                    if (lag > StreamFlushLag) { end = "lag"; break; }
-                    if (now - t0 > StreamWindowSeconds) { end = "window"; break; }
+                    if (lag > m_Args.StreamLag) { end = "lag"; break; }
+                    if (now - t0 > m_Args.StreamWindow) { end = "window"; break; }
                     if (m_Source.Timestamp != lastTs && m_PoseTask == null && now - m_LastSend >= 1.0 / MaxSendHz)
                     {
                         lastTs = m_Source.Timestamp;
@@ -1007,20 +1012,28 @@ namespace EyeLabGates
             }
             m_LastSend = now;
             var img = new YGrayImage { Width = y.width, Height = y.height, Data = data, BottomUp = true, Sequence = ++m_LockSeq };
-            // T5.1 Phase 0: the frame's own age. queue = how far behind the freshest frame of the last 20 s
-            // it arrived (the SDK decode queue, guide §23); hold = how long it has waited in Unity since;
-            // base = the rest (exposure, encode, USB, decode, upload), fitted offline (latency RUN).
+            // T5.1 Phase 2 (0.3.009): cam_ts is on the HMD clock, and the HMD clock is QPC (9 Nov: Python's
+            // perf_counter, cam_ts and GetHMDTimeNanos agree to 1 us), so the frame's age is HMD-now minus cam_ts,
+            // exactly. Fallback (no HMD clock), T5.1 Phase 0: queue = how far behind the freshest frame of the
+            // last 20 s it arrived (the SDK decode queue, guide §23); hold = how long it has waited in Unity
+            // since; base = the rest (exposure, encode, USB, decode, upload), fitted offline (latency RUN).
             bool perFrame = m_Camera.TryFrameAge(m_Source.Timestamp, out double arrived, out double queue);
             double hold = perFrame ? Math.Max(0.0, now - arrived) : 0.0;
             if (!perFrame) queue = 0.0;
-            double age = m_AgeBase + queue + hold;
+            ulong hmdSend = NativeClock.HmdNow();
+            ulong camTs = m_Source.Timestamp;
+            bool exact = hmdSend > camTs && hmdSend - camTs < 3_000_000_000UL;
+            double age = (exact ? (hmdSend - camTs) * 1e-9 : m_AgeBase + queue + hold) + m_AgeTrim;
+            string ageSrc = exact ? "hmd" : perFrame ? "per_frame" : "base_only";
+            m_LastAgeMs = age * 1000.0;
+            m_LastAgeSrc = ageSrc;
             bool inHistory = HeadAt(now - age, head, out Vector3 capPos, out Quaternion capRot);
             if (!inHistory) m_HeadClamped++;
             m_Pending = new PendingLock
             {
                 Seq = img.Sequence, T = now - age, HeadPosition = capPos,
                 HeadRotation = capRot, CamTs = m_Source.Timestamp,
-                TSend = now, Age = age, Base = m_AgeBase, Queue = queue, Hold = hold,
+                TSend = now, Age = age, Base = m_AgeBase, Queue = queue, Hold = hold, Trim = m_AgeTrim, AgeSrc = ageSrc,
                 PerFrame = perFrame, HeadClamped = !inHistory,
                 QCopy0 = qCopy0, QCopy1 = qCopy1,
             };
@@ -1033,7 +1046,7 @@ namespace EyeLabGates
             }
             // Native probes (read-only exports, Clocks.cs): HMD time now, the native head pose now and at cam_ts
             // (meaningful only if cam_ts is on the HMD clock, which stages checks), and Unity's head pose now.
-            m_Pending.HmdSend = NativeClock.HmdNow();
+            m_Pending.HmdSend = hmdSend;
             m_Pending.NativeNow = NativeClock.HeadPoseAt(m_Pending.HmdSend);
             m_Pending.NativeCap = NativeClock.HeadPoseAt(m_Source.Timestamp);
             Vector3 hp = head.position; Quaternion hq = head.rotation;
@@ -1102,7 +1115,8 @@ namespace EyeLabGates
                 if (res.Kind == LockFilter.Kind.First)
                 {
                     m_Audio.PlayOneShot(m_ReadyBeep);
-                    Say(IsDemo ? "Target locked" : "Locked");
+                    if (!IsDemo) Say("Locked");
+                    else if (m_ShowTargets) Say("Target locked");
                     Screenshot("first_lock_" + tp.Target, force: true);
                 }
                 string jump = $"{(res.JumpMetres * 1000f).ToString("F0", CultureInfo.InvariantCulture)} mm";
@@ -1139,6 +1153,7 @@ namespace EyeLabGates
                 (p.Hold * 1000).ToString("F2", CultureInfo.InvariantCulture), (p.Base * 1000).ToString("F0", CultureInfo.InvariantCulture),
                 p.Ok ? "1" : "0", p.HmdSend.ToString(CultureInfo.InvariantCulture),
                 NativeClock.Text(p.NativeCap), NativeClock.Text(p.NativeNow), p.UnityHeadNow,
+                p.AgeSrc, (p.Trim * 1000).ToString("F0", CultureInfo.InvariantCulture), Clocks.Absolute ? "1" : "0",
             });
             m_Log.Table("frame_timing.csv", FrameTimingHeader, row);
         }
@@ -1148,7 +1163,7 @@ namespace EyeLabGates
             $"t_send={p.TSend.ToString("F4", CultureInfo.InvariantCulture)} age_ms={(p.Age * 1000).ToString("F1", CultureInfo.InvariantCulture)} " +
             $"base_ms={(p.Base * 1000).ToString("F0", CultureInfo.InvariantCulture)} queue_ms={(p.Queue * 1000).ToString("F1", CultureInfo.InvariantCulture)} " +
             $"hold_ms={(p.Hold * 1000).ToString("F1", CultureInfo.InvariantCulture)}" +
-            (p.PerFrame ? "" : " age_src=base_only") + (p.HeadClamped ? " head_clamped=1" : "");
+            $" age_src={p.AgeSrc} trim_ms={(p.Trim * 1000).ToString("F0", CultureInfo.InvariantCulture)}" + (p.HeadClamped ? " head_clamped=1" : "");
 
         /// <summary>
         /// Camera pose of a target to world: OpenCV to Unity (F R F), the vendor RGB-camera-from-head
@@ -1219,9 +1234,9 @@ namespace EyeLabGates
             int lat = Input.GetKeyDown(KeyCode.Period) ? 1 : Input.GetKeyDown(KeyCode.Comma) ? -1 : 0;
             if (lat != 0)
             {
-                m_AgeBase = Mathf.Clamp(m_AgeBase + 0.01f * lat, 0f, 0.4f);
-                m_Log.Event("cam_latency", (m_AgeBase * 1000f).ToString("F0", CultureInfo.InvariantCulture), "key: base ms");
-                Say($"Base {Mathf.RoundToInt(m_AgeBase * 1000f)} milliseconds");
+                m_AgeTrim = Mathf.Clamp(m_AgeTrim + 0.01f * lat, -0.1f, 0.1f);
+                m_Log.Event("age_trim", (m_AgeTrim * 1000f).ToString("F0", CultureInfo.InvariantCulture), "key: frame age trim ms");
+                Say($"Trim {Mathf.RoundToInt(m_AgeTrim * 1000f)} milliseconds");
             }
             if (changed)
             {
@@ -1363,13 +1378,17 @@ namespace EyeLabGates
             m_Log.Event("lock_filter", TargetLock.Names[index], $"{why} {FilterDescription()}");
         }
 
-        /// <summary>Filter keys (locking gates): F next filter (not in the blind comparison), ] smoother, [ more responsive; compare: 1-5 rate.</summary>
+        /// <summary>Spoken and shown name of a lock filter in the comparison.</summary>
+        static string CompareName(string filter) =>
+            filter == "euro" ? "ONE EURO" : filter == "hysteresis" ? "HYSTERESIS" : filter == "latest" ? "LATEST" : filter.ToUpperInvariant();
+
+        /// <summary>Filter keys (locking gates): F next filter (not in the comparison), ] smoother, [ more responsive; compare: 1-5 rate.</summary>
         void HandleFilterKeys()
         {
             if (Input.GetKeyDown(KeyCode.F) && !IsCompare)
             {
                 SetActiveFilter((m_ActiveFilter + 1) % TargetLock.Names.Length, "key F");
-                Say(TargetLock.Names[m_ActiveFilter] == "euro" ? "One euro filter" : TargetLock.Names[m_ActiveFilter]);
+                Say(CompareName(TargetLock.Names[m_ActiveFilter]).ToLowerInvariant());
             }
             int adjust = Input.GetKeyDown(KeyCode.RightBracket) ? 1 : Input.GetKeyDown(KeyCode.LeftBracket) ? -1 : 0;
             if (adjust != 0)
@@ -1709,7 +1728,7 @@ namespace EyeLabGates
                     yield return new WaitForSecondsRealtime(step.Seconds);
                     continue;
                 }
-                // Named movements, one after another; the title shows the current one (prefix kept, e.g. "METHOD A: ").
+                // Named movements, one after another; the title shows the current one (prefix kept, e.g. "ONE EURO: ").
                 string prefix = step.Title.EndsWith(step.Cues[0].Title, StringComparison.Ordinal)
                     ? step.Title.Substring(0, step.Title.Length - step.Cues[0].Title.Length) : "";
                 float each = step.Seconds / step.Cues.Length;
@@ -1925,19 +1944,34 @@ namespace EyeLabGates
             yield return Quit("COMPLETED");
         }
 
-        /// <summary>Demo keys (operator on the Surface keyboard): G grid, E Eye view, T target overlays.</summary>
+        /// <summary>Demo banner: what is on, and the lock method (0.3.009: F switches it, named as in the comparison).</summary>
+        void DemoBanner()
+        {
+            string On(bool on) => on ? "ON" : "off";
+            Show("demo", $"EYELAB DEMO   method: {CompareName(TargetLock.Names[m_ActiveFilter])}",
+                 $"G grid {On(m_Overlay.Placed)}   T plate {On(m_ShowTargets)}   E eye {On(ShowEyeView)}   F method   P place grid   V style   H info   Esc end", "");
+        }
+
+        /// <summary>Demo keys (operator on the Surface keyboard): G grid, E Eye view, T target overlays, F lock method.</summary>
         void HandleDemoKeys()
         {
+            if (Input.GetKeyDown(KeyCode.F))
+            {
+                // HandleFilterKeys already switched the filter this frame; the banner names it.
+                DemoBanner();
+            }
             if (Input.GetKeyDown(KeyCode.G))
             {
                 if (m_Overlay.Placed) m_Overlay.Hide();
                 else PlaceOverlay("key_g", DemoGridDistance);
                 m_Log.Event("key", "G", m_Overlay.Placed ? "grid on" : "grid off");
+                DemoBanner();
             }
             if (Input.GetKeyDown(KeyCode.E))
             {
                 ShowEyeView = !ShowEyeView;
                 m_Log.Event("key", "E", ShowEyeView ? "eye view on" : "eye view off");
+                DemoBanner();
             }
             if (Input.GetKeyDown(KeyCode.T))
             {
@@ -1948,6 +1982,7 @@ namespace EyeLabGates
                     else if (kv.Value.HasShown) m_Overlay.SetTargetPose(kv.Key, kv.Value.ShownPosition, kv.Value.ShownRotation);
                 }
                 m_Log.Event("key", "T", m_ShowTargets ? "targets on" : "targets off");
+                DemoBanner();
             }
         }
 
@@ -2004,6 +2039,7 @@ namespace EyeLabGates
             {
                 m_Log.Event("key", "P", "");
                 PlaceOverlay("key", IsDemo ? DemoGridDistance : OverlayDistance);
+                if (IsDemo) DemoBanner();
             }
             if (Input.GetKeyDown(KeyCode.Escape))
             {
@@ -2100,7 +2136,7 @@ namespace EyeLabGates
                 case GateKind.Cooldown: return "Cool-down check";
                 case GateKind.Calib: return "Calibration capture (25 mm board)";
                 case GateKind.G5 when m_Args.Compare:
-                    return $"G5 filter comparison on {m_Args.Target} ({(m_Args.Order == "3dof" ? "3DoF" : "6DoF")}), blind";
+                    return $"G5 filter comparison on {m_Args.Target} ({(m_Args.Order == "3dof" ? "3DoF" : "6DoF")}), named methods";
                 case GateKind.G5:
                     return $"G5 locked overlay on {m_Args.Target} ({(m_Args.Order == "3dof" ? "3DoF" : "6DoF")}), camera {m_Args.BurstFrames} fr every " +
                            $"{m_Args.BurstEvery.ToString(CultureInfo.InvariantCulture)} s, {m_Args.RenderFps} fps";
