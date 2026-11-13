@@ -2252,3 +2252,220 @@ Leave `,` `.` alone (trim 0). No timecode run is needed this time.
 - the One Euro still error in 6DoF is ≤ 1.3 mm, and 3DoF stays ≤ 1.3 mm;
 - the turning jump stays ≤ 3 mm with `age_src=hmd`;
 - the frame age and decode queue at 1.0 s are recorded, for the latency half of Phase 2.
+
+## 26. Session of 11 Nov (0.3.009): blind time and the exact age
+
+This is the last Surface session. Its numbers are the PC reference for the Beam Pro gates
+(`docs/BEAMPRO-HANDOVER-2026-11-10.md`, B5).
+
+### What ran (build `2026-11-10T10:02:25Z`, EyeLab 0.3.009)
+
+Plate A, Surface with fan, Jack wearing. `summary` shows the build for all five runs.
+
+| run | what |
+|---|---|
+| `20261111_134231_G5_g5_timecode_3dof` | timecode (not asked for), 342 frames sent, 18 with the marker read |
+| `20261111_134428_G5_g5_plateA_3dof_compare` | compare, 3DoF, 224 s, 1349 frames sent, 1008 measurements |
+| `20261111_134823_G5_g5_plateA_compare` | compare, 6DoF, 218 s, 1119 frames sent, 761 measurements |
+| `20261111_135213_Demo_demo_3dof` | demo, 70 s, **no result: the glasses disconnected** |
+| `20261111_135339_Demo_demo_3dof` | demo, 143 s, completed |
+
+- **The clock checks pass in the three gate runs and the second demo.** Each has `qpc ABSOLUTE`
+  with a live `hmd_ns`, and every lock carries `age_src=hmd` (1121, 843 and 1102 lock events).
+  `GetHMDTimeNanos` answered 6542 of 6545 and 5179 of 5182 calls. `head_clamped=0`.
+- **The first demo is excluded.** `NativePerception+Start` reported `GlassesDisconnect` at start,
+  `hmd_ns` was 0, and all 337 lock events used the fallback (`age_src=per_frame`). The glasses
+  dropped off at 25.6 s. The fallback worked as designed, but the run measures nothing.
+- **Compare was named and ran once:** `compare_mapping NAMED order=euro,hysteresis,latest`. So
+  there are 60 s of still time per run, against 120 s on 6 and 9 Nov, and one rating per method.
+- **No camera death.** Every stream window ended on `lag`; none reached the 30 s limit.
+
+### Results against 6 and 9 Nov
+
+| measure | 6 Nov 3DoF / 6DoF | 9 Nov 3DoF / 6DoF | **11 Nov 3DoF / 6DoF** | Phase 2 target |
+|---|---|---|---|---|
+| still-block time in lock gaps > 1 s (`blind`) | 28 % / 42 % | 22 % / 50 % | **6 % / 24 %** | ≤ 14 % / ≤ 21 % |
+| camera fps by fifth (`blind`) | - / 17-20 → 11 | 22-23.5 / 23 → 11 | 24 flat / 23.5-24 → 19.5-21 | (record) |
+| CPU clock by fifth (`blind`) | - | 220 flat / 220 → 190 | 222 flat / 220 → 173-185 | (record) |
+| stream windows, median length (`blind`) | 48 / 86 windows | 47, 7.2 s / 82, 3.5 s | **10, 23.0 s / 21, 7.1 s** | fewer, longer |
+| One Euro still jitter / error (`filters`) | 1.2 mm/s / 1.3 mm (6DoF) | 1.1 / 0.8 and 2.5 / 2.6 | **0.9 / 0.6 and 1.8 / 1.7** | ≤ 1.2 mm/s / ≤ 1.3 mm |
+| turning jump as run (`latency`) | 5.7-6.9 mm (fixed age) | 2.5 / 2.1 mm; exact age 2.0 / 1.8 | **1.8 / 1.3 mm** (exact age, as run) | ≤ 3 mm |
+| best residual on the exact age (`latency`) | - | −20 / 0 ms | **−10 / 0 ms** | within ±20 ms |
+| cam_ts → arrival, median / p90 (`stages`) | - | 187 / 345 and 185 / 355 ms | 569 / 981 and 545 / 1018 ms | (record) |
+| cam_ts → sent, median / p90 (`stages`) | - | 205 / 364 ms | 581 / 1003 and 558 / 1026 ms | (record) |
+| cam_ts → shown, median (`stages`) | - | 336 / 331 ms | **701 / 680 ms** (p90 1132 / 1126) | ≤ 150 ms (latency half) |
+| detection, median / p90 (`stages`) | 54 ms | 55.7 / 89.6 and 55.3 / 98.8 ms | 51.8 / 81.1 and 54.8 / 85.4 ms | (record) |
+
+The stages we own are unchanged from 9 Nov: copy 0.2 ms, send 4.7-4.9, to service 2.7-3.6,
+apply wait 10.6-11.7, display 32.5 (medians).
+
+### 1. Did the 1.0 s threshold and the 30 s window cut the blind time? Yes
+
+- **3DoF: 22 % → 6 %.** The gate (≤ 14 %) is met. Per still block: 9 %, 0 %, 9 %.
+- **6DoF: 50 % → 24 %.** It is half of 9 Nov but misses the gate (≤ 21 %) by 3 points. Per still
+  block: 19 %, 28 %, 25 %.
+- **Move blocks:** 60 % and 66 % (9 Nov: 76 % and 81 %). **Rate blocks:** 10 % and 34 % (32 % and
+  52 %).
+- **The gain is fewer restarts, not cheaper ones.** A restart still costs a median 1.85 s (3DoF)
+  and 1.99 s (6DoF) between locks, as on 9 Nov (1.87 and 2.11 s). There were 9 and 20 restarts,
+  against 41 and 75 with locks either side on 9 Nov.
+- **The queue reaches 1.0 s in a median 23 s (3DoF) and 7 s (6DoF).** The 30 s window never
+  applied.
+- **Are the runs comparable?**
+  - *3DoF: yes.* Both days ran at full clock for the whole run (220-222 %), with 22-24 camera fps.
+  - *6DoF: in kind, not exactly.* Both runs lost clock after the first minute (to 190 % on 9 Nov,
+    to 173-185 % on 11 Nov). The camera held up better on 11 Nov: 18.4 fps inside the stream
+    windows (median; lowest window 14.3) against 15.1 (lowest 3.9). `blind`'s 11 fps for 9 Nov
+    also counts the time the camera was off between windows. Part of the 6DoF gain may therefore
+    be a less starved decoder rather than the threshold.
+  - The 3DoF run is cool and the 6DoF run warm on both days, so 3DoF against 6DoF is not
+    like-for-like on either.
+
+### 2. What did the longer windows cost? Latency doubled; accuracy did not suffer
+
+- **Frame age at sending (`cam_ts → sent`):** 581 / 1003 ms (3DoF) and 558 / 1026 ms (6DoF),
+  median / p90, against 205 / 364 ms on 9 Nov. That is 2.8 times older.
+- **Total (`cam_ts → shown`):** 701 and 680 ms median, against 336 and 331 ms. The decode queue is
+  now about 470 ms of it (median), up from about 105 ms.
+- **The still error does not grow with frame age.** Locks in the still blocks, binned by the
+  logged `age_ms`; the error is the distance of the plate's corners from the ±1 s median of the
+  measurements (as in `filters`), median in mm:
+
+  | frame age | 3DoF: n, raw, One Euro | 6DoF: n, raw, One Euro |
+  |---|---|---|
+  | under 250 ms | 56, 0.68, 0.34 | 87, 0.90, 1.74 |
+  | 250-500 ms | 77, 0.86, 0.48 | 60, 0.66, 1.48 |
+  | 500-750 ms | 72, 0.90, 0.39 | 66, 0.98, 1.34 |
+  | over 750 ms | 139, 0.81, 0.52 | 88, 0.76, 1.25 |
+
+  A frame 0.75-1.0 s old gives the same error as a fresh one. For a fixed target the age costs
+  nothing once it is exact. It still costs reaction time for anything that moves.
+- These bins come from a one-off script over the `lock` and `filters` events, not from a
+  `xreal_gates` command.
+
+### 3. Is the exact age right? Yes
+
+- **Best residual: −10 ms (3DoF) and 0 ms (6DoF)**, inside ±20 ms.
+- **Turning jump as run: 1.8 mm (n = 154) and 1.3 mm (n = 86)**, under the 3 mm gate and the
+  lowest so far, with frames up to 1.0 s old. Still: 0.9 and 0.8 mm.
+- A fixed age would be wrong by hundreds of ms here: the jump is 6.4-7.1 mm at +160 ms.
+- **Timecode:** the marker was drawn 40 ms (median, p90 53, n = 18) before the `cam_ts` of the
+  frame showing it. 9 Nov gave 44 ms. `cam_ts` is the exposure.
+- `GetHeadPoseAtTime` matches Unity's head to 0.00-0.06° (column-major, z flipped), as before.
+
+### 4. The 6DoF still check (Phase 0): not met, and the measurements are not the cause
+
+- **One Euro in 6DoF: 1.8 mm/s and 1.7 mm**, against ≤ 1.2 mm/s and ≤ 1.3 mm. It improved on
+  9 Nov (2.5 / 2.6) and 7 Nov (3.9 mm error). Per block the error is 1.6, 1.8 and 1.7 mm.
+- **The raw measurements are good.** The `latest` error is 0.9 mm, half of 9 Nov's 1.8 mm and
+  close to the 6 Nov baseline (0.7 mm).
+- **What One Euro lags is a slow movement of the measurement, not noise.** Within a still block
+  the measured plate position wanders 2.8-3.8 mm (median distance from the block median) in
+  6DoF, against 1.0-1.5 mm in 3DoF. One Euro at its 0.1 Hz minimum cutoff follows that late.
+  The error does not fall in fresher frames (table above), so the frame age is not the cause
+  either.
+- **The head was not quite as still as in the run that passed.** `pose.csv`, median head speed in
+  the still blocks:
+
+  | 6DoF run | head speed | One Euro still error |
+  |---|---|---|
+  | 6 Nov (baseline) | 2.0-2.8 mm/s | 1.3 mm |
+  | 9 Nov | 2.4-6.0 mm/s | 2.6 mm |
+  | 11 Nov | 2.6-3.6 mm/s | 1.7 mm |
+
+  In 3DoF the head turned 0.24-0.47°/s in the still blocks.
+- **Correction (12 Nov): that head speed is mostly tracker drift, not the wearer.** The plate is
+  fixed, so with a perfect tracker its measured world position stays put however the head moves.
+  It does not. Over 2 s inside the still blocks, the plate's world position moves with the
+  tracker's head position, in the same direction:
+
+  | 6DoF run | tracker head move over 2 s, median | plate-in-world move, median | correlation | share along the head move |
+  |---|---|---|---|---|
+  | 6 Nov | 2.2 mm | 2.7 mm | 0.94 | 0.84 |
+  | 7 Nov | 5.0 mm | 4.9 mm | 0.87 | 0.80 |
+  | 9 Nov | 4.1 mm | 3.7 mm | 0.98 | 0.90 |
+  | 11 Nov | 2.5 mm | 2.6 mm | 0.81 | 0.90 |
+
+  So 80-90 % of the head movement the tracker reports in a still block did not happen: the
+  camera, which sees the plate to under 1 mm, does not see it. The 6DoF position drifts by a few
+  mm over seconds while standing still, and the overlay has to follow it.
+- **No One Euro setting meets both still gates on these runs.** A sweep of the minimum cutoff
+  (0.1-0.8 Hz) and β (2-10) on the 11 Nov 6DoF run trades one for the other: 1.8 mm/s and 1.7 mm
+  at the default, 2.0 and 1.3 at β 10, 2.3 and 1.3 at 0.2 Hz, 3.1 and 0.9 at 0.5 Hz. The drift
+  itself moves the measurement by about 1.3 mm/s, so following it closely is already over the
+  jitter gate. The default stays.
+- **Verdict.** In three sessions since 6 Nov the 6DoF still gate was not repeated: 3.9, 2.6,
+  1.7 mm. The cause is the tracker's position drift, not the filter, the frame age or the wearer.
+  The 6 Nov baseline was the run with the least drift, so the gate (1.3 mm, 1.2 mm/s) was set on
+  a good day. The check goes to the Beam Pro (B5) together with a drift measurement of its own:
+  glasses at rest, 6DoF, plate in view.
+- These two results come from one-off scripts over the `lock` events and the `filters` replay.
+- **3DoF meets it:** 0.9 mm/s and 0.6 mm, the best run so far.
+
+### 5. The named comparison: ratings and measurements agree
+
+`filters`, mean over the still blocks (jitter mm/s / error mm), and Jack's one rating per method:
+
+| | latest | One Euro | hysteresis |
+|---|---|---|---|
+| 3DoF | 6.4 / 0.5 | **0.9 / 0.6** | 0.2 / 1.4 |
+| 3DoF rating | 3 | **4** | 3 |
+| 6DoF | 5.6 / 0.9 | **1.8 / 1.7** | 1.6 / 3.7 |
+| 6DoF rating | 3 | **4** | 3 |
+
+- **One Euro is rated best in both modes.** It is near the calmest and near the most accurate.
+- **Latest** is the most accurate and shakes three to seven times more. **Hysteresis** is the
+  calmest and sits about twice as far off.
+- With the names shown, the ratings are the same in both runs. The blind ratings of 9 Nov were
+  not (One Euro 3.5 in 3DoF, 2.0 in 6DoF).
+- **One Euro stays the default.** One rating per method is thin evidence, but nothing here
+  argues for a change.
+
+### 6. Demo: too short for the heat question
+
+- **The completed demo ran 2.4 min, not 5-10.** Camera 21.5 → 19.5 fps and clock 223 → 177 % by
+  fifth; 13 stream windows of 10.8 s (median), all ended on `lag`.
+- **35 % of the time after the first lock was in gaps over 1 s.** The wearer looks around
+  freely, so this is an upper bound on the camera's own blind time.
+- **Keys:** T (targets on) at 26 s; F three times (hysteresis at 50 s, latest at 59 s, One Euro
+  again at 73 s); V four times (points, lines, both, points). The grid and the Eye view stayed
+  off. Esc ended it.
+- Whether the camera keeps up over 5-10 minutes with the 1.0 s threshold is **not answered** on
+  the Surface.
+
+### Other observations
+
+- **The alignment differed between the two runs.** 3DoF was saved at x −18.9 mm, yaw −0.3°
+  (82 s); 6DoF at x +31.6 mm, yaw +0.5° (31 s). Pitch +0.9° and roll +1.0° did not change. The
+  cause is not investigated.
+- **6DoF reported InsufficientLight five times**, all in the move blocks.
+- **Most failed frames are "1 marker, need 2"** (109 and 79): the plate at the edge of the view.
+- Unity rendered at 27 fps. The hottest zone read 51-52 °C while the clock fell, as in §23.
+
+### What this settles for the Beam Pro
+
+- **Frame age.** The exact age holds on the PC up to 1 s of age. On the Beam Pro, B1's clock
+  question is only whether `cam_ts` is on the same clock as `GetHMDTimeNanos` there.
+- **Restart threshold.** 1.0 s cut the blind time to a quarter (3DoF) and a half (6DoF) with no
+  loss of still accuracy or turning accuracy. It is the starting setting if B1 shows a decoder
+  queue on Android. Its price is a correction 0.6-1.0 s old.
+- **Latency.** On this decoder, blind time and latency cannot both be met. Exposure → shown is
+  now 680-700 ms against a target of 150 ms. Whether Android has the queue at all is B1.
+- **PC reference for B5:** 3DoF still 0.9 mm/s and 0.6 mm; 6DoF still 1.8 mm/s and 1.7 mm;
+  turning jump 1.8 and 1.3 mm; still blind time 6 % and 24 %; detection 52-55 ms.
+
+### Commands (from `python/`, `R` = `../unity_projects/xreal_pc_gates/GateRuns/runs`)
+
+```
+python -m xreal_gates import --keep-zip ../unity_projects/xreal_pc_gates/GateRuns/_imported/GateRuns_CODY_0526_20261111_135614.zip
+python -m xreal_gates summary
+python -m xreal_gates blind   R/20261111_134428_G5_g5_plateA_3dof_compare R/20261111_134823_G5_g5_plateA_compare R/20261111_135339_Demo_demo_3dof
+python -m xreal_gates stages  R/20261111_134428_G5_g5_plateA_3dof_compare R/20261111_134823_G5_g5_plateA_compare
+python -m xreal_gates latency R/20261111_134428_G5_g5_plateA_3dof_compare R/20261111_134823_G5_g5_plateA_compare
+python -m xreal_gates filters R/20261111_134428_G5_g5_plateA_3dof_compare R/20261111_134823_G5_g5_plateA_compare
+python -m xreal_gates stages  R/20261111_134231_G5_g5_timecode_3dof
+```
+
+`blind` now also reports a run without protocol blocks (the demo): the share of time in lock
+gaps over 1 s from the first lock (0.3.010). The per-block blind time, the restart cost, the
+head speed and the age bins come from a one-off script over `events.csv` and `pose.csv`.

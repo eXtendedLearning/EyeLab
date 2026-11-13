@@ -48,6 +48,10 @@ another agent session on this repo. Stop after each gate for my results.
 
 ## First task: the 0.3.009 Surface session
 
+> **Done (2026-11-11, build 0.3.010).** The session ran on 11 Nov; the results are guide §26 and
+> the closing status in `docs/tasks/T5.1-eye-latency.md`. The reference numbers for B5 are in
+> §26, "What this settles for the Beam Pro".
+
 Jack runs build 0.3.009 (launcher `[OK]` for `2026-11-10T10:02:25Z`) on the Surface and drops the
 exported zip in `GateRuns/_imported` or `GateRuns/_inbox`. The protocol is guide §25, "Session
 0.3.009":
@@ -148,8 +152,9 @@ are under `unity_projects/xreal_pc_gates/GateRuns/runs/` on the desktop (gitigno
 |---|---|---|
 | Eye calibration with the 25 mm ChArUco board | RMS 0.47 px, fx 623.9 at 1280x720; vendor fx is 2.7 % short | §20-22, `python/xreal_gates/calib.py` |
 | Plate A pose from markers plus printed saddle points | detection 55 ms median per frame on the Surface | `python/xreal_gates/targets.py` |
-| Each frame paired with the head pose at its own capture time | turning jump 1.8-2.5 mm (was 5.7-6.9 with a fixed age) | §24-25 |
-| Lock filters: latest, One Euro (default), hysteresis | 3DoF still blocks: One Euro jitter 1.1 mm/s, error 0.8 mm | §20, §25, `LockAnchor.cs` |
+| Each frame paired with the head pose at its own capture time | turning jump 1.3-1.8 mm with the exact age, frames up to 1 s old (was 5.7-6.9 with a fixed age) | §24-26 |
+| Lock filters: latest, One Euro (default), hysteresis | One Euro still blocks: 0.9 mm/s, 0.6 mm (3DoF); 1.8 mm/s, 1.7 mm (6DoF, gate 1.3 mm not met) | §20, §25-26, `LockAnchor.cs` |
+| Stream restarts at 1.0 s of decoder lag | still time without a lock 6 % (3DoF), 24 % (6DoF); exposure → overlay 680-700 ms | §26 |
 | View offset (boresight) set by eye | about 1.3°, kept as an angle; Tab MOVE/ROTATE alignment | §23-24, `ViewOffset.cs` |
 | Testers' UX: compact HUD, named movement cues, thin drawing, demo with toggles | liked ("all great improvements", 9 Nov) | §24-25 |
 
@@ -194,6 +199,101 @@ Use this table as a starting point and verify every row in the code. Files are u
 | `Clocks.Qpc` (kernel32), `run_gates.bat`, Surface launcher, timecode on the Surface screen | **PC-only** | the timecode *method* is portable: show the marker on any second screen |
 | Python pose service `python/xreal_gates/pose_service.py`, `targets.py`, `calib.py` | **portable as Step C** | runs on a PC; the Beam Pro talks to it over Wi-Fi |
 | `stages`, `latency`, `filters`, `chain`, `anchor` analysis tools | **portable** | given the same log columns |
+
+### Verified against the code (2026-11-12, build 0.3.010)
+
+The table above is the 10 Nov starting point, kept as written. This is the result of checking
+each row in the code. "3.1.0" is the Android SDK installed in `eyelab_xreal/Packages/com.xreal.xr`;
+"3.1.2" is the PC beta the gate project uses. Nothing here has run on Android: "compiles" and
+"exists" are read from source, not observed.
+
+**Verdicts that changed**
+
+| item | 10 Nov | verified | why |
+|---|---|---|---|
+| `WebSocketPoseBridge.cs` | portable | **rework for Wi-Fi** | see "The bridge" below |
+| `GateArgs.cs` | (not listed) | **PC-only input** | reads `Environment.GetCommandLineArgs()`; an Android app has none. Needs intent extras or a config file pushed with `adb` |
+| XR start-up in `GateController` (`Connect`, `StartXR`, `EnterXR`, the glasses-connect events) | part of "split" | **PC-only** | uses `XREALSessionManager.OnGlassesConnect` / `OnStartSubsystems`, which exist only in `com.xreal.xr.experimental` (PC beta). 3.1.0 has no such events |
+| `DeviceInfoProbe.cs` | (not listed) | **mixed** | `XREALExperimentalPlugin` version and monitor calls are PC beta only; the `XREALPlugin` calls (intrinsics, pose from head, feature flags) exist in 3.1.0 |
+| `DisplayProbe.cs` | (not listed) | **PC-only** | `user32.dll` |
+| `Clocks.Qpc` | PC-only | **PC-only source, but it does not break Android** | the kernel32 calls are wrapped and fall back to `Stopwatch`; `Clocks.Absolute` then reads false |
+| Python pose service | portable as Step C | **portable with changes** | see "The bridge" below |
+
+**Verdicts confirmed**
+
+| item | verdict | evidence |
+|---|---|---|
+| `IArucoPoseBridge.cs` | portable | `System` and `UnityEngine` only; the signature is ADR-001's (`IsAvailable`, `EstimatePoseAsync(YGrayImage, ulong, CancellationToken)`, `OnLatencyMeasured`) |
+| `LockAnchor.cs` | portable | `System` and `UnityEngine` maths only; time is passed in, not read |
+| `ViewOffset.cs` | portable | `JsonUtility` and `System.IO` under `Application.persistentDataPath`. Confirm at B0 that this path can be pulled with `adb` |
+| head history and pairing (`RecordHead`, `HeadAt`, `HeadSpeed`, `WorldPose`, `CvRotationToUnity`) | portable, extract | Unity maths and `Time.realtimeSinceStartupAsDouble`; the only platform inputs are the frame age and the head transform |
+| `NativeClock` (`GetHMDTimeNanos`, `GetHeadPoseAtTime`) | verify on Android | `DllImport("XREALXRPlugin")` resolves to `libXREALXRPlugin.so`. The 3.1.0 Android library contains both names, and `SetNativeLogCallback`. Signatures and clock domain are not checked. Every call is wrapped, so a failure falls back to the estimated age |
+| `CameraSource.cs`, `VendorCameraSource.cs`, `DrainingCameraSource.cs` | portable; verify the source | every vendor call they use exists in 3.1.0 (`GetTimeStamp`, `GetResolution`, `GetYUVFormatTextures`, `OnRGBCameraUpdate`, `IsCapturing`, `StartCapture`, `StopCapture`, `TryAcquireLatestImage`, `TryGetRGBCameraDataPlane`, …) |
+| `CameraProbe.cs`, `PoseProbe.cs` | portable | `CameraProbe` needs the clock abstraction (`Clocks`, `NativeClock`); `PoseProbe` uses `InputDevices` and `XREALPlugin.GetTrackingType`, both in 3.1.0 |
+| `NativeTracking.cs` | verify on Android | the native log callback already carries `AOT.MonoPInvokeCallback`, as IL2CPP needs |
+| `GateProtocol.cs`, `GateOverlay.cs` | portable | no platform calls. `GateOverlay` falls back to `Shader.Find("Unlit/Color")`: keep the material assigned so the shader is in the APK |
+| `GateHud.cs` | portable drawing, PC input | IMGUI (`OnGUI`) runs on Android; the side-by-side split is decided from the screen's aspect and must be checked on the Beam Pro |
+| `Speaker.cs` | PC-only | starts `powershell.exe` |
+| `GateRunLog.cs` | portable | plain CSV through `System.IO`; the default root is `persistentDataPath/GateRuns` |
+| `PerfProbe.cs` | PC-only | `pdh.dll` counters and ACPI thermal zones. The camera-rate columns are computed from our own counters and carry over |
+| stream restarts, `UpdateHeat`, cooldown, bursts | PC-only | all inside `GateController` (`StreamLoop`, `UpdateHeat`, `RunCooldown`, `BurstLoop`) |
+| keyboard input | PC-only | 30 `Input` / `KeyCode` uses in `GateController`, 3 in `Speaker`; none elsewhere |
+| `Editor/BuildGates.cs`, `ProjectSetup.cs`, `GateSceneBuilder.cs` | PC build tooling | build Windows players; the batch-mode pattern is reusable for the APK |
+| `blind`, `filters`, `latency`, `chain`, `anchor` | portable | read `events.csv`, `pose.csv`, `run.json` only. `import` takes a pulled folder (`archive.import_folder`) |
+| `stages` | portable with one assumption | it subtracts Unity and service times directly. That holds only when both run on one machine's clock |
+
+**The bridge: what Step C over Wi-Fi needs** (`WebSocketPoseBridge.cs`, `python/xreal_gates/pose_service.py`, `ws.py`)
+
+- **The address is fixed** to `ws://127.0.0.1:port` on both sides. The service binds loopback only.
+- **Frames go as raw Y planes,** 0.9 MB each: about 5 MB/s at the 5.5-6.4 frames/s the Surface
+  sent. That was chosen for localhost.
+- **No timeout, no reconnect, no session restart.** One request in flight; a lost reply blocks
+  the next frame for good.
+- **`hello` sends `run_dir`,** a path on the Unity machine, and the service writes
+  `pose_service.csv` and `pose_service.json` into it. Over Wi-Fi the service needs its own log
+  folder, and `import` has to join the two.
+- **`hello` hard-codes 1280x720.** `TrySendLockFrame` hard-codes `BottomUp = true` at the send
+  site instead of asking the camera source.
+- **The service stamps stages with its own `perf_counter`.** On another machine that is another
+  clock, so the stage table needs a clock-offset estimate in the protocol.
+- **This is not the protocol the documents specify.** CONTEXT.md "Frame transport protocol (v0)"
+  and T2.6 §1.2 define a 20-byte `ELAB` header, JPEG, `no_pose`, sessions and reconnects. The
+  gate project speaks its own: a 4-byte length, a JSON header, raw Y, several targets per reply.
+  T2.6 §2.1 also sketches a different `IArucoPoseBridge` from ADR-001's. Step 2 has to pick one
+  of each.
+- `ClientWebSocket` and `JsonUtility` are expected to work under IL2CPP on Android, but that is
+  not observed. The main project already references `NativeWebSocket` and Newtonsoft JSON.
+
+**Other things the check found**
+
+- **`HeadAt` clamps.** When the history does not reach back to the capture time it uses the
+  oldest sample and counts `head_clamped` (0 in every run so far). T2.6 §5.1 and CONTEXT open
+  issue 3 say such a pose is rejected, not clamped. There is no tracking-epoch reset either.
+- **The gate project has no C# tests and no assembly definition:** everything compiles into
+  `Assembly-CSharp`. The filters are tested only through their Python ports
+  (`test_lockfilters.py`). The main project already has `com.unity.test-framework`.
+- **Two Unity versions and two SDKs.** `eyelab_xreal` is on 6000.4.5f1 with 3.1.0; the gate
+  project is on 6000.6.5f1 with 3.1.2. The 3.1.2 package also ships Android plugins
+  (`libXREALXRPlugin.so`, `nr_algo.aar`), so it may serve both targets. Not tested.
+- **`GateController.cs` is 2 191 lines.** The portable part is roughly lines 876-1200 (pose
+  chain, head history, send and apply) plus the alignment maths (`RotateAboutTarget`,
+  `TryTargetCentreInHead`).
+
+**Findings: which carry over**
+
+| finding | carries to the Beam Pro? |
+|---|---|
+| Eye calibration method, 25 mm board, intrinsics | yes, if the Android stream has the same resolution and crop (B4) |
+| pairing each frame with the head pose of its capture | yes; the age source is B1's question |
+| lock filters and their trade-off, One Euro default | yes |
+| view offset as a boresight angle, set by eye | yes; per wearer, set again on the device |
+| compact HUD, named cues, thin drawing, demo toggles | yes, with new input |
+| 6DoF position drifts a few mm over seconds while standing still (§26) | to measure again: tracking may run differently on the Beam Pro |
+| `cam_ts` on the HMD clock, HMD clock = QPC | Windows-specific; B1 |
+| decoder queue, 2 s restart cost, 680-700 ms latency at the 1.0 s threshold | PC-specific; B1 says whether a queue exists |
+| Surface throttling, fan, cooldown, zone temperatures | PC-specific |
+| rows bottom-up | PC observation; check on Android |
+| stage times (detection 52-55 ms on the Surface's CPU) | the service will run on another PC over Wi-Fi; B3 |
 
 ## Decisions that stand until Jack changes them
 

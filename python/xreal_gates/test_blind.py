@@ -34,6 +34,15 @@ class BlindTest(unittest.TestCase):
         self.assertAlmostEqual(fr["still"][0], 3.5, delta=0.01)   # 9.75 -> 13.25
         self.assertEqual(fr["move"], (10.0, 10.0))
 
+    def test_demo_without_blocks_counts_from_first_lock(self):
+        from xreal_gates.blind import blind_after_first_lock
+        # locks at 10, 10.5, 11, then a 4 s hole, 15, and the run ends at 15.5 -> 4 s blind of 5.5.
+        ev = [_ev(0, "demo", "ALL_OFF"), _lock(10), _lock(10.5), _lock(11), _lock(15), _ev(15.5, "gate_result")]
+        blind, total = blind_after_first_lock(ev)
+        self.assertAlmostEqual(blind, 4.0)
+        self.assertAlmostEqual(total, 5.5)
+        self.assertIsNone(blind_after_first_lock([_ev(0, "demo", "ALL_OFF")]))
+
     def test_report_and_health(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)

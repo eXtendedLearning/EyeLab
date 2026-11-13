@@ -73,6 +73,20 @@ def blind_fractions(events: List[dict], gap_s: float = GAP_S) -> Dict[str, Tuple
     return {k: (v[0], v[1]) for k, v in out.items()}
 
 
+def blind_after_first_lock(events: List[dict], gap_s: float = GAP_S) -> Optional[Tuple[float, float]]:
+    """Runs without protocol blocks (the demo): (blind seconds, total seconds) from the first lock to the end.
+
+    The wearer looks around freely, so this is an upper bound on the camera's own blind time.
+    """
+    ts = [t for t in (_float(e.get("t_unity")) for e in events) if t is not None]
+    locks = sorted(float(e["t_unity"]) for e in events
+                   if e.get("event") == "lock" and "world=" in e.get("detail", "") and _float(e.get("t_unity")) is not None)
+    if not locks or max(ts) <= locks[0]:
+        return None
+    pts = locks + [max(ts)]
+    return sum(b - a for a, b in zip(pts, pts[1:]) if b - a > gap_s), max(ts) - locks[0]
+
+
 def camera_health(run_dir: Path) -> dict:
     perf = _rows(Path(run_dir) / "perf.csv")
     fps = [v for v in (_float(r.get("cam_fps")) for r in perf) if v is not None]
@@ -92,11 +106,17 @@ def camera_health(run_dir: Path) -> dict:
 
 def report(run_dir: Path) -> List[str]:
     run_dir = Path(run_dir)
-    fr = blind_fractions(_rows(run_dir / "events.csv"))
-    if not fr:
-        return [f"{run_dir.name}: no protocol steps or locks in events.csv"]
-    parts = [f"{k} {100 * b / t:.0f} % of {t:.0f} s" for k, (b, t) in fr.items() if t > 0]
-    lines = [f"{run_dir.name}: time in lock gaps > {GAP_S:.0f} s: " + ", ".join(parts)]
+    events = _rows(run_dir / "events.csv")
+    fr = blind_fractions(events)
+    if fr:
+        parts = [f"{k} {100 * b / t:.0f} % of {t:.0f} s" for k, (b, t) in fr.items() if t > 0]
+        lines = [f"{run_dir.name}: time in lock gaps > {GAP_S:.0f} s: " + ", ".join(parts)]
+    else:
+        whole = blind_after_first_lock(events)
+        if whole is None:
+            return [f"{run_dir.name}: no protocol steps or locks in events.csv"]
+        lines = [f"{run_dir.name}: no protocol blocks; time in lock gaps > {GAP_S:.0f} s from the first lock: "
+                 f"{100 * whole[0] / whole[1]:.0f} % of {whole[1]:.0f} s (free viewing: an upper bound)"]
     h = camera_health(run_dir)
     if h["cam_fps_fifths"]:
         lines.append(f"  camera fps by fifth of the run: {h['cam_fps_fifths']}; CPU clock %: {h['clock_fifths']}")
@@ -107,4 +127,4 @@ def report(run_dir: Path) -> List[str]:
     return lines
 
 
-__all__ = ["report", "blind_fractions", "camera_health", "kind_of"]
+__all__ = ["report", "blind_fractions", "blind_after_first_lock", "camera_health", "kind_of"]

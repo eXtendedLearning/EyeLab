@@ -16,7 +16,7 @@ Stdlib only: the ``.bat`` launchers run this file directly
 import re
 import sys
 
-__version__ = "0.3.009"
+__version__ = "0.3.010"
 
 APP_NAME = "EyeLab"
 

@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.3.009<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.3.010<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,27 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.3.010) Last Surface session analysed (11 Nov, build 0.3.009; `XREAL-PC-GATES-G1-G3.md` §26).
+  It is the PC reference for the Beam Pro gates.
+  - **The exact frame age holds:** residual −10 / 0 ms and a turning jump of 1.8 mm (3DoF) and
+    1.3 mm (6DoF), with frames up to 1.0 s old.
+  - **Restarts at 1.0 s of lag cut the still blind time** to 6 % (3DoF) and 24 % (6DoF), from
+    22 % and 50 %. The still error does not grow with frame age.
+  - **The price is latency:** exposure → overlay shown is 680-700 ms median (was about 330 ms).
+  - **One Euro still blocks:** 0.9 mm/s and 0.6 mm (3DoF); 1.8 mm/s and 1.7 mm (6DoF, gate
+    ≤ 1.3 mm not met). Rated best in both modes; it stays the default.
+  - **T5.1 closed as paused** (`docs/tasks/T5.1-eye-latency.md`): the gates met on the Surface and
+    those left for the Beam Pro are listed there.
+  - **The 6DoF still error is tracker drift.** In still blocks, 80-90 % of the head movement the
+    tracker reports is not seen by the camera, and no One Euro setting meets both still gates
+    against it (guide §26).
+  - **Portable or PC-only, verified in the code** (`docs/BEAMPRO-HANDOVER-2026-11-10.md`): the
+    pose bridge and the Python service are localhost-only and need rework for Wi-Fi; XR start-up,
+    input, speech and the performance probe are PC-only; the lock filters, pose chain, view
+    offset, protocol, overlay and log formats carry over.
+  - **`python -m xreal_gates blind`** also reports runs without protocol blocks (the demo): time
+    in lock gaps over 1 s from the first lock.
 
 - (0.3.009) XREAL gates, T5.1 Phase 1 result and Phase 2's first step (`XREAL-PC-GATES-G1-G3.md` §25).
   - **The Eye's `cam_ts` is the PC's performance counter.** The HMD clock is QPC in ns, and the
