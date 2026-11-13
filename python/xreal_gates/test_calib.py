@@ -15,12 +15,17 @@ def _render_board(board, K, rvec, tvec, ppm=8.0):
     page = board.generateImage((int(cols * sq * 1000 * ppm), int(rows * sq * 1000 * ppm)), marginSize=0)
     R = cv2.Rodrigues(np.asarray(rvec, float))[0]
     A = np.array([[1 / (1000 * ppm), 0, 0], [0, 1 / (1000 * ppm), 0], [0, 0, 1]])
-    Hm = K @ np.column_stack([R[:, 0], R[:, 1], np.asarray(tvec, float)]) @ A
-    out = np.full((720, 1280), 128, np.uint8)
-    warped = cv2.warpPerspective(page, Hm, (1280, 720), flags=cv2.INTER_LINEAR)
-    mask = cv2.warpPerspective(np.full_like(page, 255), Hm, (1280, 720)) > 0
-    out[mask] = warped[mask]
-    return out
+    # Integrate over sensor pixels rather than aliasing sharp board edges at
+    # the output resolution. Direct warping biased the recovered focal length
+    # by 1.17% with OpenCV 4.14 (the same fixture passed with 4.13).
+    scale = 3
+    # resize maps pixel centres: u_high = scale * (u_low + 0.5) - 0.5.
+    sensor_scale = np.array([[scale, 0, (scale - 1) / 2],
+                             [0, scale, (scale - 1) / 2], [0, 0, 1]])
+    Hm = sensor_scale @ K @ np.column_stack([R[:, 0], R[:, 1], np.asarray(tvec, float)]) @ A
+    warped = cv2.warpPerspective(page, Hm, (1280 * scale, 720 * scale),
+                                 flags=cv2.INTER_LINEAR, borderValue=128)
+    return cv2.resize(warped, (1280, 720), interpolation=cv2.INTER_AREA)
 
 
 class CalibTest(unittest.TestCase):

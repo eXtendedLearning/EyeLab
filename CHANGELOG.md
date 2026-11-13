@@ -8,12 +8,20 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.3.010<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.3.011<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
+
+### Fixed
+
+- (0.3.011) CI calibration fixture: supersample the synthetic ChArUco images
+  and downsample with pixel-centre alignment to reduce raster aliasing. Direct
+  rendering produced a 1.174% focal-length error with OpenCV 4.14 on both CI
+  platforms; the original 1% acceptance limit is retained. Calibration tests
+  pass with OpenCV 4.13 and 4.14; production calibration is unchanged.
 
 ### Added
 
