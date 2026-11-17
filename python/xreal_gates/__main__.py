@@ -11,6 +11,7 @@
 - ``blind RUN [RUN ...]``: time without locks per block kind, camera fps and stream windows (0.3.009).
 - ``timecode [--seconds S]``: fullscreen optical timecode for the camera-to-app latency (T5.1 Phase 1).
 - ``serve --target plateA[,board25] [--calib YAML] [--port 8765]``: the G5 and demo pose service (ADR-001 Step C).
+- ``bp RUN [RUN ...]``: Beam Pro probe runs (T6.0 inventory, T6.1 Eye chain and timecode).
 """
 
 from __future__ import annotations
@@ -62,6 +63,8 @@ def main(argv=None) -> int:
     p_srv.add_argument("--calib", type=Path, help="calibration YAML (default: repo calibration, else vendor)")
     p_srv.add_argument("--port", type=int, default=8765)
     p_srv.add_argument("--idle-timeout", type=float, default=600.0)
+    p_bp = sub.add_parser("bp", help="Beam Pro probe runs (T6.0, T6.1)")
+    p_bp.add_argument("runs", nargs="+", type=Path)
     args = parser.parse_args(argv)
     root: Path = args.root
 
@@ -126,6 +129,12 @@ def main(argv=None) -> int:
         from .chain import report as chain_report
         for line in chain_report(args.runs):
             print(line)
+        return 0
+    if args.cmd == "bp":
+        from .beampro import report as bp_report
+        for run in args.runs:
+            for line in bp_report(run):
+                print(line)
         return 0
     if args.cmd == "serve":
         from .pose_service import serve

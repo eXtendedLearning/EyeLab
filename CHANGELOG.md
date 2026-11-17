@@ -8,15 +8,62 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.3.011<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.000<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
 
+## [0.4.000] — 2026-11-17
+
+Milestone: the target host moves to Android. EyeLab builds as an APK on the desktop and runs on the XREAL
+Beam Pro with the One Pro glasses as display (gate B0), and an inventory of what an app sees on the Beam Pro
+(cameras, IMU, displays, clocks) is recorded (gate BS). The Surface PC-beta path is paused at its 0.3.010
+reference. Everything below up to `[0.3.000]` ships in this cut; builds 0.3.001-0.3.011 were committed as
+such, the Beam Pro work as 0.4.000.
+
+### Added
+
+- (0.4.000) Beam Pro probes for gates B0, BS and B1 (`docs/tasks/T6.0-beampro-bringup.md`,
+  `docs/tasks/T6.1-eye-chain-latency.md`); B0 and BS run on the device 2026-11-17, B1 not yet:
+  - `eyelab_xreal/Assets/EyeLab/Probes/`: a probe scene builder, a runner configured by intent extras,
+    `probe.json` or on-screen buttons, an inventory probe (Camera2, sensors, displays, packages, timed IMU
+    recording through `Assets/Plugins/Android/BeamProInventory.java`), an Eye chain probe (`cam_ts` next to
+    MONOTONIC, BOOTTIME, REALTIME and the HMD clock at arrival, drained-frame counts, saved Y planes) and an
+    optical timecode drawn on the Beam Pro's own screen (`TimecodeBits.cs`, DICT_6X6_1000).
+  - `ProbeSceneBuilder.BuildApkBatch`: creates the Probes scene and builds `eyelab_xreal/build/eyelab_probes.apk`
+    in one batch-mode call (debug key), so the agent can build without the Editor UI.
+  - `CAMERA` added to the XREAL additional permissions (the SDK adds the `android.permission.` prefix; the full
+    name gave a doubled, invalid permission in the first build, checked with `aapt2`).
+  - First probe APK built on the desktop with Unity 6000.4.5f1 (0 errors) and installed on the Beam Pro over
+    wireless adb; the XREAL session comes up with the glasses. A **Quit EyeLab** button on the Beam Pro screen
+    (the app cannot be closed from the glasses).
+  - `MainThreadWatchdog.cs` (diagnostic for the bring-up): logs the loaded scene and the main-thread frame rate.
+  - Gates B0 and BS run on the Beam Pro (2026-11-17): the app runs with the glasses and the screen buttons work;
+    the inventory run shows one rear camera to apps (no stereo), a 401 Hz IMU on BOOTTIME with 2 ms delivery,
+    the glasses as a 3840x1080@60 (or 1920x1080@90) display, and the HMD clock on CLOCK_MONOTONIC. Recorded in
+    `docs/HARDWARE.md`, `docs/CAPABILITIES.md` rows 21-24 and `docs/tasks/T6.0-beampro-bringup.md`.
+  - `python -m xreal_gates bp` names a folder without `run.json` instead of printing an empty report.
+  - `beampro.bat`: adb check, read-only adb inventory, install, choose probe, pull, analyse.
+  - `python -m xreal_gates bp RUN` (`python/xreal_gates/beampro.py`, tests in `test_beampro.py`): finds the
+    clock domain and unit of `cam_ts`, age drift, IMU rates and delivery lag, timecode decoding.
+  - `docs/adr/0004-on-device-pose-beampro.draft.md` (proposed): live pose on the device for the Beam Pro.
+
 ### Fixed
 
+- (0.4.000) `tools/patch_xreal_sdk.ps1` repacked `nr_common.aar` with backslashed entry names
+  (`libs\framework.jar`, Windows PowerShell 5.1 `ZipFile.CreateFromDirectory`); the Android build dropped
+  `libs/framework.jar` and the first APK aborted at XR start on the Beam Pro with
+  `jni::NameResolutionException: com/xreal/framework/net/binder/Connection`. The script now rebuilds the AAR
+  entry by entry from `nr_common.aar.original`, changes only the manifest package, checks its own output, and
+  repairs an AAR patched by the old version when run again.
+- (0.4.000) The probes APK ran SampleScene: a `data.unity3d` from a May 2026 export in Unity's Gradle project was
+  packed next to the fresh scene files and loaded instead. `BuildApkBatch` deletes it before the build and fails
+  when an APK holds both. Start-up permission dialogs (Unity storage via `ForceSDCardPermission`, now off; CAMERA,
+  now asked only when a camera probe starts) opened unseen on the Beam Pro screen.
+- (0.4.000) The probe buttons on the Beam Pro screen did not react to taps: no EventSystem in the scene or in the
+  SDK's virtual controller prefab. `ProbeRunner` creates one (`InputSystemUIInputModule`) when none exists.
 - (0.3.011) CI calibration fixture: supersample the synthetic ChArUco images
   and downsample with pixel-centre alignment to reduce raster aliasing. Direct
   rendering produced a 1.174% focal-length error with OpenCV 4.14 on both CI

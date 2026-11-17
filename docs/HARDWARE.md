@@ -5,7 +5,7 @@
 > each machine can and cannot do with the glasses. Update it whenever hardware is
 > bought, lent, or a capability is verified or refuted.
 >
-> Last updated: 2026-11-10 (Beam Pro arriving in about a week; PC-only work stops, features must also run on One Pro + Eye + Beam Pro. Earlier: 2026-10-16 (fan: light G4 runtime sustainable for 5 min. Earlier: 2026-10-14 afternoon: Eye stream arrives at 30 fps over USB but is decoded on the host CPU, which falls behind with 6DoF even unthrottled; radiator doubles the first run's full-clock time; desktop DP-in card not to be bought. Earlier the same day: Surface throttles under sustained XR load; Eye buffer is bottom-up. Earlier: 2026-10-13 Surface runs of the PC beta 3.1.2 gate harness: Smart App Control must be off; Eye frames and 6DoF each observed, concurrent use degrades. Earlier: 2026-10-09 desktop USB/NCM and TCP preflight; PC beta sample inspected; emulator assessment corrected).)
+> Last updated: 2026-11-17 (Beam Pro runs the EyeLab probe APK with the glasses; its cameras, IMU and displays as an app sees them; wireless adb. Earlier: 2026-11-10 (Beam Pro arriving in about a week; PC-only work stops, features must also run on One Pro + Eye + Beam Pro. Earlier: 2026-10-16 (fan: light G4 runtime sustainable for 5 min. Earlier: 2026-10-14 afternoon: Eye stream arrives at 30 fps over USB but is decoded on the host CPU, which falls behind with 6DoF even unthrottled; radiator doubles the first run's full-clock time; desktop DP-in card not to be bought. Earlier the same day: Surface throttles under sustained XR load; Eye buffer is bottom-up. Earlier: 2026-10-13 Surface runs of the PC beta 3.1.2 gate harness: Smart App Control must be off; Eye frames and 6DoF each observed, concurrent use degrades. Earlier: 2026-10-09 desktop USB/NCM and TCP preflight; PC beta sample inspected; emulator assessment corrected).))
 
 ## Glasses
 
@@ -21,8 +21,40 @@
   Do not let Nebula
   update the firmware again until the camera/IMU access routes are confirmed —
   the unofficial routes depend on firmware behaviour.
-- **XREAL Beam Pro: arriving.** Jack picks it up in about a week (expected around 2026-11-17;
-  record the date and model, 8 GB / 256 GB, on arrival). **Direction (2026-11-10, Jack):** stop
+- **XREAL Beam Pro: in hand (2026-11-16).** Model `X4000` (`X4000_EEA`), Android 14 (API 34), build
+  `X4000_X502_260518_ROW` after the 2026-11-17 updates; 8 GB RAM and 256 GB storage (Settings → About,
+  Jack's screenshot of 2026-11-17; Unity reports 7.5 GB usable), 8 cores (4 big + 4 little). XREAL runtime
+  package `com.xreal.evapro.nebula` (MyGlasses) 2.2.2. **Glasses firmware: still not recorded** (the
+  screenshot is the Beam Pro's About page; read it in MyGlasses → glasses → about, or wherever MyGlasses
+  shows it). Serial, MAC and IP addresses are deliberately not written here. Automatic app and OTA updates turned off
+  in MyGlasses after those updates (Step 0 of T6.0). SoC `SM6450`, security patch 2026-05-01.
+  XREAL packages as of 2026-11-17 (inventory run `20261117_220142_inventory`): `com.xreal.evapro.nebula` 2.2.2
+  (2873), `.store` 1.2.56, `.camera` 1.1.47, `.systemupdate` 1.0.34, `.id.universal` 1.3.0,
+  `com.xreal.analytics` 1.0.17.
+  **What an app sees (gate BS, 2026-11-17):**
+  - Cameras: Camera2 lists **two ids only**, `0` back and `1` front, neither a logical multi-camera, no physical
+    sub-cameras. The second rear camera is not reachable by a third-party app, so Beam Pro stereo is off the
+    table. Rear `0`: array 4088x3080, 2.16 mm, f/2.2, factory intrinsics fx 1684 / fy 1683 px, centre (2040,
+    1536), about 101° horizontal field of view, distortion not given (zeros), lens offset (-9.5, -0.1, 0) mm from
+    the reference, timestamps `realtime` (BOOTTIME), AE ranges up to 30 fps, hardware level 3. Front `1`:
+    3264x2448, 2.76 mm, intrinsics without a principal point (not usable as given).
+  - IMU: TDK-InvenSense ICM-4x6xx accelerometer and gyroscope (calibrated and uncalibrated), **401 Hz**, event
+    timestamps on BOOTTIME, delivered to the app 2.1 ms after the event (median; p95 3.1 ms), 20 s on a table.
+  - Displays: the glasses are Android display 18 "HDMI Screen", **3840x1080 @ 60 Hz** (side by side, the mode in
+    use) or 1920x1080 @ 90 Hz; the Beam Pro screen is 1080x2400 @ 60 Hz.
+  - Clocks: in the EyeLab app the XREAL HMD clock reads CLOCK_MONOTONIC (each HMD reading falls between two
+    MONOTONIC readings taken around it). Camera and IMU stamps are BOOTTIME; BOOTTIME − MONOTONIC was 5969.045 s
+    and stayed constant to 2 µs over the run (it grows only while the device sleeps).
+  **Running EyeLab on it:** start it from MyGlasses with the glasses connected and tap **App** on the XREAL
+  controller screen to reach EyeLab's own buttons; leave with the **Quit EyeLab** button (the app cannot be
+  closed from the glasses). With the Beam Pro screen asleep the app is paused. Wireless debugging is on
+  (Jack, 2026-11-17), so adb works while the glasses are plugged in.
+  **USB:** while the Beam Pro is connected to the desktop for adb, the glasses cannot be connected
+  (Jack, 2026-11-17). adb over USB and an XR run therefore alternate; an XR app started over adb without the
+  glasses fails to create its XREAL session (the runtime service does not answer). Logs of an XR run are
+  read afterwards: the app's own run folders and the SDK's auto-logcat in
+  `Android/data/it.univpm.eyelab/cache/auto_log`. Wireless debugging removes the swap (on since 2026-11-17).
+  Earlier text, kept for provenance: **Direction (2026-11-10, Jack):** stop
   PC-only work and build features that also run on XREAL One Pro + Eye + Beam Pro; hand-over in
   `BEAMPRO-HANDOVER-2026-11-10.md`. Earlier: ordered 2026-05-14, not arrived (confirmed
   2026-10-06). **No Android phone with USB-C video output** is available

@@ -17,7 +17,8 @@ MonoBehaviour:
   InitialInputSource: 0
   VirtualController: {fileID: 1406232319260624, guid: afed05c45059824429a2a2322bf6a6c1, type: 3}
   SupportMultiResume: 0
-  AddtionalPermissions: []
+  AddtionalPermissions:
+  - CAMERA
   EnableAutoLogcat: 1
   EnableNativeSessionManager: 0
   SupportDevices: 0100000002000000

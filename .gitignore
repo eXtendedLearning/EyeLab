@@ -105,3 +105,6 @@ unity_projects/xreal_pc_gates/Assets/Samples.meta
 unity_projects/xreal_pc_gates/GateRuns/
 unity_projects/xreal_pc_gates/Assets/EyeLabGates/Resources/EyeLabGatesBuildInfo.txt
 unity_projects/xreal_pc_gates/Assets/EyeLabGates/Resources/EyeLabGatesBuildInfo.txt.meta
+
+# Beam Pro probe runs pulled over adb (T6.0, T6.1)
+python/beampro_runs/
