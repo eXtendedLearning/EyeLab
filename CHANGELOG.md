@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.001<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.002<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,25 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.4.002) T6.2 probes (`docs/tasks/T6.2-head-pose-and-timecode.md`): `HeadPoseProbe.cs` (gate B2: XR head pose
+  and tracking state every frame, mode switch timing, tracking events; with the Eye, the native head pose at
+  each frame's `cam_ts` and at arrival through `GetHeadPoseAtTime`); `StereoProbe.java` (gate BS-2: opens the
+  hidden logical rear camera 3 with both physical streams and logs both sensor timestamps); `GlassesView.cs`
+  (black see-through clear, camera driven by the XR head pose, status 2 m ahead, a 40 cm square fixed in the
+  room). New buttons; Eye chain default 2 min (runs ≤ 3 min).
+- (0.4.002) `python -m xreal_gates bp` reports head, eye-pose and stereo runs, and the first Eye frame of each
+  timecode id.
+
+### Fixed
+
+- (0.4.002) Timecode: each id held 100 ms and drawn grey on black (0.4.001 changed it every 20 ms, faster than
+  the Eye's exposure, and saturated it). Analyser: logical cameras flagged by capability 11 (was 18); draw →
+  `cam_ts` computed on the clock `cam_ts` is on (was BOOTTIME only).
+- (0.4.002) Glasses showed Unity's sky, head-locked, and no status (Jack, 0.4.001): the Probes scene had no
+  tracked camera and cleared to the skybox.
+
+### Added (0.4.001)
 
 - (0.4.001) Probes: the status line is repeated head-locked in the glasses (world-space canvas 1.5 m in front
   of the XR camera) and the Beam Pro screen is kept on while EyeLab runs (it paused the app when it slept).

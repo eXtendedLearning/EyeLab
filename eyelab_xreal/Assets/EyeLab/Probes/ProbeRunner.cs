@@ -14,7 +14,7 @@ namespace EyeLab.Probes
     [Serializable]
     public sealed class ProbeConfig
     {
-        public string probe = "";          // inventory | chain | timecode | all
+        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | all
         public float seconds = 0f;         // 0 = the probe's default
         public float imu_seconds = 20f;
         public int save_every = 0;         // chain: 0; timecode: 1
@@ -38,7 +38,7 @@ namespace EyeLab.Probes
         [SerializeField] float m_StartDelay = 3f;
 
         Text m_Status;
-        Text m_GlassesStatus;
+        GlassesView m_Glasses;
         GameObject m_Panel;
         bool m_Busy;
 
@@ -77,6 +77,10 @@ namespace EyeLab.Probes
             if (p == "inventory" || p == "all") yield return Inventory(cfg);
             if (p == "chain" || p == "all") yield return Chain(cfg, timecode: false);
             if (p == "timecode" || p == "all") yield return Chain(cfg, timecode: true);
+            if (p == "head") yield return Head(cfg, Unity.XR.XREAL.TrackingType.MODE_6DOF, false);
+            if (p == "head_eye") yield return Head(cfg, Unity.XR.XREAL.TrackingType.MODE_6DOF, true);
+            if (p == "head_eye_3dof") yield return Head(cfg, Unity.XR.XREAL.TrackingType.MODE_3DOF, true);
+            if (p == "stereo") yield return Stereo(cfg);
             if (m_Panel != null) m_Panel.SetActive(true);
             m_Busy = false;
         }
@@ -121,7 +125,7 @@ namespace EyeLab.Probes
         {
             yield return RequestCamera();
             Debug.Log("[EyeLab probe] camera permission " + (HasCamera() ? "granted" : "NOT granted, the Eye may still work through the XREAL service"));
-            float seconds = cfg.seconds > 0 ? cfg.seconds : timecode ? 60f : 300f;
+            float seconds = cfg.seconds > 0 ? cfg.seconds : timecode ? 60f : 120f;   // runs ≤ 3 min (Jack, 2026-11-18)
             int saveEvery = timecode ? Mathf.Max(1, cfg.save_every) : cfg.save_every;
             using (var run = new ProbeRun(timecode ? "timecode" : "chain"))
             {
@@ -138,6 +142,63 @@ namespace EyeLab.Probes
                 }
                 if (tc != null) tc.End();
                 SetStatus((timecode ? "Timecode" : "Chain") + " done: " + Path.GetFileName(run.Dir));
+            }
+        }
+
+        IEnumerator Head(ProbeConfig cfg, Unity.XR.XREAL.TrackingType mode, bool withEye)
+        {
+            if (withEye) yield return RequestCamera();
+            float seconds = cfg.seconds > 0 ? cfg.seconds : mode == Unity.XR.XREAL.TrackingType.MODE_6DOF ? 120f : 60f;
+            string name = withEye ? (mode == Unity.XR.XREAL.TrackingType.MODE_6DOF ? "head_eye" : "head_eye_3dof") : "head";
+            using (var run = new ProbeRun(name))
+            {
+                run.Meta("config", JsonUtility.ToJson(cfg));
+                yield return HeadPoseProbe.Run(run, seconds, mode, withEye, SetStatus);
+                SetStatus("Head done: " + Path.GetFileName(run.Dir));
+            }
+        }
+
+        /// <summary>T6.2 BS-2: open the hidden logical rear camera "3" (physical 0 + 2) for 30 s, Beam Pro on the table.</summary>
+        IEnumerator Stereo(ProbeConfig cfg)
+        {
+            yield return RequestCamera();
+            float seconds = cfg.seconds > 0 ? cfg.seconds : 30f;
+            using (var run = new ProbeRun("stereo"))
+            {
+                run.Meta("config", JsonUtility.ToJson(cfg));
+#if UNITY_ANDROID && !UNITY_EDITOR
+                AndroidJavaClass helper = null;
+                AndroidJavaObject activity = null;
+                try
+                {
+                    using (var up = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                        activity = up.GetStatic<AndroidJavaObject>("currentActivity");
+                    helper = new AndroidJavaClass("it.univpm.eyelab.probes.StereoProbe");
+                    string started = helper.CallStatic<string>("start", activity, run.Dir, "3");
+                    run.Meta("stereo_start", started);
+                    Debug.Log("[EyeLab probe] stereo start " + started);
+                }
+                catch (Exception e) { run.Meta("stereo_start", "error " + e.Message); helper = null; }
+                if (helper != null)
+                {
+                    float t0 = Time.realtimeSinceStartup;
+                    while (Time.realtimeSinceStartup - t0 < seconds)
+                    {
+                        SetStatus($"Stereo: Beam Pro on the table, rear cameras to the scene | {seconds - (Time.realtimeSinceStartup - t0):F0} s");
+                        yield return new WaitForSecondsRealtime(0.5f);
+                    }
+                    string stopped;
+                    try { stopped = helper.CallStatic<string>("stop"); } catch (Exception e) { stopped = "error " + e.Message; }
+                    run.Meta("stereo_stop", stopped);
+                    Debug.Log("[EyeLab probe] stereo stop " + stopped);
+                    helper.Dispose();
+                }
+                activity?.Dispose();
+#else
+                run.Meta("stereo_start", "not on Android");
+                yield return null;
+#endif
+                SetStatus("Stereo done: " + Path.GetFileName(run.Dir));
             }
         }
 
@@ -196,12 +257,12 @@ namespace EyeLab.Probes
             Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
             m_Status = MakeText(canvas.transform, font, new Vector2(0f, 0.9f), new Vector2(1f, 1f), 28);
-            BuildGlassesStatus(font);
+            m_Glasses = GlassesView.Create(font);
             m_Panel = new GameObject("EyeLab Probe Buttons", typeof(RectTransform), typeof(VerticalLayoutGroup));
             m_Panel.transform.SetParent(canvas.transform, false);
             var prt = (RectTransform)m_Panel.transform;
-            prt.anchorMin = new Vector2(0.02f, 0.35f);
-            prt.anchorMax = new Vector2(0.35f, 0.88f);
+            prt.anchorMin = new Vector2(0.02f, 0.12f);
+            prt.anchorMax = new Vector2(0.45f, 0.88f);
             prt.offsetMin = prt.offsetMax = Vector2.zero;
             var layout = m_Panel.GetComponent<VerticalLayoutGroup>();
             layout.spacing = 12;
@@ -209,9 +270,13 @@ namespace EyeLab.Probes
             layout.childControlHeight = true;
             layout.childControlWidth = true;
 
-            AddButton(font, "Inventory + IMU 20 s", new ProbeConfig { probe = "inventory" });
-            AddButton(font, "Eye chain 5 min", new ProbeConfig { probe = "chain" });
             AddButton(font, "Timecode 60 s", new ProbeConfig { probe = "timecode" });
+            AddButton(font, "Head 6DoF 2 min", new ProbeConfig { probe = "head" });
+            AddButton(font, "Head 6DoF + Eye 2 min", new ProbeConfig { probe = "head_eye" });
+            AddButton(font, "Head 3DoF + Eye 1 min", new ProbeConfig { probe = "head_eye_3dof" });
+            AddButton(font, "Stereo 30 s (on table)", new ProbeConfig { probe = "stereo" });
+            AddButton(font, "Eye chain 2 min", new ProbeConfig { probe = "chain" });
+            AddButton(font, "Inventory + IMU 20 s", new ProbeConfig { probe = "inventory" });
             AddAction(font, "Quit EyeLab", () => { Debug.Log("[EyeLab probe] quit button"); Application.Quit(); });
             Debug.Log("[EyeLab probe] buttons built on " + (canvas.gameObject.name));
         }
@@ -277,34 +342,10 @@ namespace EyeLab.Probes
             return t;
         }
 
-        /// <summary>
-        /// The status line again, head-locked 1.5 m in front of the XR camera, so the wearer sees what runs and
-        /// when it ends (B0 drew nothing in the glasses). A world-space uGUI canvas, whose shader handles
-        /// single-pass stereo.
-        /// </summary>
-        void BuildGlassesStatus(Font font)
-        {
-            Camera cam = Camera.main;
-            if (cam == null) { Debug.LogWarning("[EyeLab probe] no main camera, no status in the glasses"); return; }
-            var cgo = new GameObject("EyeLab Glasses Status", typeof(RectTransform), typeof(Canvas));
-            var canvas = cgo.GetComponent<Canvas>();
-            canvas.renderMode = RenderMode.WorldSpace;
-            canvas.worldCamera = cam;
-            var rt = (RectTransform)cgo.transform;
-            rt.SetParent(cam.transform, false);
-            rt.sizeDelta = new Vector2(1000f, 160f);                  // canvas units; 1 unit = 1 mm below
-            rt.localScale = Vector3.one * 0.001f;
-            rt.localPosition = new Vector3(0f, -0.25f, 1.5f);
-            rt.localRotation = Quaternion.identity;
-            m_GlassesStatus = MakeText(cgo.transform, font, Vector2.zero, Vector2.one, 48);
-            m_GlassesStatus.alignment = TextAnchor.MiddleCenter;
-            m_GlassesStatus.color = new Color(0.3f, 1f, 0.4f);
-        }
-
         void SetStatus(string s)
         {
             if (m_Status != null) m_Status.text = s;
-            if (m_GlassesStatus != null) m_GlassesStatus.text = s;
+            if (m_Glasses != null) m_Glasses.SetText(s);
             Debug.Log("[EyeLab probe] " + s);
         }
     }

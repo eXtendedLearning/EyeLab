@@ -1,4 +1,4 @@
-"""Beam Pro probe runs (T6.0 gate BS, T6.1 gate B1). ``python -m xreal_gates bp RUN [RUN ...]``.
+"""Beam Pro probe runs (T6.0 gate BS, T6.1 gate B1, T6.2 gates B2, B1t, BS-2). ``python -m xreal_gates bp RUN ...``.
 
 A run is a folder pulled from ``/sdcard/Android/data/it.univpm.eyelab/files/BeamProRuns/`` holding
 ``run.json`` and, by probe:
@@ -7,7 +7,12 @@ A run is a folder pulled from ``/sdcard/Android/data/it.univpm.eyelab/files/Beam
   recording (``type,event_ns,boot_ns,mono_ns,v0,v1,v2,accuracy``).
 - ``chain``: ``eye_frames.csv`` (one row per kept Eye frame: ``cam_ts`` next to every clock at arrival).
 - ``timecode``: as ``chain`` plus ``draws.csv`` (the marker drawn on the Beam Pro screen) and
-  ``frames/*.pgm`` (saved Eye Y planes), decoded here.
+  ``frames/*.pgm`` (saved Eye Y planes), decoded here. From 0.4.002 each id is held 100 ms and ``draws.csv``
+  has one row per id change; the latency also uses only the first Eye frame that shows each id.
+- ``head``, ``head_eye``, ``head_eye_3dof``: ``head.csv`` (XR head pose and tracking state every Update),
+  ``events.csv`` (mode switches, tracking changes, jumps); with the Eye also ``eye_frames.csv`` and
+  ``eye_pose.csv`` (native head pose at ``cam_ts`` and at arrival, 4x4 floats in memory order).
+- ``stereo``: ``stereo.csv`` (per capture of the hidden logical rear camera: both physical sensor timestamps).
 
 Nothing assumes the clock domain of ``cam_ts``: :func:`clock_domain` tries every clock and unit and keeps
 the one that gives a positive, stable frame age.
@@ -190,13 +195,16 @@ def timecode_report(run: Path, clock: str = "boot_ns") -> List[str]:
     out = [f"   timecode host: {meta.get('timecode_host', '?')}, draws {len(draws_rows)}"]
     if not draws_rows:
         return out + ["   no draws.csv"]
+    best, _ = clock_domain(frames)
+    if best is not None and "set_" + best.clock in draws_rows[0]:
+        clock = best.clock   # draws and arrivals on the clock cam_ts is on, so draw -> cam_ts is meaningful
     set_col = "set_" + clock
     draws = [(int(r["counter"]), int(r["id"]), float(r[set_col])) for r in draws_rows if _num(r.get(set_col, ""))]
     dd = sorted(b[2] - a[2] for a, b in zip(draws, draws[1:]))
     if dd:
         out.append(f"   draw period median {quantile(dd, 0.5) / 1e6:.2f} ms")
     lat, cam_minus_draw, decoded, orient = [], [], 0, {}
-    best, _ = clock_domain(frames)
+    first: Dict[int, Tuple[float, float]] = {}   # draw counter -> (arrival - draw, cam_ts - draw) of its first frame
     for r in frames:
         saved = [s for s in (r.get("saved") or "").split("|") if s.startswith("frames/")]
         if not saved or not (run / saved[0]).exists():
@@ -211,8 +219,12 @@ def timecode_report(run: Path, clock: str = "boot_ns") -> List[str]:
         if m is None:
             continue
         lat.append((arr - m[1]) / 1e6)
+        cmd = float("nan")
         if best is not None and best.clock == clock:
-            cam_minus_draw.append((float(r["cam_ts"]) * UNITS[best.unit] - m[1]) / 1e6)
+            cmd = (float(r["cam_ts"]) * UNITS[best.unit] - m[1]) / 1e6
+            cam_minus_draw.append(cmd)
+        if m[0] not in first:
+            first[m[0]] = ((arr - m[1]) / 1e6, cmd)
     sampled = sum(1 for r in frames if "frames/" in (r.get("saved") or ""))
     out.append(f"   decoded {decoded}/{sampled} saved frames; orientation {orient}")
     if lat:
@@ -221,6 +233,138 @@ def timecode_report(run: Path, clock: str = "boot_ns") -> List[str]:
     if cam_minus_draw:
         out.append(f"   draw -> cam_ts: median {quantile(cam_minus_draw, 0.5):.1f} ms, min {min(cam_minus_draw):.1f} "
                    "(negative = cam_ts is earlier than the draw it shows: not exposure time, or a clock offset)")
+    if first:
+        fl = [a for a, _ in first.values()]
+        fc = [c for _, c in first.values() if not math.isnan(c)]
+        line = (f"   first frame of each id (n {len(fl)}): draw -> arrival median {quantile(fl, 0.5):.1f} ms, "
+                f"p10 {quantile(fl, 0.1):.1f}, p90 {quantile(fl, 0.9):.1f}")
+        if fc:
+            line += (f"; draw -> cam_ts median {quantile(fc, 0.5):.1f} ms, p10 {quantile(fc, 0.1):.1f}, "
+                     f"p90 {quantile(fc, 0.9):.1f}")
+        out.append(line)
+    return out
+
+
+# ----------------------------------------------------------------------------- head pose (T6.2, gate B2)
+def rot_angle_deg(a: Sequence[float], b: Sequence[float]) -> float:
+    """Angle between the rotation parts of two 4x4 matrices stored in memory order. trace(A^T B) is the same for
+    row- and column-major storage, so the storage convention does not matter."""
+    tr = sum(a[r * 4 + c] * b[r * 4 + c] for r in range(3) for c in range(3))
+    return math.degrees(math.acos(max(-1.0, min(1.0, (tr - 1.0) / 2.0))))
+
+
+def translation(m: Sequence[float]) -> Tuple[float, float, float]:
+    """Column-major (translation in 12..14) when m[3], m[7], m[11] are zero, else row-major (3, 7, 11)."""
+    if abs(m[3]) + abs(m[7]) + abs(m[11]) < 1e-6:
+        return m[12], m[13], m[14]
+    return m[3], m[7], m[11]
+
+
+def quat_angle_deg(q1: Sequence[float], q2: Sequence[float]) -> float:
+    d = abs(sum(a * b for a, b in zip(q1, q2)))
+    return math.degrees(2.0 * math.acos(min(1.0, d)))
+
+
+def still_spread(rows: List[Dict[str, str]], window_s: float = 5.0) -> str:
+    """Position spread in the window where the head rotated least: how quiet the pose is at rest."""
+    pts = [(float(r["mono_ns"]) / 1e9, (float(r["px"]), float(r["py"]), float(r["pz"])),
+            (float(r["qx"]), float(r["qy"]), float(r["qz"]), float(r["qw"]))) for r in rows if r.get("tracked") == "1"]
+    best = None
+    j = 0
+    for i in range(len(pts)):
+        while j < len(pts) and pts[j][0] - pts[i][0] < window_s:
+            j += 1
+        if j - i < 20 or pts[j - 1][0] - pts[i][0] < 0.9 * window_s:
+            continue
+        rot = max(quat_angle_deg(pts[i][2], p[2]) for p in pts[i:j])
+        if best is None or rot < best[0]:
+            best = (rot, i, j)
+    if best is None:
+        return ""
+    rot, i, j = best
+    seg = [p[1] for p in pts[i:j]]
+    c = [sum(p[k] for p in seg) / len(seg) for k in range(3)]
+    d = [math.dist(p, c) * 1000 for p in seg]
+    return (f"stillest {window_s:.0f} s window: rotation within {rot:.2f} deg, position spread median "
+            f"{quantile(d, 0.5):.1f} mm, max {max(d):.1f} mm")
+
+
+def head_report(run: Path) -> List[str]:
+    run = Path(run)
+    rows = load_csv(run / "head.csv")
+    meta = load_json(run)
+    out = [f"== {run.name}  probe {meta.get('probe', '?')}  app {meta.get('app_version', '?')}  mode requested "
+           f"{meta.get('head_mode_requested', '?')}, at start {meta.get('head_mode_at_start', '?')}, "
+           f"at end {meta.get('head_mode_at_end', '?')}"]
+    for e in load_csv(run / "events.csv"):
+        out.append(f"   event {e.get('event')}: {e.get('detail')}")
+    if not rows:
+        return out + ["   no head.csv rows"]
+    t = [float(r["mono_ns"]) / 1e9 for r in rows]
+    dur = t[-1] - t[0]
+    tracked = [r.get("tracked") == "1" for r in rows]
+    rate = (len(rows) - 1) / dur if dur > 0 else float("nan")
+    out.append(f"   {len(rows)} head rows over {dur:.1f} s ({rate:.1f} Hz); tracked {100.0 * sum(tracked) / len(rows):.1f} %; "
+               f"tracking types {sorted({r.get('tracking_type', '') for r in rows})}")
+    first_tracked = next((i for i, k in enumerate(tracked) if k), None)
+    if first_tracked is not None:
+        out.append(f"   first tracked row {t[first_tracked] - t[0]:.2f} s after the first row")
+    pos = [(float(r["px"]), float(r["py"]), float(r["pz"])) for r, k in zip(rows, tracked) if k]
+    if len(pos) > 1:
+        path = sum(math.dist(a, b) for a, b in zip(pos, pos[1:]))
+        span = [max(p[i] for p in pos) - min(p[i] for p in pos) for i in range(3)]
+        steps = [math.dist(a, b) * 1000 for a, b in zip(pos, pos[1:])]
+        out.append(f"   position: path {path:.2f} m, span x {span[0]:.2f} y {span[1]:.2f} z {span[2]:.2f} m, "
+                   f"step p99 {quantile(steps, 0.99):.1f} mm, max {max(steps):.0f} mm")
+    still = still_spread(rows)
+    if still:
+        out.append("   " + still)
+    return out
+
+
+def eye_pose_report(run: Path) -> List[str]:
+    rows = load_csv(Path(run) / "eye_pose.csv")
+    if not rows:
+        return []
+    ok = [r for r in rows if r.get("cam_ok") == "1" and r.get("arr_ok") == "1"]
+    out = [f"   head pose at cam_ts and at arrival found for {len(ok)}/{len(rows)} frames "
+           f"(at cam_ts {sum(r.get('cam_ok') == '1' for r in rows)}, at arrival {sum(r.get('arr_ok') == '1' for r in rows)})"]
+    if not ok:
+        return out
+    ang, trans = [], []
+    for r in ok:
+        c = [float(r[f"c{i}"]) for i in range(16)]
+        a = [float(r[f"a{i}"]) for i in range(16)]
+        ang.append(rot_angle_deg(c, a))
+        trans.append(math.dist(translation(c), translation(a)) * 1000)
+    out.append(f"   head motion inside the frame age (pose at cam_ts vs at arrival): rotation median "
+               f"{quantile(ang, 0.5):.2f} deg, p90 {quantile(ang, 0.9):.2f}, max {max(ang):.2f}; translation median "
+               f"{quantile(trans, 0.5):.1f} mm, p90 {quantile(trans, 0.9):.1f}")
+    c0 = [float(ok[0][f"c{i}"]) for i in range(16)]
+    layout = "column-major (translation in 12..14)" if abs(c0[3]) + abs(c0[7]) + abs(c0[11]) < 1e-6 \
+        else "row-major (translation in 3, 7, 11)"
+    out.append("   matrix layout guess: " + layout)
+    return out
+
+
+# ----------------------------------------------------------------------------- stereo (T6.2, gate BS-2)
+def stereo_report(run: Path) -> List[str]:
+    run = Path(run)
+    meta = load_json(run)
+    out = [f"== {run.name}  stereo  app {meta.get('app_version', '?')}",
+           f"   start: {meta.get('stereo_start', '?')}", f"   stop: {meta.get('stereo_stop', '?')}"]
+    rows = load_csv(run / "stereo.csv")
+    if not rows:
+        return out + ["   no captures"]
+    pairs = [(float(r["ts_a"]), float(r["ts_b"])) for r in rows
+             if _num(r.get("ts_a", "")) is not None and _num(r.get("ts_b", "")) is not None]
+    out.append(f"   {len(rows)} captures, {len(pairs)} with both physical timestamps")
+    if len(pairs) > 1:
+        off = [(a - b) / 1e6 for a, b in pairs]
+        dur = (pairs[-1][0] - pairs[0][0]) / 1e9
+        rate = (len(pairs) - 1) / dur if dur > 0 else float("nan")
+        out.append(f"   rate {rate:.1f} Hz; timestamp offset a - b median {quantile(off, 0.5):.3f} ms, "
+                   f"p5 {quantile(off, 0.05):.3f}, p95 {quantile(off, 0.95):.3f}, max |offset| {max(abs(o) for o in off):.3f}")
     return out
 
 
@@ -259,7 +403,7 @@ def inventory_report(run: Path) -> List[str]:
     cams = meta.get("cameras") or {}
     out.append(f"   camera id list {cams.get('camera_id_list')}; concurrent sets {cams.get('concurrent_camera_ids')}")
     for c in cams.get("cameras", []):
-        logical = 18 in (c.get("capabilities") or [])  # REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA
+        logical = 11 in (c.get("capabilities") or [])  # REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA
         out.append(f"   cam {c.get('id')} {c.get('facing')}{' LOGICAL' if logical else ''}"
                    f"{'' if c.get('in_id_list') else ' (physical only)'}: physical {c.get('physical_ids')}, "
                    f"sync {c.get('sensor_sync_type')}, ts {c.get('timestamp_source')}, f {c.get('focal_lengths_mm')} mm, "
@@ -285,6 +429,13 @@ def report(run: Path) -> List[str]:
     probe = load_json(run).get("probe", "")
     if probe == "inventory":
         return inventory_report(run)
+    if probe == "stereo":
+        return stereo_report(run)
+    if probe.startswith("head"):
+        lines = head_report(run)
+        if (Path(run) / "eye_frames.csv").exists():
+            lines += chain_report(run)[1:] + eye_pose_report(run)
+        return lines
     lines = chain_report(run)
     if probe == "timecode":
         lines += timecode_report(run)

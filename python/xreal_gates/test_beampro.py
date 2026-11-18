@@ -105,5 +105,72 @@ class ReportPathTest(unittest.TestCase):
         self.assertIn("no run.json", lines[0])
 
 
+def _rz(deg, t=(0.0, 0.0, 0.0), column_major=True):
+    import math
+    c, s = math.cos(math.radians(deg)), math.sin(math.radians(deg))
+    m = [[c, -s, 0, t[0]], [s, c, 0, t[1]], [0, 0, 1, t[2]], [0, 0, 0, 1]]
+    if column_major:
+        return [m[r][k] for k in range(4) for r in range(4)]
+    return [m[r][k] for r in range(4) for k in range(4)]
+
+
+class HeadPoseTest(unittest.TestCase):
+    def test_rotation_angle_either_layout(self):
+        for cm in (True, False):
+            self.assertAlmostEqual(beampro.rot_angle_deg(_rz(0, column_major=cm), _rz(30, column_major=cm)), 30.0, places=4)
+
+    def test_translation_layout(self):
+        self.assertEqual(beampro.translation(_rz(10, (1, 2, 3), True)), (1, 2, 3))
+        self.assertEqual(beampro.translation(_rz(10, (1, 2, 3), False)), (1, 2, 3))
+
+    def test_eye_pose_report(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d)
+            cols = ["seq", "cam_ts", "arrival_hmd_ns", "cam_ok"] + [f"c{i}" for i in range(16)] + ["arr_ok"] + \
+                   [f"a{i}" for i in range(16)]
+            with open(run / "eye_pose.csv", "w", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(cols)
+                for k in range(5):
+                    w.writerow([k, 1, 2, 1] + _rz(0, (0, 0, 0)) + [1] + _rz(2, (0.01, 0, 0)))
+            text = "\n".join(beampro.eye_pose_report(run))
+        self.assertIn("found for 5/5", text)
+        self.assertIn("rotation median 2.00 deg", text)
+        self.assertIn("translation median 10.0 mm", text)
+        self.assertIn("column-major", text)
+
+    def test_head_report_still_window(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d)
+            (run / "run.json").write_text(json.dumps({"probe": "head", "head_mode_requested": "MODE_6DOF"}), encoding="utf-8")
+            with open(run / "head.csv", "w", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["unity_frame", "mono_ns", "tracking_type", "valid", "tracked", "state",
+                            "px", "py", "pz", "qx", "qy", "qz", "qw"])
+                for k in range(400):   # 10 s at 40 Hz, still, 1 mm alternating
+                    w.writerow([k, int(k * 25e6), "MODE_6DOF", 1, 1, 3, 0.001 * (k % 2), 0, 0, 0, 0, 0, 1])
+            text = "\n".join(beampro.report(run))
+        self.assertIn("tracked 100.0 %", text)
+        self.assertIn("rotation within 0.00 deg", text)
+        self.assertIn("position spread median 0.5 mm", text)
+
+
+class StereoTest(unittest.TestCase):
+    def test_offset(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d)
+            (run / "run.json").write_text(json.dumps({"probe": "stereo", "stereo_start": "{}"}), encoding="utf-8")
+            with open(run / "stereo.csv", "w", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["frame", "logical_ts", "phys_a", "ts_a", "phys_b", "ts_b", "boot_ns_at_result"])
+                for k in range(31):
+                    ta = int(k * 33_333_333)
+                    w.writerow([k, ta, "0", ta, "2", ta - 2_000_000, ta + 5])
+            text = "\n".join(beampro.report(run))
+        self.assertIn("31 captures, 31 with both", text)
+        self.assertIn("rate 30.0 Hz", text)
+        self.assertIn("offset a - b median 2.000 ms", text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -26,6 +26,36 @@ namespace EyeLab.Probes
         [return: MarshalAs(UnmanagedType.U1)]
         static extern bool GetHMDTimeNanosNative(ref ulong timeNs);
 
+        /// <summary>
+        /// <c>bool GetHeadPoseAtTime(uint64_t time_ns, float out[16])</c>: the native head pose at an HMD time as a 4x4
+        /// float matrix in memory order. Signature recovered from the Windows export (PC gates, 2026-11-09); the same
+        /// export is in the Android <c>libXREALXRPlugin.so</c>. Its convention is identified offline (T6.2).
+        /// </summary>
+        [DllImport("XREALXRPlugin", EntryPoint = "GetHeadPoseAtTime")]
+        [return: MarshalAs(UnmanagedType.U1)]
+        static extern bool GetHeadPoseAtTimeNative(ulong timeNs, [Out] float[] pose16);
+
+        static bool s_PoseBroken;
+        public static long PoseCalls { get; private set; }
+        public static long PoseOk { get; private set; }
+
+        /// <summary>The native head pose at HMD time <paramref name="timeNs"/>, or false (export missing, no pose).</summary>
+        public static bool HeadPoseAt(ulong timeNs, float[] pose16)
+        {
+            if (s_PoseBroken || timeNs == 0) return false;
+            try
+            {
+                PoseCalls++;
+                if (GetHeadPoseAtTimeNative(timeNs, pose16)) { PoseOk++; return true; }
+            }
+            catch (Exception e)
+            {
+                s_PoseBroken = true;
+                Errors += "pose: " + e.GetType().Name + ": " + e.Message + "; ";
+            }
+            return false;
+        }
+
         static bool s_LibcBroken, s_HmdBroken;
         public static string Errors { get; private set; } = "";
 

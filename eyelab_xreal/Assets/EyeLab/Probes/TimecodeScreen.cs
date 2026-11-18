@@ -7,7 +7,7 @@ namespace EyeLab.Probes
 {
     /// <summary>
     /// T6.1 (gate B1) optical timecode on the Beam Pro's own screen. A DICT_6X6_1000 marker whose id is a draw
-    /// counter mod 1000 is redrawn every Unity frame on the phone-screen canvas (the XREAL virtual controller's
+    /// counter mod 1000 is shown (one id per hold period, see below) on the phone-screen canvas (the XREAL virtual controller's
     /// canvas, rendered by a non-XR camera). Each draw is logged on the same clocks as the Eye frames
     /// (<c>draws.csv</c>), so frame arrival minus draw time needs no clock synchronisation. The Eye is pointed at
     /// the phone screen; the saved Eye frames are decoded offline (<c>python -m xreal_gates bp RUN</c>).
@@ -15,8 +15,15 @@ namespace EyeLab.Probes
     /// presentation delay plus the wait for the next exposure (0 .. 1 frame period). Same method as the Surface
     /// timecode (guide §24-25); the photodiode or slow-motion check calibrates the panel term later.</para>
     /// </summary>
+    /// <para>T6.2 (2026-11-18): the first run decoded no frame. A new id every Unity frame (20 ms) is shorter than
+    /// the Eye's exposure in a dim room, so most exposures held two ids; and white at full brightness saturated
+    /// the Eye. Each id is now held for <see cref="HoldSeconds"/> (3 camera frames) and drawn grey on black;
+    /// <c>draws.csv</c> has one row per id change. The analysis uses the first Eye frame that shows each id.</para>
     public sealed class TimecodeScreen : MonoBehaviour
     {
+        public const float HoldSeconds = 0.1f;
+        public const byte Grey = 150;
+        float m_ShownAt = -1f;
         const string File = "draws.csv";
         const string Header = "counter,id,unity_frame,set_mono_ns,set_boot_ns,set_real_ns,set_hmd_ns,set_mono_after_ns,set_unity_s,eof_mono_ns,eof_boot_ns";
 
@@ -63,7 +70,7 @@ namespace EyeLab.Probes
             m_Root.transform.SetParent(canvas.transform, false);
             m_Root.transform.SetAsLastSibling();
             var quiet = m_Root.GetComponent<Image>();
-            quiet.color = Color.white;
+            quiet.color = new Color32(Grey, Grey, Grey, 255);
             quiet.raycastTarget = false;
             var qrt = (RectTransform)m_Root.transform;
             qrt.anchorMin = qrt.anchorMax = qrt.pivot = new Vector2(0.5f, 0.5f);
@@ -83,16 +90,20 @@ namespace EyeLab.Probes
             raw.texture = m_Tex;
             raw.raycastTarget = false;
             m_Run.Meta("timecode_side_px", ProbeRun.F(side * 0.8f));
+            m_Run.Meta("timecode_hold_ms", ProbeRun.F(HoldSeconds * 1000f));
+            m_Run.Meta("timecode_grey", Grey.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
 
         void Update()
         {
             if (!m_Running) return;
+            if (m_ShownAt >= 0f && Time.realtimeSinceStartup - m_ShownAt < HoldSeconds) return;
+            m_ShownAt = Time.realtimeSinceStartup;
             int id = m_Counter % TimecodeBits.Count;
             for (int row = 0; row < 8; row++)
                 for (int col = 0; col < 8; col++)
                 {
-                    byte v = TimecodeBits.White(id, row, col) ? (byte)255 : (byte)0;
+                    byte v = TimecodeBits.White(id, row, col) ? Grey : (byte)0;
                     m_Pixels[(7 - row) * 8 + col] = new Color32(v, v, v, 255);   // texture row 0 is the bottom
                 }
             m_Tex.SetPixels32(m_Pixels);

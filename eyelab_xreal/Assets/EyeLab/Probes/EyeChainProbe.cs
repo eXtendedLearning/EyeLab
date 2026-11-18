@@ -39,6 +39,17 @@ namespace EyeLab.Probes
         ulong m_LastTs;
         Action m_OnDone;
         byte[] m_Copy;
+        bool m_PairPoses;
+        readonly float[] m_PoseCam = new float[16], m_PoseArr = new float[16];
+        const string PoseFile = "eye_pose.csv";
+        static readonly string PoseHeader = "seq,cam_ts,arrival_hmd_ns,cam_ok," + Cols("c") + ",arr_ok," + Cols("a");
+
+        static string Cols(string p)
+        {
+            var b = new StringBuilder();
+            for (int i = 0; i < 16; i++) { if (i > 0) b.Append(','); b.Append(p).Append(i); }
+            return b.ToString();
+        }
 
         public bool Running { get; private set; }
         public long Frames => m_Seq;
@@ -46,7 +57,9 @@ namespace EyeLab.Probes
 
         /// <param name="saveEvery">Save every n-th kept Y plane (0 = none) as PGM, downscaled by <paramref name="scale"/>.</param>
         /// <param name="snapshotEvery">Seconds between full-resolution Y snapshots (orientation, calibration check).</param>
-        public static EyeChainProbe Begin(ProbeRun run, float seconds, int saveEvery, int scale, float snapshotEvery, Action onDone)
+        /// <param name="pairPoses">Also log the native head pose at <c>cam_ts</c> and at arrival (T6.2, gate B2): <c>eye_pose.csv</c>.</param>
+        public static EyeChainProbe Begin(ProbeRun run, float seconds, int saveEvery, int scale, float snapshotEvery, Action onDone,
+                                          bool pairPoses = false)
         {
             var go = new GameObject("EyeLab EyeChainProbe");
             var p = go.AddComponent<EyeChainProbe>();
@@ -56,6 +69,7 @@ namespace EyeLab.Probes
             p.m_Scale = Mathf.Clamp(scale, 1, 8);
             p.m_SnapshotEvery = snapshotEvery;
             p.m_OnDone = onDone;
+            p.m_PairPoses = pairPoses;
             p.StartChain();
             return p;
         }
@@ -151,12 +165,32 @@ namespace EyeLab.Probes
                     havePlane ? size.x.ToString(CultureInfo.InvariantCulture) : "", havePlane ? size.y.ToString(CultureInfo.InvariantCulture) : "",
                     (acquired - 1).ToString(CultureInfo.InvariantCulture), Time.frameCount.ToString(CultureInfo.InvariantCulture),
                     arrival.Csv(), saved));
+                if (m_PairPoses)
+                {
+                    bool camOk = ProbeClocks.HeadPoseAt(newestTs, m_PoseCam);
+                    bool arrOk = ProbeClocks.HeadPoseAt(arrival.Hmd, m_PoseArr);
+                    m_Run.Row(PoseFile, PoseHeader, string.Join(",",
+                        m_Seq.ToString(CultureInfo.InvariantCulture), newestTs.ToString(CultureInfo.InvariantCulture),
+                        arrival.Hmd.ToString(CultureInfo.InvariantCulture), camOk ? "1" : "0", Floats(m_PoseCam, camOk),
+                        arrOk ? "1" : "0", Floats(m_PoseArr, arrOk)));
+                }
                 m_Seq++;
             }
             finally
             {
                 XREALPlugin.DisposeRGBCameraDataHandle(newest);
             }
+        }
+
+        static string Floats(float[] m, bool ok)
+        {
+            var b = new StringBuilder(16 * 12);
+            for (int i = 0; i < 16; i++)
+            {
+                if (i > 0) b.Append(',');
+                if (ok) b.Append(m[i].ToString("R", CultureInfo.InvariantCulture));
+            }
+            return b.ToString();
         }
 
         /// <summary>Binary PGM of the Y plane, box-downscaled by <paramref name="scale"/>, rows as delivered.</summary>
@@ -191,6 +225,7 @@ namespace EyeLab.Probes
             m_Run.Meta("eye_drained", m_Drained.ToString(CultureInfo.InvariantCulture));
             m_Run.Meta("eye_same_ts", m_SameTs.ToString(CultureInfo.InvariantCulture));
             m_Run.Meta("eye_saved_files", m_Saved.ToString(CultureInfo.InvariantCulture));
+            if (m_PairPoses) m_Run.Meta("head_pose_at_time", $"ok {ProbeClocks.PoseOk}/{ProbeClocks.PoseCalls}");
             Action done = m_OnDone;
             m_OnDone = null;
             Destroy(gameObject);
