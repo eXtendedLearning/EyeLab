@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.XR;
@@ -21,10 +20,16 @@ namespace EyeLab.Probes
     public sealed class GlassesView : MonoBehaviour
     {
         Camera m_Cam;
-        Text m_Text;
+        Text m_Text, m_Cue, m_Counter;
+        RectTransform m_Bar;
         Transform m_Reference;
-        bool m_Placed;
+        bool m_Placed, m_Rendered;
         int m_PoseFrames;
+
+        /// <summary>Seconds since app start of the first glasses frame and the first head pose (T6.3: Jack saw nothing for a minute).</summary>
+        public float FirstFrameAt { get; private set; } = -1f;
+        public float FirstPoseAt { get; private set; } = -1f;
+        public float PlacedAt { get; private set; } = -1f;
 
         public static GlassesView Create(Font font)
         {
@@ -40,6 +45,7 @@ namespace EyeLab.Probes
             cam.backgroundColor = new Color(0f, 0f, 0f, 0f);
             cam.nearClipPlane = 0.05f;
             v.m_Text = v.HeadLockedText(font);
+            v.HeadLockedCue(font);
             v.m_Reference = WorldReference(font);
             v.m_Reference.gameObject.SetActive(false);
             Application.onBeforeRender += v.FollowHead;
@@ -48,6 +54,32 @@ namespace EyeLab.Probes
         }
 
         void OnDestroy() => Application.onBeforeRender -= FollowHead;
+
+        /// <summary>T6.3 guided runs: the instruction large in the middle, a bar for the step's time left, "step i/n".</summary>
+        public void SetCue(string instruction, float fractionLeft, string counter)
+        {
+            if (m_Cue == null) return;
+            m_Cue.text = instruction ?? "";
+            m_Counter.text = counter ?? "";
+            m_Bar.gameObject.SetActive(fractionLeft > 0f);
+            m_Bar.localScale = new Vector3(Mathf.Clamp01(fractionLeft), 1f, 1f);
+        }
+
+        public void ClearCue() => SetCue("", 0f, "");
+
+        /// <summary>Put the room-fixed square 1.5 m ahead of where the head now looks (button "Place square").</summary>
+        public void PlaceReference()
+        {
+            Vector3 fwd = Vector3.ProjectOnPlane(m_Cam.transform.forward, Vector3.up);
+            if (fwd.sqrMagnitude < 1e-4f) fwd = Vector3.forward;
+            fwd.Normalize();
+            m_Reference.position = m_Cam.transform.position + fwd * 1.5f;
+            m_Reference.rotation = Quaternion.LookRotation(fwd, Vector3.up);
+            m_Reference.gameObject.SetActive(true);
+            m_Placed = true;
+            PlacedAt = Time.realtimeSinceStartup;
+            Debug.Log($"[EyeLab probe] world reference placed at {m_Reference.position} (t {PlacedAt:F1} s)");
+        }
 
         public void SetText(string s)
         {
@@ -64,6 +96,12 @@ namespace EyeLab.Probes
 
         void FollowHead()
         {
+            if (!m_Rendered)
+            {
+                m_Rendered = true;
+                FirstFrameAt = Time.realtimeSinceStartup;
+                Debug.Log($"[EyeLab probe] glasses view: first frame at t {FirstFrameAt:F1} s");
+            }
             InputDevice head = InputDevices.GetDeviceAtXRNode(XRNode.Head);
             if (!head.isValid) return;
             bool okP = head.TryGetFeatureValue(CommonUsages.devicePosition, out Vector3 p);
@@ -71,18 +109,12 @@ namespace EyeLab.Probes
             if (!okR) return;
             m_Cam.transform.localRotation = r;
             if (okP) m_Cam.transform.localPosition = p;
-            if (m_PoseFrames++ == 0) Debug.Log("[EyeLab probe] glasses view: head pose drives the camera");
-            if (!m_Placed && m_PoseFrames > 30)   // let tracking settle for about half a second
+            if (m_PoseFrames++ == 0)
             {
-                Vector3 fwd = Vector3.ProjectOnPlane(m_Cam.transform.forward, Vector3.up);
-                if (fwd.sqrMagnitude < 1e-4f) fwd = Vector3.forward;
-                fwd.Normalize();
-                m_Reference.position = m_Cam.transform.position + fwd * 1.5f;
-                m_Reference.rotation = Quaternion.LookRotation(fwd, Vector3.up);
-                m_Reference.gameObject.SetActive(true);
-                m_Placed = true;
-                Debug.Log($"[EyeLab probe] world reference placed at {m_Reference.position}");
+                FirstPoseAt = Time.realtimeSinceStartup;
+                Debug.Log($"[EyeLab probe] glasses view: head pose drives the camera from t {FirstPoseAt:F1} s");
             }
+            if (!m_Placed && m_PoseFrames > 30) PlaceReference();   // let tracking settle for about half a second
         }
 
         Text HeadLockedText(Font font)
@@ -93,10 +125,39 @@ namespace EyeLab.Probes
             rt.SetParent(m_Cam.transform, false);
             rt.sizeDelta = new Vector2(900f, 200f);          // canvas units of 1 mm
             rt.localScale = Vector3.one * 0.001f;
-            rt.localPosition = new Vector3(0f, -0.18f, 2f);  // about 5 degrees below the centre
-            var t = Label(go.transform, font, 64, new Color(0.35f, 1f, 0.45f));
-            t.text = "EyeLab";
+            rt.localPosition = new Vector3(0f, -0.26f, 2f);  // about 7 degrees below the centre
+            var t = Label(go.transform, font, 44, new Color(0.35f, 1f, 0.45f));
+            t.text = "EyeLab starting";
             return t;
+        }
+
+        void HeadLockedCue(Font font)
+        {
+            var go = new GameObject("EyeLab Glasses Cue", typeof(RectTransform), typeof(Canvas));
+            go.GetComponent<Canvas>().renderMode = RenderMode.WorldSpace;
+            var rt = (RectTransform)go.transform;
+            rt.SetParent(m_Cam.transform, false);
+            rt.sizeDelta = new Vector2(1000f, 220f);
+            rt.localScale = Vector3.one * 0.001f;
+            rt.localPosition = new Vector3(0f, -0.06f, 2f);
+            m_Cue = Label(go.transform, font, 84, new Color(1f, 0.92f, 0.35f));
+            var bar = new GameObject("bar", typeof(RectTransform), typeof(Image));
+            bar.transform.SetParent(go.transform, false);
+            m_Bar = (RectTransform)bar.transform;
+            m_Bar.anchorMin = m_Bar.anchorMax = new Vector2(0.5f, 0f);
+            m_Bar.pivot = new Vector2(0f, 0.5f);
+            m_Bar.sizeDelta = new Vector2(600f, 14f);
+            m_Bar.anchoredPosition = new Vector2(-300f, 0f);
+            var img = bar.GetComponent<Image>();
+            img.color = new Color(1f, 0.92f, 0.35f, 0.8f);
+            img.raycastTarget = false;
+            var c = new GameObject("counter", typeof(RectTransform));
+            c.transform.SetParent(go.transform, false);
+            var crt = (RectTransform)c.transform;
+            crt.anchoredPosition = new Vector2(0f, 140f);
+            crt.sizeDelta = new Vector2(600f, 50f);
+            m_Counter = Label(c.transform, font, 36, new Color(1f, 0.92f, 0.35f, 0.8f));
+            ClearCue();
         }
 
         static Transform WorldReference(Font font)
@@ -106,24 +167,17 @@ namespace EyeLab.Probes
             var rt = (RectTransform)go.transform;
             rt.sizeDelta = new Vector2(400f, 400f);
             rt.localScale = Vector3.one * 0.001f;
-            const float w = 6f;   // 6 mm lines
-            var bars = new List<(Vector2 pos, Vector2 size)>
-            {
-                (new Vector2(0, 200 - w / 2), new Vector2(400, w)), (new Vector2(0, -200 + w / 2), new Vector2(400, w)),
-                (new Vector2(-200 + w / 2, 0), new Vector2(w, 400)), (new Vector2(200 - w / 2, 0), new Vector2(w, 400)),
-                (Vector2.zero, new Vector2(80, w)), (Vector2.zero, new Vector2(w, 80)),
-            };
-            foreach (var (pos, size) in bars)
-            {
-                var b = new GameObject("bar", typeof(RectTransform), typeof(Image));
-                b.transform.SetParent(go.transform, false);
-                var brt = (RectTransform)b.transform;
-                brt.anchoredPosition = pos;
-                brt.sizeDelta = size;
-                var img = b.GetComponent<Image>();
-                img.color = new Color(0.3f, 0.8f, 1f);
-                img.raycastTarget = false;
-            }
+            // T6.2: thin hard-edged quads shimmered in the glasses (render scale 0.8, no MSAA). Draw the outline
+            // and cross from one texture with soft edges and mipmaps, trilinear, so they stay steady while the
+            // head moves even if MSAA is off.
+            var sq = new GameObject("square", typeof(RectTransform), typeof(RawImage));
+            sq.transform.SetParent(go.transform, false);
+            var srt = (RectTransform)sq.transform;
+            srt.sizeDelta = new Vector2(400f, 400f);
+            var raw = sq.GetComponent<RawImage>();
+            raw.texture = SquareTexture(512, 10f);
+            raw.color = new Color(0.3f, 0.8f, 1f);
+            raw.raycastTarget = false;
             var label = new GameObject("label", typeof(RectTransform));
             label.transform.SetParent(go.transform, false);
             var lrt = (RectTransform)label.transform;
@@ -132,6 +186,27 @@ namespace EyeLab.Probes
             var t = Label(label.transform, font, 36, new Color(0.3f, 0.8f, 1f));
             t.text = "fixed in the room (40 cm)";
             return go.transform;
+        }
+
+        /// <summary>White outline square and centre cross on transparent; line width in texels, about 1.5 texel soft edge.</summary>
+        static Texture2D SquareTexture(int n, float line)
+        {
+            var tex = new Texture2D(n, n, TextureFormat.RGBA32, true) { filterMode = FilterMode.Trilinear, anisoLevel = 4, wrapMode = TextureWrapMode.Clamp };
+            var px = new Color32[n * n];
+            float half = line / 2f, c = (n - 1) / 2f, arm = n * 0.1f;
+            for (int y = 0; y < n; y++)
+                for (int x = 0; x < n; x++)
+                {
+                    float dEdge = Mathf.Min(Mathf.Min(x, n - 1 - x), Mathf.Min(y, n - 1 - y)) - half - 1f;   // outline, inset by half a line
+                    float dx = Mathf.Abs(x - c), dy = Mathf.Abs(y - c);
+                    float dCross = Mathf.Min(dx <= arm ? dy : float.MaxValue, dy <= arm ? dx : float.MaxValue);
+                    float d = Mathf.Min(Mathf.Abs(dEdge), dCross);
+                    float a = Mathf.Clamp01(half + 0.75f - d);
+                    px[y * n + x] = new Color32(255, 255, 255, (byte)(a * 255f));
+                }
+            tex.SetPixels32(px);
+            tex.Apply(true, true);
+            return tex;
         }
 
         static Text Label(Transform parent, Font font, int size, Color color)

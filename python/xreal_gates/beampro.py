@@ -297,7 +297,12 @@ def head_report(run: Path) -> List[str]:
            f"{meta.get('head_mode_requested', '?')}, at start {meta.get('head_mode_at_start', '?')}, "
            f"at end {meta.get('head_mode_at_end', '?')}"]
     for e in load_csv(run / "events.csv"):
+        if e.get("event") in ("cue", "cue_speech", "jump"):
+            continue   # cue steps: guided.phase_lines; jumps: listed with their phase (loop) or counted below
         out.append(f"   event {e.get('event')}: {e.get('detail')}")
+    jumps = [e.get("detail") for e in load_csv(run / "events.csv") if e.get("event") == "jump"]
+    if jumps:
+        out.append(f"   {len(jumps)} position jumps > 10 cm in one frame: {', '.join(jumps)}")
     if not rows:
         return out + ["   no head.csv rows"]
     t = [float(r["mono_ns"]) / 1e9 for r in rows]
@@ -351,7 +356,7 @@ def eye_pose_report(run: Path) -> List[str]:
 def stereo_report(run: Path) -> List[str]:
     run = Path(run)
     meta = load_json(run)
-    out = [f"== {run.name}  stereo  app {meta.get('app_version', '?')}",
+    out = [f"== {run.name}  {meta.get('probe', 'stereo')}  app {meta.get('app_version', '?')}",
            f"   start: {meta.get('stereo_start', '?')}", f"   stop: {meta.get('stereo_stop', '?')}"]
     rows = load_csv(run / "stereo.csv")
     if not rows:
@@ -429,8 +434,19 @@ def report(run: Path) -> List[str]:
     probe = load_json(run).get("probe", "")
     if probe == "inventory":
         return inventory_report(run)
-    if probe == "stereo":
-        return stereo_report(run)
+    if probe in ("stereo", "pan"):
+        lines = stereo_report(run)
+        if probe == "pan":
+            from . import guided
+            lines += guided.phase_lines(run) + guided.pan_report(run) + imu_report(run)
+        return lines
+    if probe in ("loop", "sync"):
+        from . import guided
+        lines = head_report(run) + guided.phase_lines(run)
+        lines += guided.loop_report(run) if probe == "loop" else guided.sync_report(run)
+        if (Path(run) / "eye_frames.csv").exists():
+            lines += chain_report(run)[1:] + eye_pose_report(run)
+        return lines
     if probe.startswith("head"):
         lines = head_report(run)
         if (Path(run) / "eye_frames.csv").exists():

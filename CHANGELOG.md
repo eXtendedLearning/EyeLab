@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.002<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.003<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,18 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.4.003) T6.3 guided runs (`docs/tasks/T6.3-guided-runs.md`, Jack's request after T6.2): `CuePlayer.cs` and
+  `CueSpeech.java` speak each step (Android TextToSpeech, tones only if no engine), play tones and three ticks
+  before a move, show the instruction large in the glasses with a time bar, and log every step in `events.csv`.
+  Three guided buttons: head loop + Eye (loop closure on a floor mark), motion sync (Eye frames at 320x180 and
+  the native head pose every 5 ms, `pose_grid.csv`), stereo pan (both rear sensors at 160x90 and the Beam Pro
+  gyroscope). "Place square ahead" button. `AppLog.cs` writes every Unity log line to
+  `BeamProRuns/app_log_<stamp>.txt` (the logcat buffer had rolled over before the T6.2 pull).
+- (0.4.003) `python -m xreal_gates bp` for `loop`, `sync` and `pan` runs (`xreal_gates/guided.py`): cue phases,
+  still jitter per phase, turn angles, loop closure, jumps with their phase; exposure − timestamp from image
+  motion against the head pose (Eye) or the gyroscope (rear pair), and the offset between the two rear sensors.
+- (0.4.003) T6.2 results in `docs/tasks/T6.2-head-pose-and-timecode.md`; `CAPABILITIES.md` row 25.
 
 - (0.4.002) T6.2 probes (`docs/tasks/T6.2-head-pose-and-timecode.md`): `HeadPoseProbe.cs` (gate B2: XR head pose
   and tracking state every frame, mode switch timing, tracking events; with the Eye, the native head pose at
@@ -28,6 +40,9 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Fixed
 
+- (0.4.003) Shimmering square in the glasses (Jack, 0.4.002): the Android pipeline asset rendered at scale 0.8
+  without MSAA; now scale 1.0 with MSAA 4x, and the square is one soft-edged mipmapped texture instead of thin
+  quads. The text-to-speech query is added to the generated manifest (Android 11+ hides engines otherwise).
 - (0.4.002) Timecode: each id held 100 ms and drawn grey on black (0.4.001 changed it every 20 ms, faster than
   the Eye's exposure, and saturated it). Analyser: logical cameras flagged by capability 11 (was 18); draw →
   `cam_ts` computed on the clock `cam_ts` is on (was BOOTTIME only).

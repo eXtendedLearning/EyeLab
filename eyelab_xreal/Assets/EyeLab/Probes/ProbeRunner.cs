@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using UnityEngine;
@@ -14,7 +15,7 @@ namespace EyeLab.Probes
     [Serializable]
     public sealed class ProbeConfig
     {
-        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | all
+        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | loop | sync | pan | all
         public float seconds = 0f;         // 0 = the probe's default
         public float imu_seconds = 20f;
         public int save_every = 0;         // chain: 0; timecode: 1
@@ -39,8 +40,49 @@ namespace EyeLab.Probes
 
         Text m_Status;
         GlassesView m_Glasses;
-        GameObject m_Panel;
+        GameObject m_Panel, m_Panel2;
+        CuePlayer m_Cues;
         bool m_Busy;
+
+        // ------------------------------------------------------------------ T6.3 cue scripts (Jack, 2026-11-18)
+        static readonly CueStep[] LoopCues =
+        {
+            new CueStep("ready", "Stand on your mark and face the wall.", 6f, ticks: true),
+            new CueStep("still_1", "Stay still.", 15f),
+            new CueStep("look_left", "Look left.", 4f),
+            new CueStep("look_right", "Look right.", 4f),
+            new CueStep("look_up", "Look up.", 4f),
+            new CueStep("look_down", "Look down.", 4f),
+            new CueStep("look_centre", "Back to the centre.", 3f, ticks: true),
+            new CueStep("turn_left", "Turn ninety degrees left.", 5f, "Turn 90 degrees LEFT"),
+            new CueStep("front_1", "Back to the front.", 5f),
+            new CueStep("turn_right", "Turn ninety degrees right.", 5f, "Turn 90 degrees RIGHT"),
+            new CueStep("front_2", "Back to the front.", 5f, ticks: true),
+            new CueStep("walk_out", "Walk two metres forward.", 8f, "Walk 2 m forward"),
+            new CueStep("turn_back", "Turn around.", 4f),
+            new CueStep("walk_back", "Walk back to your mark.", 8f),
+            new CueStep("face_front", "Stand on the mark and face the wall.", 5f, ticks: true),
+            new CueStep("still_2", "Stay still.", 15f),
+        };
+
+        static readonly CueStep[] SyncCues =
+        {
+            new CueStep("ready", "Face a wall with texture, or the board, one to two metres away.", 6f, "Face a textured wall, 1-2 m", ticks: true),
+            new CueStep("still_1", "Stay still.", 5f, ticks: true),
+            new CueStep("shake", "Shake your head left and right, about once a second.", 12f, "Shake LEFT - RIGHT", metronome: 0.5f),
+            new CueStep("still_2", "Stop. Stay still.", 3f, ticks: true),
+            new CueStep("nod", "Nod up and down, about once a second.", 8f, "Nod UP - DOWN", metronome: 0.5f),
+            new CueStep("still_3", "Stay still.", 4f),
+        };
+
+        static readonly CueStep[] PanCues =
+        {
+            new CueStep("ready", "Hold the Beam Pro, rear cameras towards a scene with texture.", 6f, "Beam Pro in hand, rear cameras to a scene", ticks: true),
+            new CueStep("still_1", "Hold still.", 4f, ticks: true),
+            new CueStep("pan_slow", "Pan slowly left and right.", 10f, "Pan SLOWLY left - right", metronome: 1f),
+            new CueStep("pan_fast", "Now quickly, left and right.", 10f, "Pan QUICKLY left - right", metronome: 0.5f),
+            new CueStep("still_2", "Hold still.", 3f),
+        };
 
         IEnumerator Start()
         {
@@ -53,8 +95,10 @@ namespace EyeLab.Probes
             // first build (2026-11-17) ran at about 1 frame/s behind it, so the buttons never appeared. The camera
             // probes ask when they start (RequestCamera); `adb shell pm grant it.univpm.eyelab
             // android.permission.CAMERA` avoids the dialog altogether.
+            m_Cues = CuePlayer.Ensure();   // the speech engine initialises while the XREAL session comes up
             yield return new WaitForSecondsRealtime(m_StartDelay);   // let the XREAL session and controller come up
             BuildUi();
+            Debug.Log("[EyeLab probe] speech " + m_Cues.SpeechState);
             ProbeConfig cfg = FromIntent() ?? FromFile();
             if (cfg != null && !string.IsNullOrEmpty(cfg.probe))
             {
@@ -73,6 +117,7 @@ namespace EyeLab.Probes
             if (m_Busy) yield break;
             m_Busy = true;
             if (m_Panel != null) m_Panel.SetActive(false);
+            if (m_Panel2 != null) m_Panel2.SetActive(false);
             string p = cfg.probe.ToLowerInvariant();
             if (p == "inventory" || p == "all") yield return Inventory(cfg);
             if (p == "chain" || p == "all") yield return Chain(cfg, timecode: false);
@@ -80,9 +125,42 @@ namespace EyeLab.Probes
             if (p == "head") yield return Head(cfg, Unity.XR.XREAL.TrackingType.MODE_6DOF, false);
             if (p == "head_eye") yield return Head(cfg, Unity.XR.XREAL.TrackingType.MODE_6DOF, true);
             if (p == "head_eye_3dof") yield return Head(cfg, Unity.XR.XREAL.TrackingType.MODE_3DOF, true);
-            if (p == "stereo") yield return Stereo(cfg);
+            if (p == "stereo") yield return Stereo(cfg, null);
+            if (p == "loop") yield return Guided(cfg, "loop", LoopCues, Unity.XR.XREAL.TrackingType.MODE_6DOF, 0, 2, false);
+            if (p == "sync") yield return Guided(cfg, "sync", SyncCues, Unity.XR.XREAL.TrackingType.MODE_6DOF, 1, 4, true);
+            if (p == "pan") yield return Stereo(cfg, PanCues);
+            m_Glasses?.ClearCue();
             if (m_Panel != null) m_Panel.SetActive(true);
+            if (m_Panel2 != null) m_Panel2.SetActive(true);
             m_Busy = false;
+        }
+
+        void ShowCue(string text, float left, float frac, string counter) => m_Glasses?.SetCue(text, frac, counter);
+
+        /// <summary>Glasses start-up times and the speech engine state, into every run (T6.3).</summary>
+        void GlassesMeta(ProbeRun run)
+        {
+            if (m_Glasses != null)
+            {
+                run.Meta("glasses_first_frame_s", ProbeRun.F(m_Glasses.FirstFrameAt));
+                run.Meta("glasses_first_pose_s", ProbeRun.F(m_Glasses.FirstPoseAt));
+                run.Meta("glasses_square_placed_s", ProbeRun.F(m_Glasses.PlacedAt));
+            }
+            run.Meta("speech", m_Cues != null ? m_Cues.SpeechState : "none");
+            run.Meta("app_log", AppLog.Path);
+        }
+
+        /// <summary>T6.3 guided head run with the Eye: "loop" (B2 loop closure) or "sync" (B1t motion sync).</summary>
+        IEnumerator Guided(ProbeConfig cfg, string name, CueStep[] cues, Unity.XR.XREAL.TrackingType mode, int saveEvery, int scale, bool poseGrid)
+        {
+            yield return RequestCamera();
+            using (var run = new ProbeRun(name))
+            {
+                run.Meta("config", JsonUtility.ToJson(cfg));
+                GlassesMeta(run);
+                yield return HeadPoseProbe.Run(run, 0f, mode, true, SetStatus, cues, ShowCue, saveEvery, scale, poseGrid);
+                SetStatus(name + " done: " + Path.GetFileName(run.Dir));
+            }
         }
 
         IEnumerator Inventory(ProbeConfig cfg)
@@ -153,19 +231,25 @@ namespace EyeLab.Probes
             using (var run = new ProbeRun(name))
             {
                 run.Meta("config", JsonUtility.ToJson(cfg));
+                GlassesMeta(run);
                 yield return HeadPoseProbe.Run(run, seconds, mode, withEye, SetStatus);
                 SetStatus("Head done: " + Path.GetFileName(run.Dir));
             }
         }
 
-        /// <summary>T6.2 BS-2: open the hidden logical rear camera "3" (physical 0 + 2) for 30 s, Beam Pro on the table.</summary>
-        IEnumerator Stereo(ProbeConfig cfg)
+        /// <summary>
+        /// T6.2 BS-2: open the hidden logical rear camera "3" (physical 0 + 2) for 30 s, Beam Pro on the table.
+        /// T6.3 with <paramref name="cues"/> ("pan"): guided pans with the Beam Pro in hand; every image of both
+        /// sensors saved at 160x90 and the Beam Pro IMU recorded, to measure the exposure offset between the sensors.
+        /// </summary>
+        IEnumerator Stereo(ProbeConfig cfg, CueStep[] cues)
         {
             yield return RequestCamera();
             float seconds = cfg.seconds > 0 ? cfg.seconds : 30f;
-            using (var run = new ProbeRun("stereo"))
+            using (var run = new ProbeRun(cues != null ? "pan" : "stereo"))
             {
                 run.Meta("config", JsonUtility.ToJson(cfg));
+                GlassesMeta(run);
 #if UNITY_ANDROID && !UNITY_EDITOR
                 AndroidJavaClass helper = null;
                 AndroidJavaObject activity = null;
@@ -174,18 +258,42 @@ namespace EyeLab.Probes
                     using (var up = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
                         activity = up.GetStatic<AndroidJavaObject>("currentActivity");
                     helper = new AndroidJavaClass("it.univpm.eyelab.probes.StereoProbe");
-                    string started = helper.CallStatic<string>("start", activity, run.Dir, "3");
+                    string started = helper.CallStatic<string>("start", activity, run.Dir, "3", cues != null ? 4 : 0);
                     run.Meta("stereo_start", started);
                     Debug.Log("[EyeLab probe] stereo start " + started);
                 }
                 catch (Exception e) { run.Meta("stereo_start", "error " + e.Message); helper = null; }
+                AndroidJavaClass imu = null;
+                if (helper != null && cues != null)
+                {
+                    try
+                    {
+                        imu = new AndroidJavaClass("it.univpm.eyelab.probes.BeamProInventory");
+                        run.Meta("imu_start", imu.CallStatic<string>("imuStart", activity, Path.Combine(run.Dir, "imu.csv"), 0));
+                    }
+                    catch (Exception e) { run.Meta("imu_error", e.Message); imu = null; }
+                }
                 if (helper != null)
                 {
-                    float t0 = Time.realtimeSinceStartup;
-                    while (Time.realtimeSinceStartup - t0 < seconds)
+                    if (cues != null)
                     {
-                        SetStatus($"Stereo: Beam Pro on the table, rear cameras to the scene | {seconds - (Time.realtimeSinceStartup - t0):F0} s");
-                        yield return new WaitForSecondsRealtime(0.5f);
+                        float nextStatus = 0f;
+                        yield return m_Cues.Play(run, cues, (text, left, frac, counter) =>
+                        {
+                            ShowCue(text, left, frac, counter);
+                            if (Time.realtimeSinceStartup < nextStatus) return;
+                            nextStatus = Time.realtimeSinceStartup + 0.5f;
+                            SetStatus($"{counter}: {text} | {left:F0} s");
+                        });
+                    }
+                    else
+                    {
+                        float t0 = Time.realtimeSinceStartup;
+                        while (Time.realtimeSinceStartup - t0 < seconds)
+                        {
+                            SetStatus($"Stereo: Beam Pro on the table, rear cameras to the scene | {seconds - (Time.realtimeSinceStartup - t0):F0} s");
+                            yield return new WaitForSecondsRealtime(0.5f);
+                        }
                     }
                     string stopped;
                     try { stopped = helper.CallStatic<string>("stop"); } catch (Exception e) { stopped = "error " + e.Message; }
@@ -193,12 +301,17 @@ namespace EyeLab.Probes
                     Debug.Log("[EyeLab probe] stereo stop " + stopped);
                     helper.Dispose();
                 }
+                if (imu != null)
+                {
+                    try { run.Meta("imu_stop", imu.CallStatic<string>("imuStop")); } catch (Exception e) { run.Meta("imu_error", e.Message); }
+                    imu.Dispose();
+                }
                 activity?.Dispose();
 #else
                 run.Meta("stereo_start", "not on Android");
                 yield return null;
 #endif
-                SetStatus("Stereo done: " + Path.GetFileName(run.Dir));
+                SetStatus((cues != null ? "Pan" : "Stereo") + " done: " + Path.GetFileName(run.Dir));
             }
         }
 
@@ -258,26 +371,22 @@ namespace EyeLab.Probes
 
             m_Status = MakeText(canvas.transform, font, new Vector2(0f, 0.9f), new Vector2(1f, 1f), 28);
             m_Glasses = GlassesView.Create(font);
-            m_Panel = new GameObject("EyeLab Probe Buttons", typeof(RectTransform), typeof(VerticalLayoutGroup));
-            m_Panel.transform.SetParent(canvas.transform, false);
-            var prt = (RectTransform)m_Panel.transform;
-            prt.anchorMin = new Vector2(0.02f, 0.12f);
-            prt.anchorMax = new Vector2(0.45f, 0.88f);
-            prt.offsetMin = prt.offsetMax = Vector2.zero;
-            var layout = m_Panel.GetComponent<VerticalLayoutGroup>();
-            layout.spacing = 12;
-            layout.childForceExpandHeight = true;
-            layout.childControlHeight = true;
-            layout.childControlWidth = true;
+            m_Panel = Column(canvas.transform, 0.02f, 0.45f);
 
-            AddButton(font, "Timecode 60 s", new ProbeConfig { probe = "timecode" });
-            AddButton(font, "Head 6DoF 2 min", new ProbeConfig { probe = "head" });
-            AddButton(font, "Head 6DoF + Eye 2 min", new ProbeConfig { probe = "head_eye" });
-            AddButton(font, "Head 3DoF + Eye 1 min", new ProbeConfig { probe = "head_eye_3dof" });
-            AddButton(font, "Stereo 30 s (on table)", new ProbeConfig { probe = "stereo" });
-            AddButton(font, "Eye chain 2 min", new ProbeConfig { probe = "chain" });
-            AddButton(font, "Inventory + IMU 20 s", new ProbeConfig { probe = "inventory" });
+            AddButton(font, "1 Guided: head loop + Eye (100 s)", new ProbeConfig { probe = "loop" });
+            AddButton(font, "2 Guided: motion sync (40 s)", new ProbeConfig { probe = "sync" });
+            AddButton(font, "3 Guided: stereo pan (35 s)", new ProbeConfig { probe = "pan" });
+            AddAction(font, "Place square ahead", () => m_Glasses?.PlaceReference(), new Color(0.1f, 0.25f, 0.45f, 0.9f));
             AddAction(font, "Quit EyeLab", () => { Debug.Log("[EyeLab probe] quit button"); Application.Quit(); });
+
+            m_Panel2 = Column(canvas.transform, 0.55f, 0.98f);
+            AddButton(font, "Timecode 60 s", new ProbeConfig { probe = "timecode" }, m_Panel2);
+            AddButton(font, "Head 6DoF 2 min", new ProbeConfig { probe = "head" }, m_Panel2);
+            AddButton(font, "Head 6DoF + Eye 2 min", new ProbeConfig { probe = "head_eye" }, m_Panel2);
+            AddButton(font, "Head 3DoF + Eye 1 min", new ProbeConfig { probe = "head_eye_3dof" }, m_Panel2);
+            AddButton(font, "Stereo 30 s (on table)", new ProbeConfig { probe = "stereo" }, m_Panel2);
+            AddButton(font, "Eye chain 2 min", new ProbeConfig { probe = "chain" }, m_Panel2);
+            AddButton(font, "Inventory + IMU 20 s", new ProbeConfig { probe = "inventory" }, m_Panel2);
             Debug.Log("[EyeLab probe] buttons built on " + (canvas.gameObject.name));
         }
 
@@ -304,22 +413,38 @@ namespace EyeLab.Probes
             Debug.Log("[EyeLab probe] EventSystem created");
         }
 
-        void AddAction(Font font, string label, UnityEngine.Events.UnityAction action)
+        static GameObject Column(Transform parent, float xMin, float xMax)
+        {
+            var panel = new GameObject("EyeLab Probe Buttons", typeof(RectTransform), typeof(VerticalLayoutGroup));
+            panel.transform.SetParent(parent, false);
+            var prt = (RectTransform)panel.transform;
+            prt.anchorMin = new Vector2(xMin, 0.12f);
+            prt.anchorMax = new Vector2(xMax, 0.88f);
+            prt.offsetMin = prt.offsetMax = Vector2.zero;
+            var layout = panel.GetComponent<VerticalLayoutGroup>();
+            layout.spacing = 12;
+            layout.childForceExpandHeight = true;
+            layout.childControlHeight = true;
+            layout.childControlWidth = true;
+            return panel;
+        }
+
+        void AddAction(Font font, string label, UnityEngine.Events.UnityAction action, Color? color = null)
         {
             var go = new GameObject(label, typeof(RectTransform), typeof(Image), typeof(Button));
             go.transform.SetParent(m_Panel.transform, false);
-            go.GetComponent<Image>().color = new Color(0.45f, 0.1f, 0.1f, 0.9f);
+            go.GetComponent<Image>().color = color ?? new Color(0.45f, 0.1f, 0.1f, 0.9f);
             go.GetComponent<Button>().onClick.AddListener(action);
             Text t = MakeText(go.transform, font, Vector2.zero, Vector2.one, 30);
             t.text = label;
             t.alignment = TextAnchor.MiddleCenter;
         }
 
-        void AddButton(Font font, string label, ProbeConfig cfg)
+        void AddButton(Font font, string label, ProbeConfig cfg, GameObject panel = null)
         {
             var go = new GameObject(label, typeof(RectTransform), typeof(Image), typeof(Button));
-            go.transform.SetParent(m_Panel.transform, false);
-            go.GetComponent<Image>().color = new Color(0.15f, 0.15f, 0.15f, 0.9f);
+            go.transform.SetParent((panel ?? m_Panel).transform, false);
+            go.GetComponent<Image>().color = panel == null ? new Color(0.12f, 0.3f, 0.15f, 0.9f) : new Color(0.15f, 0.15f, 0.15f, 0.9f);
             go.GetComponent<Button>().onClick.AddListener(() => StartCoroutine(RunProbe(cfg)));
             Text t = MakeText(go.transform, font, Vector2.zero, Vector2.one, 30);
             t.text = label;

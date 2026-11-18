@@ -22,12 +22,14 @@ import android.util.Size;
 
 import org.json.JSONObject;
 
+import java.io.BufferedOutputStream;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -38,6 +40,9 @@ import java.util.concurrent.Executor;
  * and it answered getCameraCharacteristics by id (inventory 2026-11-17). This opens it with one small YUV stream
  * per physical camera and logs, per capture, the logical and both physical SENSOR_TIMESTAMPs (stereo.csv), plus
  * every image arrival (images.csv). A few Y planes per side are saved as PGM. Every refusal is recorded, not thrown.
+ * T6.3 (stereo pan): with a thumbnail scale > 0, every image's Y plane is also box-downscaled and appended to
+ * stereo_thumbs_<id>.bin (records: int64 big-endian image timestamp, then w*h bytes), so the image motion of the two
+ * sensors can be compared frame by frame offline.
  */
 public final class StereoProbe {
     private static final Object LOCK = new Object();
@@ -50,13 +55,24 @@ public final class StereoProbe {
     private static final JSONObject state = new JSONObject();
     private static long nCaptures, nImages, nSaved;
     private static File dir;
+    private static int thumbScale;
+    private static final Map<String, BufferedOutputStream> thumbs = new HashMap<>();
+    private static byte[] rowBuf;
+    private static int[] sumBuf;
 
     private StereoProbe() { }
 
     /** Starts the probe; returns a JSON status at once (the camera opens asynchronously). */
     public static String start(Context ctx, String runDir, String logicalId) {
+        return start(ctx, runDir, logicalId, 0);
+    }
+
+    /** As {@link #start(Context, String, String)}, also saving every image downscaled by {@code scale} (0 = none). */
+    public static String start(Context ctx, String runDir, String logicalId, int scale) {
         synchronized (LOCK) {
             try {
+                thumbScale = Math.max(0, scale);
+                put("thumb_scale", thumbScale);
                 dir = new File(runDir);
                 new File(dir, "stereo").mkdirs();
                 captures = new BufferedWriter(new FileWriter(new File(dir, "stereo.csv")));
@@ -161,6 +177,7 @@ public final class StereoProbe {
                 if (images == null) return;
                 images.write(pid + "," + img.getTimestamp() + "," + boot + "," + img.getWidth() + "," + img.getHeight() + "\n");
                 nImages++;
+                if (thumbScale > 0) saveThumb(img, pid);
                 if (nImages % 150 == 1 && nSaved < 12) {   // about every 5 s per side
                     savePgm(img, new File(dir, "stereo/y_" + pid + "_" + img.getTimestamp() + ".pgm"));
                     nSaved++;
@@ -170,6 +187,37 @@ public final class StereoProbe {
         } finally {
             img.close();
         }
+    }
+
+    /** Box-downscales the Y plane by thumbScale and appends (timestamp, pixels) to stereo_thumbs_<pid>.bin. */
+    private static void saveThumb(Image img, String pid) throws Exception {
+        int k = thumbScale, w = img.getWidth(), h = img.getHeight(), ow = w / k, oh = h / k;
+        BufferedOutputStream out = thumbs.get(pid);
+        if (out == null) {
+            out = new BufferedOutputStream(new FileOutputStream(new File(dir, "stereo_thumbs_" + pid + ".bin")), 1 << 16);
+            thumbs.put(pid, out);
+            put("thumb_size", ow + "x" + oh);
+        }
+        Image.Plane y = img.getPlanes()[0];
+        ByteBuffer buf = y.getBuffer();
+        int stride = y.getRowStride(), pixStride = y.getPixelStride();
+        if (rowBuf == null || rowBuf.length < stride) rowBuf = new byte[stride];
+        if (sumBuf == null || sumBuf.length < ow) sumBuf = new int[ow];
+        byte[] o = new byte[8 + ow * oh];
+        long ts = img.getTimestamp();
+        for (int i = 0; i < 8; i++) o[i] = (byte) (ts >>> (56 - 8 * i));
+        for (int r = 0; r < oh; r++) {
+            java.util.Arrays.fill(sumBuf, 0, ow, 0);
+            for (int dy = 0; dy < k; dy++) {
+                int row = r * k + dy, len = Math.min(stride, buf.capacity() - row * stride);
+                buf.position(row * stride);
+                buf.get(rowBuf, 0, len);
+                for (int c = 0; c < ow; c++)
+                    for (int dx = 0; dx < k; dx++) sumBuf[c] += rowBuf[(c * k + dx) * pixStride] & 0xff;
+            }
+            for (int c = 0; c < ow; c++) o[8 + r * ow + c] = (byte) (sumBuf[c] / (k * k));
+        }
+        out.write(o);
     }
 
     private static void savePgm(Image img, File f) throws Exception {
@@ -198,6 +246,8 @@ public final class StereoProbe {
             device = null;
             try { if (captures != null) captures.close(); } catch (Exception ignored) { }
             try { if (images != null) images.close(); } catch (Exception ignored) { }
+            for (BufferedOutputStream t : thumbs.values()) { try { t.close(); } catch (Exception ignored) { } }
+            thumbs.clear();
             captures = null;
             images = null;
             if (thread != null) thread.quitSafely();
