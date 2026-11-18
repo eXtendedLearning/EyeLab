@@ -99,6 +99,24 @@ public final class BeamProInventory {
                     }
                 }
             }
+            // The Beam Pro's camera HAL has 4 devices but lists 2 (adb dumpsys media.camera, 2026-11-17): 2 is the
+            // second rear sensor, 3 a logical camera of 0+2. Ask for ids up to 5 by name; this opens nothing.
+            JSONArray unlisted = new JSONArray();
+            for (int i = 0; i <= 5; i++) {
+                String id = Integer.toString(i);
+                if (seen.contains(id)) continue;
+                JSONObject u = new JSONObject();
+                u.put("id", id);
+                try {
+                    cams.put(camera(cm, id, false));
+                    seen.add(id);
+                    u.put("result", "characteristics readable");
+                } catch (Exception e) {
+                    u.put("result", e.toString());
+                }
+                unlisted.put(u);
+            }
+            o.put("unlisted_ids", unlisted);
             o.put("cameras", cams);
             if (Build.VERSION.SDK_INT >= 30) {
                 JSONArray conc = new JSONArray();

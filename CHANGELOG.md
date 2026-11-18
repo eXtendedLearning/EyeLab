@@ -8,12 +8,28 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.000<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.001<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
+
+### Added
+
+- (0.4.001) Probes: the status line is repeated head-locked in the glasses (world-space canvas 1.5 m in front
+  of the XR camera) and the Beam Pro screen is kept on while EyeLab runs (it paused the app when it slept).
+- (0.4.001) The inventory probe asks Camera2 for ids 2-5 by name (`unlisted_ids`), read-only: the HAL has two
+  rear cameras and a logical pair that the id list hides.
+- (0.4.001) Docs: glasses SW `15.1.03.603_1.9.1.20260914175625_097` (frozen 2026-11-17); adb dump compared
+  with the app inventory (sensors and displays match; cameras: 4 in the HAL, 2 for apps, the logical rear
+  pair only APPROXIMATE-synchronised); B1 protocol uses the screen buttons.
+- (0.4.001) Gate B1 run on the Beam Pro (2026-11-17): Eye 1280x720 at 29.2 fps kept, rows upright, `cam_ts` ns
+  on the HMD clock (= CLOCK_MONOTONIC), age at arrival 152 ms median and flat over 5 min (no decoder queue),
+  2 % of frames overwritten before the app read them. Timecode decoded 0 frames (overexposed, and the probe
+  changed the marker faster than the exposure). Hidden rear cameras 2 and 3 answer by id. Results in
+  `docs/tasks/T6.1-eye-chain-latency.md` and `docs/CAPABILITIES.md` rows 8, 22, 24; next gates proposed in
+  `docs/tasks/T6.2-head-pose-and-timecode.md` (B2 head pose, timecode redo, stereo open; runs ≤ 3 min).
 
 ## [0.4.000] — 2026-11-17
 

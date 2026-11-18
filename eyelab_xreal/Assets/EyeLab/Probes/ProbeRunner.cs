@@ -38,12 +38,16 @@ namespace EyeLab.Probes
         [SerializeField] float m_StartDelay = 3f;
 
         Text m_Status;
+        Text m_GlassesStatus;
         GameObject m_Panel;
         bool m_Busy;
 
         IEnumerator Start()
         {
             Application.targetFrameRate = 120;   // the XR display paces the loop; this only lifts Unity's cap
+            // With the Beam Pro screen asleep the activity pauses (seen 2026-11-17); a 5-min chain run is worn
+            // with the glasses and nobody touches the screen. Keep it on while EyeLab is in front.
+            Screen.sleepTimeout = SleepTimeout.NeverSleep;
             Debug.Log("[EyeLab probe] runner started; camera permission " + (HasCamera() ? "granted" : "not granted"));
             // No permission request here: on the Beam Pro the system dialog opens on the phone screen and the
             // first build (2026-11-17) ran at about 1 frame/s behind it, so the buttons never appeared. The camera
@@ -192,6 +196,7 @@ namespace EyeLab.Probes
             Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
             m_Status = MakeText(canvas.transform, font, new Vector2(0f, 0.9f), new Vector2(1f, 1f), 28);
+            BuildGlassesStatus(font);
             m_Panel = new GameObject("EyeLab Probe Buttons", typeof(RectTransform), typeof(VerticalLayoutGroup));
             m_Panel.transform.SetParent(canvas.transform, false);
             var prt = (RectTransform)m_Panel.transform;
@@ -272,9 +277,34 @@ namespace EyeLab.Probes
             return t;
         }
 
+        /// <summary>
+        /// The status line again, head-locked 1.5 m in front of the XR camera, so the wearer sees what runs and
+        /// when it ends (B0 drew nothing in the glasses). A world-space uGUI canvas, whose shader handles
+        /// single-pass stereo.
+        /// </summary>
+        void BuildGlassesStatus(Font font)
+        {
+            Camera cam = Camera.main;
+            if (cam == null) { Debug.LogWarning("[EyeLab probe] no main camera, no status in the glasses"); return; }
+            var cgo = new GameObject("EyeLab Glasses Status", typeof(RectTransform), typeof(Canvas));
+            var canvas = cgo.GetComponent<Canvas>();
+            canvas.renderMode = RenderMode.WorldSpace;
+            canvas.worldCamera = cam;
+            var rt = (RectTransform)cgo.transform;
+            rt.SetParent(cam.transform, false);
+            rt.sizeDelta = new Vector2(1000f, 160f);                  // canvas units; 1 unit = 1 mm below
+            rt.localScale = Vector3.one * 0.001f;
+            rt.localPosition = new Vector3(0f, -0.25f, 1.5f);
+            rt.localRotation = Quaternion.identity;
+            m_GlassesStatus = MakeText(cgo.transform, font, Vector2.zero, Vector2.one, 48);
+            m_GlassesStatus.alignment = TextAnchor.MiddleCenter;
+            m_GlassesStatus.color = new Color(0.3f, 1f, 0.4f);
+        }
+
         void SetStatus(string s)
         {
             if (m_Status != null) m_Status.text = s;
+            if (m_GlassesStatus != null) m_GlassesStatus.text = s;
             Debug.Log("[EyeLab probe] " + s);
         }
     }

@@ -12,8 +12,11 @@
 - **XREAL One Pro + XREAL Eye** (camera accessory, installed). Access to the
   Eye's camera feed is the project's critical dependency — see ADR-003 and
   `docs/S3-HANDOVER-2026-09-25.md`.
-- **Firmware:** Nebula updated it after the 2026-09-25 runs; the new version is
-  not recorded yet. The PC beta 3.1.2 version calls are licence-refused
+- **Firmware (2026-11-17):** SW version `15.1.03.603_1.9.1.20260914175625_097`, read in MyGlasses on the Beam Pro
+  after the 2026-11-17 updates (T6.0 step 0); automatic updates are off since then, so this is the
+  campaign's frozen version. Every observation before 2026-11-17 was on an earlier, unrecorded version.
+  Earlier: Nebula updated it after the 2026-09-25 runs; that version was
+  never recorded. The PC beta 3.1.2 version calls are licence-refused
   (`CAPABILITIES.md` row 4, 2026-10-13). **`python/xreal_probe.py` (S0) cannot record it**: it
   resolves `Get_Glasses_FW_Version` but deliberately never calls it (signature
   not recovered, `python/xreal_glasses.py`). Read the version from Nebula's UI
@@ -24,18 +27,22 @@
 - **XREAL Beam Pro: in hand (2026-11-16).** Model `X4000` (`X4000_EEA`), Android 14 (API 34), build
   `X4000_X502_260518_ROW` after the 2026-11-17 updates; 8 GB RAM and 256 GB storage (Settings → About,
   Jack's screenshot of 2026-11-17; Unity reports 7.5 GB usable), 8 cores (4 big + 4 little). XREAL runtime
-  package `com.xreal.evapro.nebula` (MyGlasses) 2.2.2. **Glasses firmware: still not recorded** (the
-  screenshot is the Beam Pro's About page; read it in MyGlasses → glasses → about, or wherever MyGlasses
-  shows it). Serial, MAC and IP addresses are deliberately not written here. Automatic app and OTA updates turned off
+  package `com.xreal.evapro.nebula` (MyGlasses) 2.2.2; glasses SW `15.1.03.603_1.9.1.20260914175625_097` (see Glasses). Serial, MAC and
+  IP addresses are deliberately not written here. Automatic app and OTA updates turned off
   in MyGlasses after those updates (Step 0 of T6.0). SoC `SM6450`, security patch 2026-05-01.
   XREAL packages as of 2026-11-17 (inventory run `20261117_220142_inventory`): `com.xreal.evapro.nebula` 2.2.2
   (2873), `.store` 1.2.56, `.camera` 1.1.47, `.systemupdate` 1.0.34, `.id.universal` 1.3.0,
   `com.xreal.analytics` 1.0.17.
   **What an app sees (gate BS, 2026-11-17):**
   - Cameras: Camera2 lists **two ids only**, `0` back and `1` front, neither a logical multi-camera, no physical
-    sub-cameras. The second rear camera is not reachable by a third-party app, so Beam Pro stereo is off the
-    table. Rear `0`: array 4088x3080, 2.16 mm, f/2.2, factory intrinsics fx 1684 / fy 1683 px, centre (2040,
-    1536), about 101° horizontal field of view, distortion not given (zeros), lens offset (-9.5, -0.1, 0) mm from
+    sub-cameras. The camera HAL has **four** (adb `dumpsys media.camera`, same day): `2` is the second rear
+    sensor (S5KJN1, 4088x3080, same lens data as `0`) and `3` a logical rear camera made of `0` + `2` with
+    APPROXIMATE (not hardware-synchronised) sync; both conflict with `0` and are hidden from apps ("normal
+    camera devices: 2"). Asked by name, both answer to an app (0.4.001 inventory, 2026-11-17:
+    characteristics readable; `3` reports physical ids `0`, `2`, sync approximate); whether an app may also
+    open them is not tried yet. Rear `0`: array 4088x3080, 2.16 mm, f/2.2, reported intrinsics fx 1684 /
+    fy 1683 px, centre (2040, 1536), about 101° horizontal field of view (the round principal point suggests
+    nominal values, not a per-unit calibration), distortion not given (zeros), lens offset (-9.5, -0.1, 0) mm from
     the reference, timestamps `realtime` (BOOTTIME), AE ranges up to 30 fps, hardware level 3. Front `1`:
     3264x2448, 2.76 mm, intrinsics without a principal point (not usable as given).
   - IMU: TDK-InvenSense ICM-4x6xx accelerometer and gyroscope (calibrated and uncalibrated), **401 Hz**, event
