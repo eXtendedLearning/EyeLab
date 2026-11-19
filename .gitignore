@@ -108,3 +108,8 @@ unity_projects/xreal_pc_gates/Assets/EyeLabGates/Resources/EyeLabGatesBuildInfo.
 
 # Beam Pro probe runs pulled over adb (T6.0, T6.1)
 python/beampro_runs/
+
+# B3a ArUco plugin (tools/build_aruco_plugin.sh): build tree and the staged .so are build artefacts
+native/eyelab_aruco/build-arm64/
+eyelab_xreal/Assets/Plugins/Android/libs/
+eyelab_xreal/Assets/Plugins/Android/libs.meta

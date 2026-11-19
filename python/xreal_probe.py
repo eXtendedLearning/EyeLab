@@ -16,7 +16,7 @@ The native work runs in a **child process**. A native call that hangs or
 segfaults then costs one subprocess rather than the whole session, and the
 timeout is enforceable. This is deliberate: the same code path is headed for
 the GUI, and a blocking call on the tkinter thread is precisely the failure
-recorded in ``docs/ar-freeze-diagnostics.md``.
+recorded in the 2026-09-19 AR freeze diagnosis (``git show 5e9a386:docs/ar-freeze-diagnostics.md``).
 
 Every run appends a JSON line to ``python/.logs/xreal_probe.jsonl`` so the
 before/after states of an experiment can be diffed later.

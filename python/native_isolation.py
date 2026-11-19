@@ -8,7 +8,7 @@ for S2). Every call into an undocumented vendor DLL goes through here, because:
 * a native call that faults (access violation, abort) costs one child process,
   and its exit code and stderr tail are reported instead of lost;
 * the same code is headed for the GUI, where a blocking native call on the
-  tkinter thread is the failure recorded in ``docs/ar-freeze-diagnostics.md``.
+  tkinter thread is the failure recorded in the 2026-09-19 AR freeze diagnosis (``git show 5e9a386:docs/ar-freeze-diagnostics.md``).
 
 **Framing.** Vendor libraries write their own logs to stdout, which would
 corrupt a bare-JSON protocol. The worker therefore emits its payload as a

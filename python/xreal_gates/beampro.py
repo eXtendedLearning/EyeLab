@@ -434,6 +434,16 @@ def report(run: Path) -> List[str]:
     probe = load_json(run).get("probe", "")
     if probe == "inventory":
         return inventory_report(run)
+    if probe == "detect":
+        from . import b3a
+        return b3a.detect_report(run)
+    if probe == "render":
+        from . import render
+        meta = load_json(run)
+        return [f"== {Path(run).name}  render  app {meta.get('app_version', '?')}",
+                f"   glasses seen: {meta.get('glasses_seen', '?')}; XREAL target frame rate "
+                f"{meta.get('xreal_target_frame_rate', '?')}, Unity target {meta.get('unity_target_frame_rate', '?')}",
+                f"   before the run: {meta.get('render_before', '?')}"] + render.render_report(run)
     if probe in ("stereo", "pan"):
         lines = stereo_report(run)
         if probe == "pan":

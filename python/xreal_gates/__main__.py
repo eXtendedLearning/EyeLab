@@ -63,6 +63,11 @@ def main(argv=None) -> int:
     p_srv.add_argument("--calib", type=Path, help="calibration YAML (default: repo calibration, else vendor)")
     p_srv.add_argument("--port", type=int, default=8765)
     p_srv.add_argument("--idle-timeout", type=float, default=600.0)
+    p_b3 = sub.add_parser("b3a-set", help="frame set for the B3a detection bench (push to files/b3a)")
+    p_b3.add_argument("--out", type=Path, help="default python/beampro_runs/b3a_set")
+    p_b3.add_argument("--calib", type=Path, help="Eye calibration json (default: the 2026-10-21 PC-gate calibration)")
+    p_b3.add_argument("--markers", type=Path, help="marker config (default config/markers/plate_A.markers.json)")
+    p_b3.add_argument("--snapshots", type=Path, help="folder of full-resolution Eye snapshots to add (no plate)")
     p_bp = sub.add_parser("bp", help="Beam Pro probe runs (T6.0, T6.1)")
     p_bp.add_argument("runs", nargs="+", type=Path)
     args = parser.parse_args(argv)
@@ -129,6 +134,13 @@ def main(argv=None) -> int:
         from .chain import report as chain_report
         for line in chain_report(args.runs):
             print(line)
+        return 0
+    if args.cmd == "b3a-set":
+        from . import b3a
+        s = b3a.make_set(args.out or b3a.DEFAULT_SET, args.calib or b3a.DEFAULT_CALIB, args.markers or b3a.DEFAULT_MARKERS,
+                         snapshots=args.snapshots)
+        print(f"{len(s['frames'])} frames, board {s['board_name']} ids {s['ids']}, calibration {s['calibration']} "
+              f"-> {args.out or b3a.DEFAULT_SET}")
         return 0
     if args.cmd == "bp":
         from .beampro import report as bp_report

@@ -15,7 +15,7 @@ namespace EyeLab.Probes
     [Serializable]
     public sealed class ProbeConfig
     {
-        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | loop | sync | pan | all
+        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | loop | sync | pan | render | detect | all
         public float seconds = 0f;         // 0 = the probe's default
         public float imu_seconds = 20f;
         public int save_every = 0;         // chain: 0; timecode: 1
@@ -40,7 +40,7 @@ namespace EyeLab.Probes
 
         Text m_Status;
         GlassesView m_Glasses;
-        GameObject m_Panel, m_Panel2;
+        GameObject m_Panel, m_Panel2, m_RatePanel;
         string m_GlassesSeen = "not answered";
         CuePlayer m_Cues;
         bool m_Busy;
@@ -91,6 +91,7 @@ namespace EyeLab.Probes
             // With the Beam Pro screen asleep the activity pauses (seen 2026-11-17); a 5-min chain run is worn
             // with the glasses and nobody touches the screen. Keep it on while EyeLab is in front.
             Screen.sleepTimeout = SleepTimeout.NeverSleep;
+            Debug.Log("[EyeLab probe] render default " + RenderProbe.ApplyDefaults());
             Debug.Log("[EyeLab probe] runner started; camera permission " + (HasCamera() ? "granted" : "not granted"));
             // No permission request here: on the Beam Pro the system dialog opens on the phone screen and the
             // first build (2026-11-17) ran at about 1 frame/s behind it, so the buttons never appeared. The camera
@@ -136,6 +137,7 @@ namespace EyeLab.Probes
         {
             if (m_Panel != null) m_Panel.SetActive(page == m_Panel);
             if (m_Panel2 != null) m_Panel2.SetActive(page == m_Panel2);
+            if (m_RatePanel != null) m_RatePanel.SetActive(page == m_RatePanel);
         }
 
         public IEnumerator RunProbe(ProbeConfig cfg)
@@ -154,6 +156,8 @@ namespace EyeLab.Probes
             if (p == "loop") yield return Guided(cfg, "loop", LoopCues, Unity.XR.XREAL.TrackingType.MODE_6DOF, 0, 2, false);
             if (p == "sync") yield return Guided(cfg, "sync", SyncCues, Unity.XR.XREAL.TrackingType.MODE_6DOF, 1, 4, true);
             if (p == "pan") yield return Stereo(cfg, PanCues);
+            if (p == "render") yield return Render(cfg);
+            if (p == "detect") yield return Detect(cfg);
             m_Glasses?.ClearCue();
             ShowPage(m_Panel);
             m_Busy = false;
@@ -185,6 +189,32 @@ namespace EyeLab.Probes
                 GlassesMeta(run);
                 yield return HeadPoseProbe.Run(run, 0f, mode, true, SetStatus, cues, ShowCue, saveEvery, scale, poseGrid);
                 SetStatus(name + " done: " + Path.GetFileName(run.Dir));
+            }
+        }
+
+        /// <summary>T6.5 render gate: rendering settings switched live, rated on the screen (no Eye, no camera).</summary>
+        IEnumerator Render(ProbeConfig cfg)
+        {
+            using (var run = new ProbeRun("render"))
+            {
+                run.Meta("config", JsonUtility.ToJson(cfg));
+                GlassesMeta(run);
+                ShowPage(m_RatePanel);
+                yield return RenderProbe.Run(run, m_Glasses, SetStatus, ShowCue);
+                SetStatus("render done: " + Path.GetFileName(run.Dir));
+            }
+        }
+
+        /// <summary>T6.6 gate B3a: ArUco detection and board pose with the native plugin, bench on pushed frames then live on the Eye.</summary>
+        IEnumerator Detect(ProbeConfig cfg)
+        {
+            yield return RequestCamera();
+            using (var run = new ProbeRun("detect"))
+            {
+                run.Meta("config", JsonUtility.ToJson(cfg));
+                GlassesMeta(run);
+                yield return DetectProbe.Run(run, SetStatus, ShowCue);
+                SetStatus("detect done: " + Path.GetFileName(run.Dir));
             }
         }
 
@@ -417,6 +447,8 @@ namespace EyeLab.Probes
             AddButton(font, "1  Head loop + Eye  (95 s)", new ProbeConfig { probe = "loop" });
             AddButton(font, "2  Motion sync  (40 s)", new ProbeConfig { probe = "sync" });
             AddButton(font, "3  Stereo pan  (35 s)", new ProbeConfig { probe = "pan" });
+            AddButton(font, "4  Rendering, rate each setting  (85 s)", new ProbeConfig { probe = "render" });
+            AddButton(font, "5  Detection with plate A  (90 s)", new ProbeConfig { probe = "detect" });
             AddAction(font, "Place square ahead", () => m_Glasses?.PlaceReference(), new Color(0.1f, 0.25f, 0.45f, 0.9f));
             AddAction(font, "Archive (older runs)", () => ShowPage(m_Panel2), new Color(0.22f, 0.22f, 0.25f, 0.9f));
             AddAction(font, "Quit EyeLab", () => { Debug.Log("[EyeLab probe] quit button"); Application.Quit(); });
@@ -430,6 +462,19 @@ namespace EyeLab.Probes
             AddButton(font, "Eye chain 2 min", new ProbeConfig { probe = "chain" }, m_Panel2);
             AddButton(font, "Inventory + IMU 20 s", new ProbeConfig { probe = "inventory" }, m_Panel2);
             AddAction(font, "Back", () => ShowPage(m_Panel), new Color(0.22f, 0.22f, 0.25f, 0.9f), m_Panel2);
+
+            // T6.5: shown only during the render run; the last tap in each setting's window is its rating.
+            m_RatePanel = Column(canvas.transform);
+            Color[] rateColors =
+            {
+                new Color(0.12f, 0.3f, 0.15f, 0.9f), new Color(0.35f, 0.3f, 0.1f, 0.9f),
+                new Color(0.45f, 0.1f, 0.1f, 0.9f), new Color(0.22f, 0.22f, 0.25f, 0.9f),
+            };
+            for (int i = 0; i < RenderProbe.Answers.Length; i++)
+            {
+                string answer = RenderProbe.Answers[i];
+                AddAction(font, char.ToUpperInvariant(answer[0]) + answer.Substring(1), () => RenderProbe.Rate(answer), rateColors[i], m_RatePanel);
+            }
             ShowPage(m_Panel);
             Debug.Log("[EyeLab probe] buttons built on " + (canvas.gameObject.name));
         }

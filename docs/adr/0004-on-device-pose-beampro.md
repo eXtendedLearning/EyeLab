@@ -1,7 +1,7 @@
-# ADR-0004 (draft): on the Beam Pro, the pose runs on the device
+# ADR-0004: on the Beam Pro, the pose runs on the device
 
-- **Status:** Proposed, 2026-11-16. Not accepted until Jack says so. If accepted it amends ADR-0001's
-  staircase for the Beam Pro host (ADR-0001 stays in force for its other hosts and as history).
+- **Status:** Accepted, 2026-11-19 (proposed 2026-11-16). Amends ADR-0001's staircase for the Beam Pro host;
+  ADR-0001 stays in force for its other hosts and as history.
 - **Deciders:** Jack.
 
 ## Context
@@ -13,7 +13,7 @@ accuracy worse than 10 mm RMS, or unreliable Wi-Fi. Step C has only run on the S
 On 2026-11-16, with the Beam Pro in hand, Jack set the direction: measure the on-device chain; the Surface is
 no longer needed as a pose host.
 
-## Decision (proposed)
+## Decision
 
 On the Beam Pro, the live pose (marker detection, PnP, lock filter) runs on the device. Step C over Wi-Fi is
 not built for the live path.
@@ -26,7 +26,7 @@ Implementation options for Step A, to choose before B3a:
 | A2 | OpenCV Android SDK (Apache-2.0, arm64 prebuilt) behind a thin C ABI in a native plugin: `ArucoDetector` + `solvePnP` (IPPE / SQPnP) on the Y plane | free; same algorithms and parameters as the Python pipeline; smallest surface | an NDK/CMake build step to maintain; C++ to review |
 | A3 | detection re-implemented in C# | no native code | re-implements OpenCV; parity risk; slow |
 
-Recommendation: **A2**, with a parity test: the same saved Eye frames through the Python pipeline and the
+Chosen: **A2**, with a parity test: the same saved Eye frames through the Python pipeline and the
 native plugin must give the same marker corners and poses within stated tolerances.
 
 ## Consequences
@@ -39,6 +39,24 @@ native plugin must give the same marker corners and poses within stated toleranc
   from the same config files, it does not hard-code them (AGENTS.md invariant).
 - `IArucoPoseBridge` stays the seam: the native plugin is one more implementation behind it, so the Step C
   bridge remains available for development on a PC.
+
+## Acceptance (Jack, 2026-11-19)
+
+> "We have to pose on the Beam and still bring the latency to the lowest possible values. This is a precision
+> job, the user needs to have a very stable image. The priority is to be operable; the optimal case is operable
+> and portable, meaning the Beam Pro (and ideally modern and future smartphones) could handle the app."
+
+Priorities that follow, in order, for every later trade-off on this path:
+
+1. **Operable:** a stable image (no flicker, no judder, no pose jitter visible to the user) and the lowest
+   latency reachable from exposure to overlay.
+2. **Portable:** runs on the Beam Pro, and ideally on current and future Android phones that drive the
+   glasses. So no Beam-Pro-only dependency on the pose path (the hidden rear camera pair, for one), and no
+   frame budget tuned to one chip without a measured margin.
+
+Evidence at acceptance: the Eye frames are already 133-138 ms old on arrival with the glasses drawing (T6.4),
+so Step C's send, network and detection (55 ms on the Surface) would pass ADR-0001's 150 ms pivot criterion
+before any reply.
 
 ## The case against (recorded so the decision is made knowingly)
 

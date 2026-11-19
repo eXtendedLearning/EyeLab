@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.004<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.006<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,31 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.4.006) T6.6, gate B3a (`docs/tasks/T6.6-b3a-detection.md`): native ArUco plugin `native/eyelab_aruco`
+  (C ABI, CLAHE + `ArucoDetector` + board pose mirroring `pose_estimator`, OpenCV 4.13.0 Android SDK linked
+  statically, one 6.4 MB arm64 `.so`, 16 KB pages) built by `tools/build_aruco_plugin.sh` with Unity's NDK r27c;
+  `EyeLab.Aruco.ArucoNative`; probe **5 Detection** (`DetectProbe.cs`): bench on a pushed frame set with 1 and
+  default threads, then live detection on every Eye frame on a worker thread while the glasses draw, with
+  per-frame Unity frame times; `python -m xreal_gates b3a-set` (synthetic plate A frames at known poses, empty
+  frames, Eye snapshots) and the B3a report with the parity test against Python (`xreal_gates/b3a.py`).
+- (0.4.006) T6.5 results: the flicker is frame pacing, not aliasing (45 fps with the URP template's HDR,
+  post-processing and shadows; 59.9 fps and rated steady without them); default now "lean" at render scale 0.8,
+  applied at start-up; MSAA blanked the glasses again and they stayed blank after a restart, so it is refused;
+  SMAA and MSAA removed from the render run.
+
+- (0.4.005) ADR-0004 accepted (Jack, 2026-11-19): on the Beam Pro the pose runs on the device (option A2,
+  OpenCV Android SDK in a native plugin). Priorities recorded with it: operable first (stable image, lowest
+  latency), then portable (Beam Pro, ideally current and future phones). File renamed from `.draft.md`.
+- (0.4.005) T6.5 render gate (`docs/tasks/T6.5-render-gate.md`): `RenderProbe.cs` switches eight rendering
+  settings live (0.4.004 settings, head-locked, lean without HDR/post/shadows at 0.6/0.8/1.0, SMAA, MSAA 2x,
+  lean again), blind by number, rated on the Beam Pro screen; every frame's XR display counters (present,
+  dropped, motion-to-photon, XREAL extended/early/teared) in `render.csv`. A hard-edged 40 cm grid beside the
+  soft square in the glasses. `CuePlayer.Play` takes a step hook. Analyser `xreal_gates/render.py`.
+- (0.4.005) T6.4 results: glasses draw again (Jack: text and square), but Unity draws 41-49 fps against the 60 Hz
+  display and the square flickers; loop closure 84 mm after 0.85 m with a 104 mm height step taken while looking
+  up and down; Eye exposure − `cam_ts` −0.5 ms; Eye frame age 133-138 ms while the glasses draw; the rear
+  pair's offset changed to 14.5 ms (80 ms in T6.3).
 
 - (0.4.004) T6.4 (`docs/tasks/T6.4-glasses-and-loop.md`): glasses check at start (voice prompt, three answer
   buttons, answer in the app log and every run); XR display counters every 5 s in the app log (frames presented,
@@ -46,6 +71,24 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
   room). New buttons; Eye chain default 2 min (runs ≤ 3 min).
 - (0.4.002) `python -m xreal_gates bp` reports head, eye-pose and stereo runs, and the first Eye frame of each
   timecode id.
+
+### Changed
+
+- Parallel agent sessions allowed (Jack, 2026-11-19): `AGENTS.md` "Parallel sessions" replaces "never run two
+  agent sessions at once"; the rule is now never two sessions on the same work, shared files edited by own
+  entry only, commits one at a time with only one's own paths staged.
+- Docs clean-up: `CONTEXT.md` cut from 207 to about 120 lines (stale Windows access-route survey, superseded
+  "generic APK" decisions, resolved open issues 1-2 and the update history removed; the deferred 2026-10-08
+  audit findings F04, F07, F09, F10, F12 moved onto its open-issues board as issue 7; the portable bundle
+  marked as planned, never built); `docs/README.md` rewritten for the current layout; `docs/HARDWARE.md`
+  provenance trimmed.
+
+### Removed
+
+- Finished or superseded documents, still readable with `git show 5e9a386:<path>` and listed with their
+  successors in `docs/README.md` "Removed documents": `docs/AUDIT-2026-09-18.md`, `docs/audit_verify.py`,
+  `docs/AUDIT-2026-10-08.md`, `docs/S3-HANDOVER-2026-09-25.md`, `docs/XREAL-PC-BETA-2026-10-09.md`,
+  `docs/ar-freeze-diagnostics.md`, `docs/tasks/T5.1-eye-latency.md`.
 
 ### Fixed
 
@@ -109,7 +152,7 @@ such, the Beam Pro work as 0.4.000.
   - `beampro.bat`: adb check, read-only adb inventory, install, choose probe, pull, analyse.
   - `python -m xreal_gates bp RUN` (`python/xreal_gates/beampro.py`, tests in `test_beampro.py`): finds the
     clock domain and unit of `cam_ts`, age drift, IMU rates and delivery lag, timecode decoding.
-  - `docs/adr/0004-on-device-pose-beampro.draft.md` (proposed): live pose on the device for the Beam Pro.
+  - `docs/adr/0004-on-device-pose-beampro.md` (proposed): live pose on the device for the Beam Pro.
 
 ### Fixed
 

@@ -35,7 +35,7 @@ Nothing in this module prints or exits. ``xreal_probe.py`` owns the I/O, and
 runs this in a child process so a hang in a native call cannot wedge its
 caller. That matters because the same code is destined for the GUI, where a
 blocking native call on the tkinter thread is the exact failure already
-documented in ``docs/ar-freeze-diagnostics.md``.
+documented in the 2026-09-19 AR freeze diagnosis (``git show 5e9a386:docs/ar-freeze-diagnostics.md``).
 """
 
 from __future__ import annotations

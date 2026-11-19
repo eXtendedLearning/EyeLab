@@ -7,7 +7,7 @@ no reprojection-based quality gate could detect it. Each test below asserts the
 contract that now prevents the error, plus — for the ones that are measurable —
 the magnitude of the damage the contract is guarding against.
 
-See docs/AUDIT-2026-09-18.md findings S1a, S1b, S1c.
+See the 2026-09-18 audit, findings S1a, S1b, S1c (removed; `git show 5e9a386:docs/AUDIT-2026-09-18.md`).
 """
 
 from __future__ import annotations

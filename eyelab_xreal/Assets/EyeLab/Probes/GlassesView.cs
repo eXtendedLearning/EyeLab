@@ -202,7 +202,7 @@ namespace EyeLab.Probes
             var go = new GameObject("EyeLab World Reference", typeof(RectTransform), typeof(Canvas));
             go.GetComponent<Canvas>().renderMode = RenderMode.WorldSpace;
             var rt = (RectTransform)go.transform;
-            rt.sizeDelta = new Vector2(400f, 400f);
+            rt.sizeDelta = new Vector2(900f, 400f);
             rt.localScale = Vector3.one * 0.001f;
             // T6.2: thin hard-edged quads shimmered in the glasses (render scale 0.8, no MSAA). Draw the outline
             // and cross from one texture with soft edges and mipmaps, trilinear, so they stay steady while the
@@ -211,6 +211,7 @@ namespace EyeLab.Probes
             sq.transform.SetParent(go.transform, false);
             var srt = (RectTransform)sq.transform;
             srt.sizeDelta = new Vector2(400f, 400f);
+            srt.anchoredPosition = new Vector2(-250f, 0f);
             var raw = sq.GetComponent<RawImage>();
             raw.texture = SquareTexture(512, 10f);
             raw.color = new Color(0.3f, 0.8f, 1f);
@@ -221,8 +222,70 @@ namespace EyeLab.Probes
             lrt.anchoredPosition = new Vector2(0, -250);
             lrt.sizeDelta = new Vector2(600, 60);
             var t = Label(label.transform, font, 36, new Color(0.3f, 0.8f, 1f));
-            t.text = "fixed in the room (40 cm)";
+            t.text = "fixed in the room: soft square, hard grid (40 cm)";
+            HardGrid(go.transform, new Vector2(250f, 0f));
             return go.transform;
+        }
+
+        /// <summary>
+        /// T6.5: a 40 cm grid of hard-edged 3 mm strips with two diagonals, right of the soft square. The measurement
+        /// overlay will be thin geometry like this, which aliases in a way the soft texture does not (MSAA and SMAA
+        /// act on geometry edges, not on a texture's alpha).
+        /// </summary>
+        static void HardGrid(Transform parent, Vector2 centre)
+        {
+            var grid = new GameObject("hard grid", typeof(RectTransform));
+            grid.transform.SetParent(parent, false);
+            ((RectTransform)grid.transform).anchoredPosition = centre;
+            var col = new Color(1f, 0.55f, 0.85f);
+            void Strip(Vector2 at, Vector2 size, float angle)
+            {
+                var go = new GameObject("strip", typeof(RectTransform), typeof(Image));
+                go.transform.SetParent(grid.transform, false);
+                var rt = (RectTransform)go.transform;
+                rt.sizeDelta = size;
+                rt.anchoredPosition = at;
+                rt.localRotation = Quaternion.Euler(0f, 0f, angle);
+                var img = go.GetComponent<Image>();
+                img.color = col;
+                img.raycastTarget = false;
+            }
+            for (int i = 0; i < 5; i++)
+            {
+                float x = -200f + 100f * i;
+                Strip(new Vector2(x, 0f), new Vector2(3f, 400f), 0f);
+                Strip(new Vector2(0f, x), new Vector2(400f, 3f), 0f);
+            }
+            Strip(Vector2.zero, new Vector2(566f, 3f), 45f);
+            Strip(Vector2.zero, new Vector2(566f, 3f), -45f);
+        }
+
+        Transform m_RefParent;
+        Vector3 m_RefPos;
+        Quaternion m_RefRot;
+
+        /// <summary>
+        /// T6.5: hold the square and grid 1.5 m ahead of the head instead of fixed in the room. If the flicker goes
+        /// away head-locked, it comes from motion (frame pacing, pose prediction), not from aliasing.
+        /// </summary>
+        public void SetReferenceHeadLocked(bool headLocked)
+        {
+            if (m_Reference == null) return;
+            if (headLocked && m_Reference.parent != m_Cam.transform)
+            {
+                m_RefParent = m_Reference.parent;
+                m_RefPos = m_Reference.position;
+                m_RefRot = m_Reference.rotation;
+                m_Reference.SetParent(m_Cam.transform, false);
+                m_Reference.localPosition = new Vector3(0f, 0f, 1.5f);
+                m_Reference.localRotation = Quaternion.identity;
+                m_Reference.gameObject.SetActive(true);
+            }
+            else if (!headLocked && m_Reference.parent == m_Cam.transform)
+            {
+                m_Reference.SetParent(m_RefParent, false);
+                m_Reference.SetPositionAndRotation(m_RefPos, m_RefRot);
+            }
         }
 
         /// <summary>White outline square and centre cross on transparent; line width in texels, about 1.5 texel soft edge.</summary>

@@ -11,7 +11,7 @@
 
 - **XREAL One Pro + XREAL Eye** (camera accessory, installed). Access to the
   Eye's camera feed is the project's critical dependency — see ADR-003 and
-  `docs/S3-HANDOVER-2026-09-25.md`.
+  ADR-0004 (the pose runs on the Beam Pro).
 - **Firmware (2026-11-17):** SW version `15.1.03.603_1.9.1.20260914175625_097`, read in MyGlasses on the Beam Pro
   after the 2026-11-17 updates (T6.0 step 0); automatic updates are off since then, so this is the
   campaign's frozen version. Every observation before 2026-11-17 was on an earlier, unrecorded version.
@@ -61,25 +61,7 @@
   glasses fails to create its XREAL session (the runtime service does not answer). Logs of an XR run are
   read afterwards: the app's own run folders and the SDK's auto-logcat in
   `Android/data/it.univpm.eyelab/cache/auto_log`. Wireless debugging removes the swap (on since 2026-11-17).
-  Earlier text, kept for provenance: **Direction (2026-11-10, Jack):** stop
-  PC-only work and build features that also run on XREAL One Pro + Eye + Beam Pro; hand-over in
-  `BEAMPRO-HANDOVER-2026-11-10.md`. Earlier: ordered 2026-05-14, not arrived (confirmed
-  2026-10-06). **No Android phone with USB-C video output** is available
-  either. The established Android SDK 3.1.0 camera route has no host today.
-  **PC beta update (2026-10-09):** XREAL-hosted 3.1.2 packages are downloadable
-  and contain a Standalone RGB camera sample and Windows camera bindings.
-  They are staged locally, not installed in the main project. Runtime camera
-  and tracking success remain unverified; see `XREAL-PC-BETA-2026-10-09.md`.
-  Four core native DLLs match those already probed in September; the Unity
-  wrapper differs. The vendor scene/session lifecycle supplies a new experiment,
-  not evidence that the earlier initialization/license blockers are solved.
-- **Android emulator / WSL: lower-priority, unverified (revised 2026-10-09).**
-  Google documents Windows USB passthrough and ARM translation in selected
-  emulator images, so the previous Linux-only/ARM64 categorical exclusion was
-  incorrect. USB forwarding does not give Android the Surface's physical DP
-  display path or XREAL runtime integration. A camera-only experiment is not
-  ruled out; full optical XR is not a demonstrated emulator capability.
-  Sources and distinctions: `XREAL-PC-BETA-2026-10-09.md`.
+  Direction (2026-11-10, Jack): stop PC-only work; hand-over `BEAMPRO-HANDOVER-2026-11-10.md`.
 
 ## Host machines
 

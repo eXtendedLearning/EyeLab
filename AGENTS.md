@@ -10,7 +10,7 @@ An XR spatial-localization aid for Experimental Modal Analysis impact-hammer tes
 
 ## Hardware in hand — read before any XREAL work
 
-**`docs/HARDWARE.md`** is the single source for the machines and the glasses, and what each can do. In short: XREAL One Pro + Eye; desktop `lagann-0526` (RTX 5060, no iGPU) has USB data to the glasses but **cannot drive them as a display**; the **Surface Pro 7** drives them as a display (USB-C DP Alt Mode) and has a built-in webcam. A Thunderbolt DP-in card for the desktop was an open purchase decision (ADR-003, open question 6); **decided 2026-10-14: not buying** — the pipeline is made light enough for the Surface and the Beam Pro instead (`docs/HARDWARE.md`). **A Beam Pro arrives around 2026-11-17** and becomes the target host. Update that file whenever hardware or a verified capability changes.
+**`docs/HARDWARE.md`** is the single source for the machines and the glasses, and what each can do. In short: XREAL One Pro + Eye; desktop `lagann-0526` (RTX 5060, no iGPU) has USB data to the glasses but **cannot drive them as a display**; the **Surface Pro 7** drives them as a display (USB-C DP Alt Mode) and has a built-in webcam. A Thunderbolt DP-in card for the desktop was an open purchase decision (ADR-003, open question 6); **decided 2026-10-14: not buying** — the pipeline is made light enough for the Surface and the Beam Pro instead (`docs/HARDWARE.md`). **The Beam Pro is in hand (2026-11-16)** and is the target host. Update that file whenever hardware or a verified capability changes.
 
 ## Document precedence
 
@@ -90,16 +90,25 @@ The XREAL SDK lives at `eyelab_xreal/Packages/com.xreal.xr/` and is gitignored (
 - Touch `CHANGELOG.md` and `CONTEXT.md`'s `Last updated` stamp with substantive changes; the stamp reads `Last updated: DATE, build X.Y.ZZZ (...)`.
 - Line endings are normalised by `.gitattributes` (`* text=auto`), for a Windows checkout with Linux agents. If EOL noise reappears, renormalise — never commit CRLF.
 
+## Parallel sessions (Jack, 2026-11-19)
+
+More than one agent session may work on this repo at the same time. What is forbidden is two sessions working on **the same thing** at the same time: the same feature, task file, module or Unity scene.
+
+- **Announce your area** to the other running sessions (or ask Jack which are running) before you write: which files and folders you will touch. Stay inside it.
+- **Shared files** (`CHANGELOG.md`, `CONTEXT.md`, `README.md`, `AGENTS.md`, `docs/README.md`): re-read right before each edit, change only your own entry or section, never rewrite or reorder another session's text. The `CONTEXT.md` `Last updated` stamp belongs to whichever session commits next.
+- **Commits one at a time.** Stage only your own paths (`git add <paths>`, never `git add -A` while another session has uncommitted work), run `tools/bump_version.py` just before your own commit, and expect the other session to bump again for its own.
+- **Never** revert, delete, reformat or "clean up" files another session has modified or created and not yet committed; leave gitignored run data of another task alone.
+
 ## Sandbox hazards (agents running against a mounted copy of this repo)
 
 These have cost real work before. Read them before writing anything.
 
 - **The mount can serve stale, tail-truncated reads of files edited by the current session.** Truncation occurs at the file's pre-edit byte size: new content up to that offset is visible, the tail is not. Fresh `Write`s sync correctly; `Edit`s may not. Verify line counts against the Windows-side file before trusting a large file you just edited. `eyelab_gui.py` has lost its `main()` this way.
-- **Never run two agent sessions against this repo at once.**
+- **Two agent sessions on one checkout: only on different work** (see "Parallel sessions" below).
 - **Do not commit from the sandbox.** `git status` / `git diff` can report clean while the worktree genuinely differs from HEAD, and `.git/index` can corrupt (`bad signature 0x00000000`). Hand changes to Jack, who commits and pushes from Windows. There are no push credentials in the sandbox.
 - `tkinter` is usually absent, so `test_gui_calibration` fails locally and passes in CI. That single failure is expected; anything else is not.
 - Purge `python/__pycache__` before running tests against edited sources, or run with `python3 -B` from a copy.
 
 ## Open work
 
-`CONTEXT.md` holds the live open-issues board. The two largest known items are the T2.6 XREAL bring-up (`docs/tasks/T2.6-implementation-checklist.md` — treat its code stubs as intent, re-verify the SDK surface before copying) and the findings in the 2026-09-18 audit, which are not yet applied.
+`CONTEXT.md` holds the live open-issues board. The two largest known items are the T2.6 XREAL bring-up (`docs/tasks/T2.6-implementation-checklist.md` — treat its code stubs as intent, re-verify the SDK surface before copying) and the deferred findings of the 2026-10-08 audit (F04, F07, F09, F10, F12), now listed on that board. Retired documents are listed, with the commit that still holds them, in `docs/README.md` "Removed documents".

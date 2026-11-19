@@ -109,6 +109,9 @@ namespace EyeLab.Probes
             Debug.Log("[EyeLab probe] (not spoken) " + text);
         }
 
+        /// <summary>Id of the step being played ("" before the first, "end" after the last).</summary>
+        public string CurrentStep { get; private set; } = "";
+
         public void PlayEnd() => m_Audio.PlayOneShot(m_End);
 
         public static void Log(ProbeRun run, string name, string detail) =>
@@ -117,9 +120,10 @@ namespace EyeLab.Probes
         /// <summary>
         /// Plays <paramref name="steps"/> in order. <paramref name="show"/> gets (instruction, seconds left in the
         /// step, fraction of the step left, "step i/n"). Stops early if <paramref name="abort"/> returns true.
+        /// <paramref name="onStep"/> runs at each step start, before the prompt (T6.5 switches settings there).
         /// </summary>
         public IEnumerator Play(ProbeRun run, IReadOnlyList<CueStep> steps, Action<string, float, float, string> show,
-                                Func<bool> abort = null)
+                                Func<bool> abort = null, Action<CueStep> onStep = null)
         {
             Log(run, "cue_speech", SpeechState);
             float total = 0f;
@@ -129,6 +133,8 @@ namespace EyeLab.Probes
             for (int i = 0; i < steps.Count; i++)
             {
                 CueStep s = steps[i];
+                CurrentStep = s.Id;
+                onStep?.Invoke(s);
                 Log(run, "cue", s.Id);
                 m_Audio.PlayOneShot(m_Step);
                 Say(s.Say);
@@ -146,6 +152,7 @@ namespace EyeLab.Probes
                     yield return null;
                 }
             }
+            CurrentStep = "end";
             Log(run, "cue", "end");
             PlayEnd();
             Say("Done.");

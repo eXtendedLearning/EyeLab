@@ -23,6 +23,8 @@ namespace EyeLab.Probes.Editor
         const string Source = "Assets/Scenes/SampleScene.unity";
         const string Target = "Assets/EyeLab/Scenes/Probes.unity";
         const string DefaultApk = "build/eyelab_probes.apk";
+        // B3a native plugin, built by tools/build_aruco_plugin.sh (gitignored build artefact).
+        const string ArucoPlugin = "Assets/Plugins/Android/libs/arm64-v8a/libeyelab_aruco.so";
 
         [MenuItem("EyeLab/Probes/Create Probes Scene")]
         public static void Create()
@@ -60,6 +62,7 @@ namespace EyeLab.Probes.Editor
                     !EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android))
                     throw new InvalidOperationException("cannot switch to Android (is Android Build Support installed?)");
 
+                ConfigureArucoPlugin();
                 string apk = Path.GetFullPath(Arg("-apkPath") ?? DefaultApk);
                 Directory.CreateDirectory(Path.GetDirectoryName(apk));
                 // 2026-11-17: the Gradle project kept a data.unity3d from a May 2026 build; it was packed into every
@@ -93,6 +96,21 @@ namespace EyeLab.Probes.Editor
             EditorApplication.Exit(code);
         }
 
+        /// <summary>The ArUco plugin is Android arm64 only; fail early when it was not built.</summary>
+        static void ConfigureArucoPlugin()
+        {
+            AssetDatabase.ImportAsset(ArucoPlugin, ImportAssetOptions.ForceSynchronousImport);
+            if (!(AssetImporter.GetAtPath(ArucoPlugin) is PluginImporter imp))
+                throw new InvalidOperationException(ArucoPlugin + " missing: run bash tools/build_aruco_plugin.sh first");
+            imp.SetCompatibleWithAnyPlatform(false);
+            imp.SetCompatibleWithEditor(false);
+            imp.SetCompatibleWithPlatform(BuildTarget.StandaloneWindows64, false);
+            imp.SetCompatibleWithPlatform(BuildTarget.Android, true);
+            imp.SetPlatformData(BuildTarget.Android, "CPU", "ARM64");
+            imp.SaveAndReimport();
+            Debug.Log("[EyeLab] " + ArucoPlugin + " set to Android ARM64");
+        }
+
         /// <summary>An APK must carry its scenes either as loose files (level0, globalgamemanagers) or as data.unity3d, never both.</summary>
         static bool CheckApk(string apk)
         {
@@ -106,6 +124,11 @@ namespace EyeLab.Probes.Editor
                     return false;
                 }
                 Debug.Log($"[EyeLab] APK scene data: {(bundle ? "data.unity3d" : "loose files")}");
+                if (zip.GetEntry("lib/arm64-v8a/libeyelab_aruco.so") == null)
+                {
+                    Debug.LogError("[EyeLab] APK has no lib/arm64-v8a/libeyelab_aruco.so");
+                    return false;
+                }
                 return true;
             }
         }
