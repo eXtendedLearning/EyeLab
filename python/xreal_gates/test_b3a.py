@@ -56,5 +56,35 @@ class B3aTest(unittest.TestCase):
             self.assertIn("== run  detect", "\n".join(beampro.report(run)))
 
 
+    def test_bottom_up_eye_frames(self):
+        """Real Eye frames come bottom-up: the set flips them upright, and the live report warns when a run did not."""
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            K = np.array([[620.0, 0, 640], [0, 620, 360], [0, 0, 1]])
+            calib = d / "calib.json"
+            calib.write_text(json.dumps({"K": K.tolist(), "dist": [0, 0, 0, 0, 0]}), encoding="utf-8")
+            ids, corners = b3a.board()
+            upright = b3a.render(K, np.zeros(5), ids, corners, np.array([np.pi, 0, 0]), np.array([0.0, 0.0, 0.4]), seed=7)
+            stored = upright[::-1].copy()
+            self.assertEqual(b3a._detect_ids(stored, ids), [])          # mirrored markers do not decode
+            raw = d / "raw"
+            b3a.write_pgm(raw / "y_000010.pgm", stored)
+            s = b3a.make_set(d / "set", calib, b3a.DEFAULT_MARKERS, empty=0, eye_plate=raw, bottom_up=True)
+            self.assertIn("frames/eyeplate_y_000010.pgm", s["frames"])
+            self.assertEqual(b3a._detect_ids(b3a.read_pgm(d / "set/frames/eyeplate_y_000010.pgm"), ids), [30, 31, 32])
+
+            run = d / "run"
+            b3a.write_pgm(run / "frames/y_000010.pgm", stored)
+            live = ("seq,step,threads,cam_ts,arrival_mono_ns,start_mono_ns,end_mono_ns,skipped,markers,rejected,board_markers,"
+                    "pose_ok,planar,points,clahe_ms,detect_ms,pose_ms,total_ms,r0,r1,r2,t0,t1,t2,rms_px,amb_ratio,amb_deg,ids,saved\n"
+                    "10,t2_still,2,1000000,96000000,97000000,140000000,0,0,50,0,0,0,0,3,40,0,43,,,,,,,,,,,frames/y_000010.pgm\n")
+            (run / "live.csv").write_text(live, encoding="utf-8")
+            (run / "frames.csv").write_text("step,threads,unity_frame,dt_ms,present,mono_ns,eye_ms\n"
+                                            "t2_still,2,1,16.6,1,1,0.8\n", encoding="utf-8")
+            text = "\n".join(b3a.live_report(run, d / "set"))
+            self.assertIn("WARNING", text)
+            self.assertIn("main-thread Eye work", text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.006<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.007<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -17,6 +17,19 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.4.007) T6.6 run 1 analysed (`docs/tasks/T6.6-b3a-detection.md`). Live detection found nothing because
+  the Eye rows reach the app bottom-up on the Beam Pro too (T6.1's "upright" was wrong, corrected there).
+  `DetectProbe` now reverses them on copy and logs the main thread's Eye time per frame (`frames.csv` `eye_ms`).
+  The bench tries 1, 2, 4 and 8 OpenCV threads, because OpenCV's Android default is 2. Live runs at 2, then 4 threads.
+  The frame set's synthetic noise went from sigma 3 to 0.7: at 3 it gave about 65,000 contours and 160-180 ms even on
+  the desktop. Real upright plate frames are now in the set (`b3a-set --eye-plate --bottom-up`).
+  The report adds the age split (arrival, wait, processing), the per-corner divergence against the truth, the count
+  of exact parity frames, and a warning for bottom-up frames.
+  Run 1 measurements:
+  - pose age 155-199 ms, of which 96 ms is arrival;
+  - processing 49 ms (2 threads) or 78 ms (1 thread) per real frame;
+  - parity exact on 12 of 16 synthetic frames; the other 4 diverge by under 1 px, and neither side is closer to the truth;
+  - late Unity frames 5.8-9.3 %, against 2.8 % without detection.
 - (0.4.006) T6.6, gate B3a (`docs/tasks/T6.6-b3a-detection.md`): native ArUco plugin `native/eyelab_aruco`
   (C ABI, CLAHE + `ArucoDetector` + board pose mirroring `pose_estimator`, OpenCV 4.13.0 Android SDK linked
   statically, one 6.4 MB arm64 `.so`, 16 KB pages) built by `tools/build_aruco_plugin.sh` with Unity's NDK r27c;

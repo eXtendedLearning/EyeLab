@@ -448,7 +448,7 @@ namespace EyeLab.Probes
             AddButton(font, "2  Motion sync  (40 s)", new ProbeConfig { probe = "sync" });
             AddButton(font, "3  Stereo pan  (35 s)", new ProbeConfig { probe = "pan" });
             AddButton(font, "4  Rendering, rate each setting  (85 s)", new ProbeConfig { probe = "render" });
-            AddButton(font, "5  Detection with plate A  (90 s)", new ProbeConfig { probe = "detect" });
+            AddButton(font, "5  Detection with plate A  (100 s)", new ProbeConfig { probe = "detect" });
             AddAction(font, "Place square ahead", () => m_Glasses?.PlaceReference(), new Color(0.1f, 0.25f, 0.45f, 0.9f));
             AddAction(font, "Archive (older runs)", () => ShowPage(m_Panel2), new Color(0.22f, 0.22f, 0.25f, 0.9f));
             AddAction(font, "Quit EyeLab", () => { Debug.Log("[EyeLab probe] quit button"); Application.Quit(); });

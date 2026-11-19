@@ -68,6 +68,8 @@ def main(argv=None) -> int:
     p_b3.add_argument("--calib", type=Path, help="Eye calibration json (default: the 2026-10-21 PC-gate calibration)")
     p_b3.add_argument("--markers", type=Path, help="marker config (default config/markers/plate_A.markers.json)")
     p_b3.add_argument("--snapshots", type=Path, help="folder of full-resolution Eye snapshots to add (no plate)")
+    p_b3.add_argument("--eye-plate", type=Path, help="folder of full-resolution Eye frames with plate A (e.g. <detect run>/frames)")
+    p_b3.add_argument("--bottom-up", action="store_true", help="the --eye-plate frames are stored bottom-up (0.4.006 runs)")
     p_bp = sub.add_parser("bp", help="Beam Pro probe runs (T6.0, T6.1)")
     p_bp.add_argument("runs", nargs="+", type=Path)
     args = parser.parse_args(argv)
@@ -138,7 +140,7 @@ def main(argv=None) -> int:
     if args.cmd == "b3a-set":
         from . import b3a
         s = b3a.make_set(args.out or b3a.DEFAULT_SET, args.calib or b3a.DEFAULT_CALIB, args.markers or b3a.DEFAULT_MARKERS,
-                         snapshots=args.snapshots)
+                         snapshots=args.snapshots, eye_plate=args.eye_plate, bottom_up=args.bottom_up)
         print(f"{len(s['frames'])} frames, board {s['board_name']} ids {s['ids']}, calibration {s['calibration']} "
               f"-> {args.out or b3a.DEFAULT_SET}")
         return 0

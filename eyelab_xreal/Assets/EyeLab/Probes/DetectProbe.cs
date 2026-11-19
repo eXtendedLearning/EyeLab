@@ -19,10 +19,12 @@ namespace EyeLab.Probes
     /// plugin, while the glasses draw. Two parts in one run:
     /// <list type="number">
     /// <item><b>Bench</b> (no wearing needed): every frame of the set the agent pushed to <c>files/b3a/</c> (<c>set.json</c>,
-    /// PGM frames made by <c>python -m xreal_gates b3a-set</c>) is processed with 1 thread and with OpenCV's default
-    /// threads, 5 times each, on a worker thread. <c>bench.csv</c> and <c>bench_corners.csv</c> go to the parity test
+    /// PGM frames made by <c>python -m xreal_gates b3a-set</c>) is processed with 1, 2, 4 and 8 OpenCV threads, 3 times
+    /// each, on a worker thread (OpenCV's Android default is 2 threads, whatever the core count). <c>bench.csv</c> and <c>bench_corners.csv</c> go to the parity test
     /// against the Python pipeline on the same frames.</item>
-    /// <item><b>Live</b>: every new Eye frame is copied once on the main thread and processed on a worker thread (newest
+    /// <item><b>Live</b>: every new Eye frame is copied once on the main thread, rows reversed to upright (the Eye stores
+    /// them bottom-up, and the intrinsics are for the upright image; 0.4.006 missed this and found nothing live), and
+    /// processed on a worker thread (newest
     /// wins; a frame that arrives while the worker is busy replaces the waiting one and is counted as skipped).
     /// <c>live.csv</c> has the times and the pose per processed frame, <c>frames.csv</c> every Unity frame's time, so
     /// the cost to the render loop is visible; every 10th processed frame is saved at full resolution for the parity
@@ -57,21 +59,34 @@ namespace EyeLab.Probes
         const string BenchHeader = "frame,threads_req,threads,rep,markers,rejected,board_markers,pose_ok,planar,points,clahe_ms,detect_ms,pose_ms,total_ms," +
                                    "r0,r1,r2,t0,t1,t2,rms_px,amb_ratio,amb_deg";
         const string FramesFile = "frames.csv";
-        const string FramesHeader = "step,threads,unity_frame,dt_ms,present,mono_ns";
+        const string FramesHeader = "step,threads,unity_frame,dt_ms,present,mono_ns,eye_ms";
         const int SaveEvery = 10;
-        const int BenchReps = 5;
+        const int BenchReps = 3;
+        static readonly int[] BenchThreads = { 1, 2, 4, 8 };
 
         public static List<CueStep> Cues() => new List<CueStep>
         {
             new CueStep("ready", "Detection test. Stand about half a metre from plate A, so it is straight ahead of you.", 8f,
                         "Plate A straight ahead, about 50 cm", ticks: true),
-            new CueStep("t1_still", "Look at the plate and hold still.", 15f, "Look at the plate: HOLD STILL"),
-            new CueStep("t1_move", "Move your head slowly. Keep the plate in view.", 12f, "Move SLOWLY, plate in view", metronome: 1f),
-            new CueStep("t1_away", "Look away from the plate.", 6f, "Look AWAY from the plate"),
-            new CueStep("tn_still", "Back to the plate. Hold still.", 15f, "Back to the plate: HOLD STILL"),
-            new CueStep("tn_move", "Move your head slowly again.", 12f, "Move SLOWLY, plate in view", metronome: 1f),
-            new CueStep("tn_away", "Look away again.", 6f, "Look AWAY from the plate", ticks: true),
+            new CueStep("t2_still", "Look at the plate and hold still.", 15f, "Look at the plate: HOLD STILL"),
+            new CueStep("t2_move", "Move your head slowly. Keep the plate in view.", 12f, "Move SLOWLY, plate in view", metronome: 1f),
+            new CueStep("t2_away", "Look away from the plate.", 6f, "Look AWAY from the plate"),
+            new CueStep("t4_still", "Back to the plate. Hold still.", 15f, "Back to the plate: HOLD STILL"),
+            new CueStep("t4_move", "Move your head slowly again.", 12f, "Move SLOWLY, plate in view", metronome: 1f),
+            new CueStep("t4_away", "Look away again.", 6f, "Look AWAY from the plate", ticks: true),
         };
+
+        /// <summary>OpenCV threads for a cue step: the number after "t" in "t2_still"; 2 (OpenCV's Android default) otherwise.</summary>
+        public static int ThreadsFor(string stepId)
+        {
+            if (stepId != null && stepId.Length > 2 && stepId[0] == 't')
+            {
+                int end = stepId.IndexOf('_');
+                if (end > 1 && int.TryParse(stepId.Substring(1, end - 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n > 0)
+                    return n;
+            }
+            return 2;
+        }
 
         struct Done
         {
@@ -89,7 +104,7 @@ namespace EyeLab.Probes
         FrameSet m_Set;
         XRDisplaySubsystem m_Display;
         string m_Step = "";
-        volatile int m_ThreadsWanted = 1;
+        volatile int m_ThreadsWanted = 2;
         volatile bool m_Live, m_Stop;
         Thread m_Worker;
         readonly object m_Lock = new object();
@@ -105,6 +120,7 @@ namespace EyeLab.Probes
         bool m_Capturing;
         string m_BenchStatus = "", m_Error = "";
         double m_LastTotal;
+        double m_EyeMs;
 
         public static IEnumerator Run(ProbeRun run, Action<string> status, Action<string, float, float, string> show)
         {
@@ -158,7 +174,7 @@ namespace EyeLab.Probes
             }, null, step =>
             {
                 p.m_Step = step.Id;
-                p.m_ThreadsWanted = step.Id.StartsWith("tn_") ? -1 : 1;
+                p.m_ThreadsWanted = ThreadsFor(step.Id);
             });
             p.StopLive();
             while (p.m_Done.TryDequeue(out Done d)) p.Write(d);
@@ -215,7 +231,7 @@ namespace EyeLab.Probes
             {
                 using (ArucoNative det = MakeDetector())
                 {
-                    int[] threadModes = { 1, -1 };
+                    int[] threadModes = BenchThreads;
                     for (int f = 0; f < m_Set.frames.Length; f++)
                     {
                         string name = m_Set.frames[f];
@@ -310,6 +326,7 @@ namespace EyeLab.Probes
             m_Capturing = id != ulong.MaxValue;
             m_Run.Meta("eye_start_capture", id.ToString(CultureInfo.InvariantCulture));
             m_Run.Meta("calibration_resolution", "1280x720 (set.json)");
+            m_Run.Meta("eye_rows", "bottom-up from the SDK, reversed to upright on copy");
             m_Live = true;
             m_Worker = new Thread(Worker) { IsBackground = true, Name = "eyelab-b3a-live" };
             m_Worker.Start();
@@ -331,13 +348,20 @@ namespace EyeLab.Probes
             var ci = CultureInfo.InvariantCulture;
             int present = -1;
             if (m_Display != null && !m_Display.TryGetFramePresentCount(out present)) present = -1;
+            // the main thread's Eye work (acquire, upright copy, hand-over) is timed, so its share of the frame is known
+            m_EyeMs = 0;
+            if (m_Capturing)
+            {
+                long t0 = ProbeClocks.MonoNs;
+                if (Acquire()) m_EyeMs = (ProbeClocks.MonoNs - t0) / 1e6;
+            }
             m_Run.Row(FramesFile, FramesHeader, $"{m_Step},{m_ThreadsWanted},{Time.frameCount},{(Time.unscaledDeltaTime * 1000f).ToString("R", ci)}," +
-                                                $"{present},{ProbeClocks.MonoNs}");
+                                                $"{present},{ProbeClocks.MonoNs},{m_EyeMs.ToString("F3", ci)}");
             while (m_Done.TryDequeue(out Done d)) Write(d);
-            if (m_Capturing) Acquire();
         }
 
-        void Acquire()
+        /// <returns>true when a new frame was copied and handed to the worker.</returns>
+        bool Acquire()
         {
             int newest = -1, acquired = 0;
             ulong newestTs = 0;
@@ -355,16 +379,18 @@ namespace EyeLab.Probes
                 newestTs = ts;
                 acquired++;
             }
-            if (acquired == 0) return;
+            if (acquired == 0) return false;
             long arrival = ProbeClocks.MonoNs;
             try
             {
-                if (newestTs == m_LastTs) return;
+                if (newestTs == m_LastTs) return false;
                 m_LastTs = newestTs;
-                if (!XREALPlugin.TryGetRGBCameraDataPlane(newest, 0, out IntPtr data, out Vector2Int size) || data == IntPtr.Zero) return;
+                if (!XREALPlugin.TryGetRGBCameraDataPlane(newest, 0, out IntPtr data, out Vector2Int size) || data == IntPtr.Zero) return false;
                 int bytes = size.x * size.y;
                 if (m_Back == null || m_Back.Length != bytes) m_Back = new byte[bytes];
-                Marshal.Copy(data, m_Back, 0, bytes);
+                // rows are stored bottom-up: copy them in reverse so row 0 is the top of the image
+                for (int row = 0; row < size.y; row++)
+                    Marshal.Copy(IntPtr.Add(data, (size.y - 1 - row) * size.x), m_Back, row * size.x, size.x);
                 m_EyeFrames++;
                 lock (m_Lock)
                 {
@@ -378,6 +404,7 @@ namespace EyeLab.Probes
                     m_W = size.x; m_H = size.y; m_Stride = size.x;
                 }
                 m_Signal.Set();
+                return true;
             }
             finally
             {

@@ -74,8 +74,16 @@ def _rot(rx_deg: float, ry_deg: float, rz_deg: float = 0.0) -> np.ndarray:
 
 
 def render(K: np.ndarray, dist: np.ndarray, ids: Sequence[int], corners: np.ndarray, rvec: np.ndarray, tvec: np.ndarray,
-           seed: int, size: Tuple[int, int] = SIZE) -> np.ndarray:
-    """Plate A on a grey, textured background, seen by the Eye at (rvec, tvec); mild blur and noise."""
+           seed: int, size: Tuple[int, int] = SIZE, noise: Optional[float] = None) -> np.ndarray:
+    """Plate A on a grey, textured background, seen by the Eye at (rvec, tvec); mild blur and noise.
+
+    ``noise`` is the per-pixel sigma in grey levels (default ``SYNTH_NOISE``). The detector's cost depends steeply on
+    it, because CLAHE and the adaptive threshold turn fine noise into contours: sigma 3 gave about 65,000 contours
+    and 170 ms on the desktop, against about 4,000 in a real Eye frame (B3a run 2026-11-19); 0.7 gives about 1,500.
+    Real Eye frames are the cost reference (``eyeplate_*`` frames in the set); the synthetic ones are for parity
+    and truth.
+    """
+    noise = SYNTH_NOISE if noise is None else noise
     rng = np.random.default_rng(seed)
     w, h = size
     img = np.full((h, w), 110, np.float32)
@@ -96,7 +104,7 @@ def render(K: np.ndarray, dist: np.ndarray, ids: Sequence[int], corners: np.ndar
         warped = cv2.warpPerspective(marker, H, (w, h), flags=cv2.INTER_AREA)
         mask = cv2.warpPerspective(np.ones((side, side), np.float32), H, (w, h), flags=cv2.INTER_AREA)
         img = img * (1 - mask) + warped * mask
-    img = cv2.GaussianBlur(img, (0, 0), 0.8) + rng.normal(0, 3.0, (h, w))
+    img = cv2.GaussianBlur(img, (0, 0), 0.8) + rng.normal(0, noise, (h, w))
     return np.clip(np.round(img), 0, 255).astype(np.uint8)
 
 
@@ -123,12 +131,22 @@ def read_pgm(path: Path) -> np.ndarray:
     return np.frombuffer(data, np.uint8, w * h, pos + 1).reshape(h, w)
 
 
+#: per-pixel noise of the synthetic frames (grey levels); see ``render``
+SYNTH_NOISE = 0.7
+
 POSES = [(d, rx, ry, rz) for d in (0.35, 0.5, 0.7, 1.0) for (rx, ry, rz) in ((0, 0, 0), (25, 0, 5), (0, 35, -5), (20, -25, 10))]
 
 
 def make_set(out: Path = DEFAULT_SET, calib: Path = DEFAULT_CALIB, markers: Path = DEFAULT_MARKERS,
-             empty: int = 4, snapshots: Optional[Path] = None) -> dict:
-    """Write set.json, truth.json and frames/*.pgm into ``out`` (replacing an older set)."""
+             empty: int = 4, snapshots: Optional[Path] = None, eye_plate: Optional[Path] = None,
+             bottom_up: bool = False, eye_plate_count: int = 8) -> dict:
+    """Write set.json, truth.json and frames/*.pgm into ``out`` (replacing an older set).
+
+    ``eye_plate``: a folder of full-resolution Eye frames with plate A in view (e.g. a detect run's ``frames``);
+    ``eye_plate_count`` of them where a plain detector finds two or more board markers are added as ``eyeplate_*``
+    frames, flipped upright when ``bottom_up`` (the Eye stores rows bottom-up; 0.4.006 saved them that way). They
+    have no truth; they give the cost and the parity on real frames.
+    """
     out = Path(out)
     K, dist = eye_calibration(calib)
     ids, corners = board(markers)
@@ -153,6 +171,20 @@ def make_set(out: Path = DEFAULT_SET, calib: Path = DEFAULT_CALIB, markers: Path
                 name = f"frames/eye_{p.stem}.pgm"
                 write_pgm(out / name, img)
                 frames.append(name)
+    if eye_plate:
+        found = []
+        for p in sorted(Path(eye_plate).glob("*.pgm")):
+            img = read_pgm(p)
+            if img.shape != SIZE[::-1]:
+                continue
+            img = img[::-1].copy() if bottom_up else img
+            if len(_detect_ids(img, ids)) >= 2:
+                found.append((p, img))
+        step = max(1, len(found) // max(1, eye_plate_count))
+        for p, img in found[::step][:eye_plate_count]:
+            name = f"frames/eyeplate_{p.stem}.pgm"
+            write_pgm(out / name, img)
+            frames.append(name)
     s = {
         "schema": SCHEMA,
         "board_name": Path(markers).name.split(".")[0],
@@ -168,6 +200,13 @@ def make_set(out: Path = DEFAULT_SET, calib: Path = DEFAULT_CALIB, markers: Path
     (out / "set.json").write_text(json.dumps(s, indent=1), encoding="utf-8")
     (out / "truth.json").write_text(json.dumps(truth, indent=1), encoding="utf-8")
     return s
+
+
+def _detect_ids(img: np.ndarray, board_ids: Sequence[int]) -> List[int]:
+    """Board ids found by a plain DICT_4X4_50 detector (to select and check frames; not the parity pipeline)."""
+    det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50), cv2.aruco.DetectorParameters())
+    _, found, _ = det.detectMarkers(img)
+    return [] if found is None else sorted(set(int(i) for i in found.ravel()) & set(board_ids))
 
 
 def load_set(set_dir: Path = DEFAULT_SET) -> Optional[dict]:
@@ -275,9 +314,14 @@ def bench_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
         used = sel[0].get("threads", "?")
         frames = len({r["frame"] for r in sel})
         with_m = [r for r in sel if int(r["markers"] or 0) > 0]
-        out.append(f"   {('1' if tm == '1' else 'default')+' ('+used+')':10s} {frames:5d}   {len(with_m) / len(sel) * 100:5.0f} %  "
+        out.append(f"   {('default' if tm == '-1' else tm)+' ('+used+')':10s} {frames:5d}   {len(with_m) / len(sel) * 100:5.0f} %  "
                    f"{_q([_f(r['clahe_ms']) for r in sel])}  {_q([_f(r['detect_ms']) for r in sel])}  "
                    f"{_q([_f(r['pose_ms']) for r in sel])}  {_q([_f(r['total_ms']) for r in sel])}")
+        for label, key in (("synthetic plate A", "plate_"), ("real Eye frames with plate A", "eyeplate_")):
+            part = [r for r in sel if key in r["frame"] and (key != "plate_" or "eyeplate_" not in r["frame"])]
+            if part:
+                out.append(f"     {label}: total {_q([_f(r['total_ms']) for r in part])} ms "
+                           f"over {len({r['frame'] for r in part})} frames")
         empty = [r for r in sel if "empty" in r["frame"] or "eye_" in r["frame"]]
         if empty:
             out.append(f"     frames without plate A: total {_q([_f(r['total_ms']) for r in empty])} ms")
@@ -288,7 +332,7 @@ def bench_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
     py = PythonPipeline(s)
     dev_corners = _corners_by_frame(load_csv(run / "bench_corners.csv"), "frame")
     first = {r["frame"]: r for r in rows if r["threads_req"] == "1" and r["rep"] == "0"}
-    res, err_dev, err_py = [], [], []
+    res, err_dev, err_py, div = [], [], [], []
     for name, r in first.items():
         p = set_dir / name
         if not p.exists():
@@ -298,15 +342,44 @@ def bench_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
         res.append(c)
         if name in truth:
             t = truth[name]
+            if c["corner_px"] == c["corner_px"] and c["corner_px"] > PARITY_PX:
+                div.append(_divergence(name, dev_corners.get(name, {}), pr, s, t))
             for pose, acc in ((_pose(r), err_dev), (pr["pose"], err_py)):
                 if pose is not None:
                     acc.append((float(np.linalg.norm(pose[1] - np.asarray(t["tvec"])) * 1000), rotation_deg(pose[0], t["rvec"])))
     out.append(_parity_line("parity (bench)", res))
+    for d in div:
+        out.append(f"     {d}")
     for label, acc in (("device", err_dev), ("python", err_py)):
         if acc:
             out.append(f"   truth error {label}: {len(acc)} poses, t median {quantile([a[0] for a in acc], 0.5):.2f} mm, "
                        f"max {max(a[0] for a in acc):.2f} mm; r median {quantile([a[1] for a in acc], 0.5):.3f} deg")
     return out
+
+
+#: corner difference (px) counted as equal in the parity test
+PARITY_PX = 0.01
+
+
+def _divergence(name: str, dev: Dict[int, np.ndarray], py: dict, s: dict, truth: dict) -> str:
+    """The most divergent corner of a frame, with each side's distance to the true projection."""
+    K = np.asarray(s["K"], float).reshape(3, 3)
+    dist = np.asarray(s["dist"], float)
+    obj = np.asarray(s["corners"], float).reshape(len(s["ids"]), 4, 3)
+    worst = None
+    for i in set(dev) & set(py["ids"]):
+        d = np.abs(dev[i] - py["corners"][i]).max(axis=1)
+        j = int(d.argmax())
+        if worst is None or d[j] > worst[0]:
+            proj, _ = cv2.projectPoints(obj[s["ids"].index(i)], np.asarray(truth["rvec"], float),
+                                        np.asarray(truth["tvec"], float), K, dist)
+            proj = proj.reshape(4, 2)[j]
+            worst = (float(d[j]), i, j, float(np.linalg.norm(py["corners"][i][j] - proj)),
+                     float(np.linalg.norm(dev[i][j] - proj)))
+    if worst is None:
+        return f"{Path(name).name}: no common marker"
+    return (f"{Path(name).name}: id {worst[1]} corner {worst[2]} differs {worst[0]:.3f} px; "
+            f"to truth python {worst[3]:.3f} px, device {worst[4]:.3f} px")
 
 
 def _parity_line(label: str, res: List[dict]) -> str:
@@ -320,7 +393,8 @@ def _parity_line(label: str, res: List[dict]) -> str:
     diff = [f"{c['only_device']}/{c['only_python']}" for c in res if not c["ids_equal"]]
     return (f"   {label}: {len(res)} frames, ids equal {same}/{len(res)}"
             + (f" (device-only/python-only: {', '.join(diff[:4])})" if diff else "")
-            + (f"; corners max {max(corner):.4f} px" if corner else "")
+            + (f"; corners max {max(corner):.4f} px, within {PARITY_PX} px on "
+               f"{sum(1 for x in corner if x <= PARITY_PX)}/{len(corner)}" if corner else "")
             + (f"; pose max {max(t):.3f} mm, {max(r):.4f} deg over {len(t)}" if t else "")
             + (f"; pose on one side only {one}" if one else ""))
 
@@ -353,6 +427,10 @@ def live_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 60.0
         over = sum(1 for x in dt if x > 1000 / refresh_hz * 1.25) / len(dt) * 100 if dt else float("nan")
         out.append(f"   {step:10s} {sel[0]['threads']:>3s}  {rate:6.1f}  {skipped:7d}  {seen * 100:5.0f} %  {posed * 100:3.0f} %"
                    f"  {_q([_f(r['total_ms']) for r in sel])}  {_q(wait)}  {_q(age)}  {fps:9.1f}  {over:7.1f} %")
+        arrive = [(int(r["arrival_mono_ns"]) - int(r["cam_ts"])) / 1e6 for r in sel]
+        eye_ms = [x for x in (_f(f.get("eye_ms")) for f in fr) if x is not None and x > 0]
+        out.append(f"     age = arrival {_q(arrive)} + wait {_q(wait)} + processing {_q([_f(r['total_ms']) for r in sel])} ms"
+                   + (f"; main-thread Eye work {_q(eye_ms)} ms on {len(eye_ms)} frames" if eye_ms else ""))
         still = [_pose(r) for r in sel if r["pose_ok"] == "1"]
         if step.endswith("_still") and len(still) > 5:
             tv = np.array([p[1] for p in still]) * 1000
@@ -369,6 +447,12 @@ def live_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 60.0
             if p.exists():
                 res.append(compare(dev_corners.get(r["seq"], {}), _pose(r), py.process(read_pgm(p))))
         out.append(_parity_line("parity (Eye frames)", res))
+        blind = [r for r in saved if int(r["markers"] or 0) == 0 and (run / r["saved"]).exists()]
+        if blind:
+            flipped = sum(1 for r in blind if len(_detect_ids(read_pgm(run / r["saved"])[::-1].copy(), s["ids"])) >= 2)
+            if flipped > len(blind) // 2:
+                out.append(f"   WARNING: on {flipped}/{len(blind)} saved frames without markers, plate A is found once "
+                           f"the rows are flipped: the frames reached the detector bottom-up")
     return out
 
 
