@@ -146,7 +146,7 @@ class PanTest(unittest.TestCase):
             _w(run / "stereo.csv", ["frame", "logical_ts", "phys_a", "ts_a", "phys_b", "ts_b", "boot_ns_at_result"], [])
             text = "\n".join(beampro.report(run))
         self.assertIn("sensor 0 exposure - image timestamp (gyro)", text)
-        line = next(x for x in text.splitlines() if "EXPOSURE OFFSET" in x)
+        line = next(x for x in text.splitlines() if "EXPOSURE OFFSET" in x).split(")", 1)[1]
         val = float(line.split(":")[1].split("ms")[0])
         self.assertAlmostEqual(val, 12.0, delta=2.0)
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 import struct
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .beampro import load_csv, load_json, quantile, read_pgm
 
@@ -103,6 +103,13 @@ def loop_report(run: Path) -> List[str]:
         horiz = math.hypot(b[0] - a[0], b[2] - a[2]) * 1000
         out.append(f"   LOOP CLOSURE (still_2 - still_1, same floor mark): horizontal {horiz:.0f} mm, height "
                    f"{(b[1] - a[1]) * 1000:+.0f} mm, yaw {_wrap(yb - ya):+.1f} deg")
+        away = [(n, t0, t1) for n, t0, t1 in phases if n in ("away", "walk_out")]
+        if away:   # how far the walk went: the closure error is read against it
+            n, t0, t1 = away[-1] if away[-1][0] == "away" else away[0]
+            ii = idx(t0 + 1e9, t1)
+            if ii:
+                m = mean_pos(ii)
+                out.append(f"   walk: {n} phase {math.hypot(m[0] - a[0], m[2] - a[2]) * 1000:.0f} mm from the mark")
     for i in range(1, len(pos)):
         step = math.dist(pos[i], pos[i - 1])
         if step > 0.10:
@@ -126,6 +133,23 @@ def image_shifts(images: Sequence) -> List[Optional[Tuple[float, float, float]]]
         (dx, dy), resp = cv2.phaseCorrelate(np.float32(prev), np.float32(cur), win)
         out.append((dx, dy, resp))
     return out[:len(images)]
+
+
+def consecutive_pairs(ts: Sequence[Optional[float]], shifts, min_response: float = 0.05):
+    """Intervals (t[k-1], t[k]) and shifts for consecutive frames one frame period apart (0.5-1.6 x the median
+    step; T6.3: the rear pair ran at 20 Hz in hand, so a fixed 20-50 ms window dropped most pairs)."""
+    steps = sorted(b - a for a, b in zip(ts, ts[1:]) if a is not None and b is not None and b > a)
+    if not steps:
+        return [], []
+    med = steps[len(steps) // 2]
+    iv, ys = [], []
+    for k in range(1, len(ts)):
+        s, a, b = shifts[k], ts[k - 1], ts[k]
+        if s is None or s[2] < min_response or a is None or b is None or not (0.5 * med < b - a < 1.6 * med):
+            continue
+        iv.append((a, b))
+        ys.append((s[0], s[1]))
+    return iv, ys
 
 
 def rotvec(r) -> Tuple[float, float, float]:
@@ -238,18 +262,11 @@ def sync_report(run: Path) -> List[str]:
         p = run / name
         imgs.append(read_pgm(p) if p.exists() else None)
         ts.append(float(f["cam_ts"]))
-    sh = image_shifts(imgs)
-    iv, ys = [], []
-    for k in range(1, len(ts)):
-        s = sh[k]
-        if s is None or s[2] < 0.05 or not (20e6 < ts[k] - ts[k - 1] < 50e6):
-            continue
-        iv.append((ts[k - 1], ts[k]))
-        ys.append((s[0], s[1]))
+    iv, ys = consecutive_pairs(ts, image_shifts(imgs))
     out = [f"   motion sync: {len(imgs)} saved frames, {len(ys)} usable consecutive pairs, pose grid {len(grid)} rows "
            f"({(gt[-1] - gt[0]) / 1e9:.1f} s)"]
     out.append(_offset_line("Eye exposure - cam_ts (head pose)", best_offset(iv, ys, gt, theta)))
-    out.append("   (negative delta: the exposure is before cam_ts; arrival age before cam_ts adds to the 130 ms)")
+    out.append("   (negative delta: the exposure is before cam_ts. The reference is the tracker's own pose clock)")
     return out
 
 
@@ -287,25 +304,31 @@ def pan_report(run: Path) -> List[str]:
         return ["   pan: no gyroscope in imu.csv"]
     theta = integrate_gyro(gt, gr)
     out = [f"   pan: gyroscope {len(gt)} events over {(gt[-1] - gt[0]) / 1e9:.1f} s; thumbnails {w}x{h}"]
+    # T6.3: both sensors' images carry the logical (sensor 0) timestamp; each sensor's own SENSOR_TIMESTAMP is in
+    # the physical capture results (stereo.csv ts_a / ts_b), keyed by the logical timestamp.
+    own: Dict[str, Dict[int, float]] = {}
+    for r in load_csv(run / "stereo.csv"):
+        for pc, tc in (("phys_a", "ts_a"), ("phys_b", "ts_b")):
+            if r.get(pc) and (r.get(tc) or "").lstrip("-").isdigit():
+                own.setdefault(r[pc], {})[int(r["logical_ts"])] = float(r[tc])
     res = {}
     for f in sorted(run.glob("stereo_thumbs_*.bin")):
         pid = f.stem.split("_")[-1]
         recs = read_thumbs(f, w, h)
         sh = image_shifts([img for _, img in recs])
-        iv, ys = [], []
-        for k in range(1, len(recs)):
-            s = sh[k]
-            if s is None or s[2] < 0.05 or not (20e6 < recs[k][0] - recs[k - 1][0] < 50e6):
-                continue
-            iv.append((recs[k - 1][0], recs[k][0]))
-            ys.append((s[0], s[1]))
+        iv, ys = consecutive_pairs([t for t, _ in recs], sh)
         r = best_offset(iv, ys, gt, theta)
-        res[pid] = r
         out.append(_offset_line(f"sensor {pid} exposure - image timestamp (gyro), {len(recs)} images", r))
+        mine = own.get(pid, {})
+        if mine:
+            iv2, ys2 = consecutive_pairs([mine.get(t) for t, _ in recs], sh)
+            r2 = best_offset(iv2, ys2, gt, theta)
+            out.append(_offset_line(f"sensor {pid} exposure - its own result timestamp (gyro)", r2))
+        res[pid] = r
     ok = [r for r in res.values() if r]
     if len(ok) == 2:
         a, b = ok
-        out.append(f"   EXPOSURE OFFSET between the sensors: {a['delta_ms'] - b['delta_ms']:+.1f} ms "
+        out.append(f"   EXPOSURE OFFSET between the sensors' images (same image timestamp): {a['delta_ms'] - b['delta_ms']:+.1f} ms "
                    f"(peak widths {a['width_ms']:.1f} / {b['width_ms']:.1f} ms)")
     return out
 

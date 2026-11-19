@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.XR;
@@ -92,7 +93,43 @@ namespace EyeLab.Probes
             m_Text.text = rest.Length > 0 ? first + "\n" + rest : first;   // two short lines: what runs, time left
         }
 
-        void Update() => FollowHead();
+        void Update()
+        {
+            FollowHead();
+            if (Time.realtimeSinceStartup >= m_NextStats) { m_NextStats = Time.realtimeSinceStartup + 5f; LogDisplay(); }
+        }
+
+        float m_NextStats;
+        int m_LastPresent = -1;
+        static readonly List<XRDisplaySubsystem> s_Displays = new List<XRDisplaySubsystem>();
+
+        /// <summary>
+        /// T6.4: what the XR display itself reports every 5 s. In 0.4.003 Unity drew (first frame 7.9 s, 59 fps) and
+        /// the glasses showed nothing; the present count says whether frames reach the glasses' compositor.
+        /// </summary>
+        void LogDisplay()
+        {
+            SubsystemManager.GetSubsystems(s_Displays);
+            if (s_Displays.Count == 0) { Debug.Log("[EyeLab probe] xr display: no display subsystem"); return; }
+            foreach (XRDisplaySubsystem d in s_Displays)
+            {
+                string v(bool ok, float x, string f) => ok ? x.ToString(f) : "-";
+                bool okR = d.TryGetDisplayRefreshRate(out float hz);
+                bool okP = d.TryGetFramePresentCount(out int present);
+                bool okD = d.TryGetDroppedFrameCount(out int dropped);
+                bool okA = d.TryGetAppGPUTimeLastFrame(out float app);
+                bool okC = d.TryGetCompositorGPUTimeLastFrame(out float comp);
+                bool okM = d.TryGetMotionToPhoton(out float m2p);
+                string rate = okP && m_LastPresent >= 0 ? ((present - m_LastPresent) / 5f).ToString("F1") : "-";
+                if (okP) m_LastPresent = present;
+                Debug.Log($"[EyeLab probe] xr display: running {d.running}, passes {d.GetRenderPassCount()}, " +
+                          $"refresh {v(okR, hz, "F1")} Hz, presented {(okP ? present.ToString() : "-")} ({rate}/s), " +
+                          $"dropped {(okD ? dropped.ToString() : "-")}, app gpu {v(okA, app * 1000f, "F1")} ms, compositor gpu " +
+                          $"{v(okC, comp * 1000f, "F1")} ms, motion-to-photon {v(okM, m2p * 1000f, "F1")} ms, eye texture " +
+                          $"{XRSettings.eyeTextureWidth}x{XRSettings.eyeTextureHeight}, render scale {d.scaleOfAllRenderTargets:F2}, " +
+                          $"unity fps {1f / Mathf.Max(Time.smoothDeltaTime, 1e-4f):F0}");
+            }
+        }
 
         void FollowHead()
         {

@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.003<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.004<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,15 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.4.004) T6.4 (`docs/tasks/T6.4-glasses-and-loop.md`): glasses check at start (voice prompt, three answer
+  buttons, answer in the app log and every run); XR display counters every 5 s in the app log (frames presented,
+  dropped, GPU times); Beam Pro screen redone: opaque cover over the XREAL controller, one column, older runs
+  under Archive; loop cues say the free space needed first and walk two steps to any free side.
+- (0.4.004) T6.3 results (`docs/tasks/T6.3-guided-runs.md`): Eye `cam_ts` is the exposure time within 3 ms;
+  the rear pair is not synchronised (sensor 2 about 80 ms after sensor 0, images stamped with sensor 0's time);
+  loop closure 259 mm after 2 m. Analyser: frame pairs by the median step (the pair ran at 20 Hz), each rear
+  sensor also fitted on its own result timestamp, walk distance in the loop report.
 
 - (0.4.003) T6.3 guided runs (`docs/tasks/T6.3-guided-runs.md`, Jack's request after T6.2): `CuePlayer.cs` and
   `CueSpeech.java` speak each step (Android TextToSpeech, tones only if no engine), play tones and three ticks
@@ -40,6 +49,8 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Fixed
 
+- (0.4.004) Nothing in the glasses with 0.4.003: MSAA 4x and render scale 1.0 reverted to the 0.4.002 values
+  (off, 0.8). Suspected cause; the new display counters will confirm it.
 - (0.4.003) Shimmering square in the glasses (Jack, 0.4.002): the Android pipeline asset rendered at scale 0.8
   without MSAA; now scale 1.0 with MSAA 4x, and the square is one soft-edged mipmapped texture instead of thin
   quads. The text-to-speech query is added to the generated manifest (Android 11+ hides engines otherwise).

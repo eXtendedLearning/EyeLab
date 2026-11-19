@@ -41,13 +41,15 @@ namespace EyeLab.Probes
         Text m_Status;
         GlassesView m_Glasses;
         GameObject m_Panel, m_Panel2;
+        string m_GlassesSeen = "not answered";
         CuePlayer m_Cues;
         bool m_Busy;
 
         // ------------------------------------------------------------------ T6.3 cue scripts (Jack, 2026-11-18)
         static readonly CueStep[] LoopCues =
         {
-            new CueStep("ready", "Stand on your mark and face the wall.", 6f, ticks: true),
+            new CueStep("ready", "This test needs about one metre of free floor on any one side of you. Stand on your mark and face ahead.", 9f,
+                        "Free floor: 1 m on any side. Stand on the mark", ticks: true),
             new CueStep("still_1", "Stay still.", 15f),
             new CueStep("look_left", "Look left.", 4f),
             new CueStep("look_right", "Look right.", 4f),
@@ -58,16 +60,15 @@ namespace EyeLab.Probes
             new CueStep("front_1", "Back to the front.", 5f),
             new CueStep("turn_right", "Turn ninety degrees right.", 5f, "Turn 90 degrees RIGHT"),
             new CueStep("front_2", "Back to the front.", 5f, ticks: true),
-            new CueStep("walk_out", "Walk two metres forward.", 8f, "Walk 2 m forward"),
-            new CueStep("turn_back", "Turn around.", 4f),
-            new CueStep("walk_back", "Walk back to your mark.", 8f),
-            new CueStep("face_front", "Stand on the mark and face the wall.", 5f, ticks: true),
+            new CueStep("walk_out", "Take two steps towards whichever side is free.", 5f, "2 steps to a free side"),
+            new CueStep("away", "Stop there.", 4f),
+            new CueStep("walk_back", "Walk back onto your mark and face ahead again.", 6f, "Back onto the mark, face ahead", ticks: true),
             new CueStep("still_2", "Stay still.", 15f),
         };
 
         static readonly CueStep[] SyncCues =
         {
-            new CueStep("ready", "Face a wall with texture, or the board, one to two metres away.", 6f, "Face a textured wall, 1-2 m", ticks: true),
+            new CueStep("ready", "Stand anywhere, facing a wall with texture, or the board, one to two metres away.", 7f, "Face a textured wall, 1-2 m", ticks: true),
             new CueStep("still_1", "Stay still.", 5f, ticks: true),
             new CueStep("shake", "Shake your head left and right, about once a second.", 12f, "Shake LEFT - RIGHT", metronome: 0.5f),
             new CueStep("still_2", "Stop. Stay still.", 3f, ticks: true),
@@ -77,7 +78,7 @@ namespace EyeLab.Probes
 
         static readonly CueStep[] PanCues =
         {
-            new CueStep("ready", "Hold the Beam Pro, rear cameras towards a scene with texture.", 6f, "Beam Pro in hand, rear cameras to a scene", ticks: true),
+            new CueStep("ready", "Anywhere. Hold the Beam Pro, rear cameras towards a scene with texture.", 6f, "Beam Pro in hand, rear cameras to a scene", ticks: true),
             new CueStep("still_1", "Hold still.", 4f, ticks: true),
             new CueStep("pan_slow", "Pan slowly left and right.", 10f, "Pan SLOWLY left - right", metronome: 1f),
             new CueStep("pan_fast", "Now quickly, left and right.", 10f, "Pan QUICKLY left - right", metronome: 0.5f),
@@ -99,6 +100,7 @@ namespace EyeLab.Probes
             yield return new WaitForSecondsRealtime(m_StartDelay);   // let the XREAL session and controller come up
             BuildUi();
             Debug.Log("[EyeLab probe] speech " + m_Cues.SpeechState);
+            StartCoroutine(GlassesCheck());
             ProbeConfig cfg = FromIntent() ?? FromFile();
             if (cfg != null && !string.IsNullOrEmpty(cfg.probe))
             {
@@ -112,12 +114,35 @@ namespace EyeLab.Probes
             }
         }
 
+        /// <summary>T6.4: ask once at start what the glasses show; the answer goes into the app log and every run.</summary>
+        IEnumerator GlassesCheck()
+        {
+            float t0 = Time.realtimeSinceStartup;
+            while (m_Cues.SpeechState.StartsWith("init") && Time.realtimeSinceStartup - t0 < 8f) yield return null;
+            yield return new WaitForSecondsRealtime(1f);
+            m_Cues.Say("EyeLab is ready. In the glasses you should see green text, and a blue square ahead. " +
+                       "Tap what you see, at the top of the Beam Pro screen.");
+        }
+
+        void AnswerGlasses(string answer)
+        {
+            m_GlassesSeen = $"{answer} (t {Time.realtimeSinceStartup:F0} s)";
+            Debug.Log("[EyeLab probe] glasses check: " + m_GlassesSeen);
+            m_Cues?.Say(answer == "all" ? "Thank you." : "Noted.");
+            SetStatus("Glasses: " + answer + ". Choose a test.");
+        }
+
+        void ShowPage(GameObject page)
+        {
+            if (m_Panel != null) m_Panel.SetActive(page == m_Panel);
+            if (m_Panel2 != null) m_Panel2.SetActive(page == m_Panel2);
+        }
+
         public IEnumerator RunProbe(ProbeConfig cfg)
         {
             if (m_Busy) yield break;
             m_Busy = true;
-            if (m_Panel != null) m_Panel.SetActive(false);
-            if (m_Panel2 != null) m_Panel2.SetActive(false);
+            ShowPage(null);
             string p = cfg.probe.ToLowerInvariant();
             if (p == "inventory" || p == "all") yield return Inventory(cfg);
             if (p == "chain" || p == "all") yield return Chain(cfg, timecode: false);
@@ -130,8 +155,7 @@ namespace EyeLab.Probes
             if (p == "sync") yield return Guided(cfg, "sync", SyncCues, Unity.XR.XREAL.TrackingType.MODE_6DOF, 1, 4, true);
             if (p == "pan") yield return Stereo(cfg, PanCues);
             m_Glasses?.ClearCue();
-            if (m_Panel != null) m_Panel.SetActive(true);
-            if (m_Panel2 != null) m_Panel2.SetActive(true);
+            ShowPage(m_Panel);
             m_Busy = false;
         }
 
@@ -148,6 +172,7 @@ namespace EyeLab.Probes
             }
             run.Meta("speech", m_Cues != null ? m_Cues.SpeechState : "none");
             run.Meta("app_log", AppLog.Path);
+            run.Meta("glasses_seen", m_GlassesSeen);
         }
 
         /// <summary>T6.3 guided head run with the Eye: "loop" (B2 loop closure) or "sync" (B1t motion sync).</summary>
@@ -369,17 +394,34 @@ namespace EyeLab.Probes
             EnsureEventSystem();
             Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
-            m_Status = MakeText(canvas.transform, font, new Vector2(0f, 0.9f), new Vector2(1f, 1f), 28);
-            m_Glasses = GlassesView.Create(font);
-            m_Panel = Column(canvas.transform, 0.02f, 0.45f);
+            // Jack, 2026-11-19: the XREAL controller's App, trigger pad and Home buttons sat under the probe buttons.
+            // EyeLab draws an opaque cover over the whole controller canvas (it also takes the taps), then its own
+            // single column; older runs move to an Archive page.
+            var cover = new GameObject("EyeLab Cover", typeof(RectTransform), typeof(Image));
+            cover.transform.SetParent(canvas.transform, false);
+            var crt = (RectTransform)cover.transform;
+            crt.anchorMin = Vector2.zero;
+            crt.anchorMax = Vector2.one;
+            crt.offsetMin = crt.offsetMax = Vector2.zero;
+            cover.GetComponent<Image>().color = new Color(0.04f, 0.04f, 0.05f, 1f);
 
-            AddButton(font, "1 Guided: head loop + Eye (100 s)", new ProbeConfig { probe = "loop" });
-            AddButton(font, "2 Guided: motion sync (40 s)", new ProbeConfig { probe = "sync" });
-            AddButton(font, "3 Guided: stereo pan (35 s)", new ProbeConfig { probe = "pan" });
+            m_Status = MakeText(canvas.transform, font, new Vector2(0.04f, 0.88f), new Vector2(0.96f, 0.98f), 30);
+            m_Status.alignment = TextAnchor.MiddleCenter;
+            m_Glasses = GlassesView.Create(font);
+
+            m_Panel = Column(canvas.transform);
+            var row = Row(m_Panel.transform);
+            AddAction(font, "I see text + square", () => AnswerGlasses("all"), new Color(0.12f, 0.3f, 0.15f, 0.9f), row);
+            AddAction(font, "Text only", () => AnswerGlasses("text only"), new Color(0.35f, 0.3f, 0.1f, 0.9f), row);
+            AddAction(font, "Nothing", () => AnswerGlasses("nothing"), new Color(0.45f, 0.1f, 0.1f, 0.9f), row);
+            AddButton(font, "1  Head loop + Eye  (95 s)", new ProbeConfig { probe = "loop" });
+            AddButton(font, "2  Motion sync  (40 s)", new ProbeConfig { probe = "sync" });
+            AddButton(font, "3  Stereo pan  (35 s)", new ProbeConfig { probe = "pan" });
             AddAction(font, "Place square ahead", () => m_Glasses?.PlaceReference(), new Color(0.1f, 0.25f, 0.45f, 0.9f));
+            AddAction(font, "Archive (older runs)", () => ShowPage(m_Panel2), new Color(0.22f, 0.22f, 0.25f, 0.9f));
             AddAction(font, "Quit EyeLab", () => { Debug.Log("[EyeLab probe] quit button"); Application.Quit(); });
 
-            m_Panel2 = Column(canvas.transform, 0.55f, 0.98f);
+            m_Panel2 = Column(canvas.transform);
             AddButton(font, "Timecode 60 s", new ProbeConfig { probe = "timecode" }, m_Panel2);
             AddButton(font, "Head 6DoF 2 min", new ProbeConfig { probe = "head" }, m_Panel2);
             AddButton(font, "Head 6DoF + Eye 2 min", new ProbeConfig { probe = "head_eye" }, m_Panel2);
@@ -387,6 +429,8 @@ namespace EyeLab.Probes
             AddButton(font, "Stereo 30 s (on table)", new ProbeConfig { probe = "stereo" }, m_Panel2);
             AddButton(font, "Eye chain 2 min", new ProbeConfig { probe = "chain" }, m_Panel2);
             AddButton(font, "Inventory + IMU 20 s", new ProbeConfig { probe = "inventory" }, m_Panel2);
+            AddAction(font, "Back", () => ShowPage(m_Panel), new Color(0.22f, 0.22f, 0.25f, 0.9f), m_Panel2);
+            ShowPage(m_Panel);
             Debug.Log("[EyeLab probe] buttons built on " + (canvas.gameObject.name));
         }
 
@@ -413,13 +457,13 @@ namespace EyeLab.Probes
             Debug.Log("[EyeLab probe] EventSystem created");
         }
 
-        static GameObject Column(Transform parent, float xMin, float xMax)
+        static GameObject Column(Transform parent)
         {
             var panel = new GameObject("EyeLab Probe Buttons", typeof(RectTransform), typeof(VerticalLayoutGroup));
             panel.transform.SetParent(parent, false);
             var prt = (RectTransform)panel.transform;
-            prt.anchorMin = new Vector2(xMin, 0.12f);
-            prt.anchorMax = new Vector2(xMax, 0.88f);
+            prt.anchorMin = new Vector2(0.06f, 0.06f);
+            prt.anchorMax = new Vector2(0.94f, 0.86f);
             prt.offsetMin = prt.offsetMax = Vector2.zero;
             var layout = panel.GetComponent<VerticalLayoutGroup>();
             layout.spacing = 12;
@@ -429,10 +473,24 @@ namespace EyeLab.Probes
             return panel;
         }
 
-        void AddAction(Font font, string label, UnityEngine.Events.UnityAction action, Color? color = null)
+        static Transform Row(Transform parent)
+        {
+            var row = new GameObject("row", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+            row.transform.SetParent(parent, false);
+            var h = row.GetComponent<HorizontalLayoutGroup>();
+            h.spacing = 12;
+            h.childForceExpandWidth = true;
+            h.childForceExpandHeight = true;
+            h.childControlWidth = true;
+            h.childControlHeight = true;
+            return row.transform;
+        }
+
+        void AddAction(Font font, string label, UnityEngine.Events.UnityAction action, Color? color = null, object parent = null)
         {
             var go = new GameObject(label, typeof(RectTransform), typeof(Image), typeof(Button));
-            go.transform.SetParent(m_Panel.transform, false);
+            Transform where = parent is GameObject g ? g.transform : parent as Transform ?? m_Panel.transform;
+            go.transform.SetParent(where, false);
             go.GetComponent<Image>().color = color ?? new Color(0.45f, 0.1f, 0.1f, 0.9f);
             go.GetComponent<Button>().onClick.AddListener(action);
             Text t = MakeText(go.transform, font, Vector2.zero, Vector2.one, 30);
