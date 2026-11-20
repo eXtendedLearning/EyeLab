@@ -15,7 +15,7 @@ namespace EyeLab.Probes
     [Serializable]
     public sealed class ProbeConfig
     {
-        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | loop | sync | pan | render | detect | all
+        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | loop | sync | pan | render | detect | budget | all
         public float seconds = 0f;         // 0 = the probe's default
         public float imu_seconds = 20f;
         public int save_every = 0;         // chain: 0; timecode: 1
@@ -157,7 +157,8 @@ namespace EyeLab.Probes
             if (p == "sync") yield return Guided(cfg, "sync", SyncCues, Unity.XR.XREAL.TrackingType.MODE_6DOF, 1, 4, true);
             if (p == "pan") yield return Stereo(cfg, PanCues);
             if (p == "render") yield return Render(cfg);
-            if (p == "detect") yield return Detect(cfg);
+            if (p == "detect") yield return Detect(cfg, "detect");
+            if (p == "budget") yield return Detect(cfg, "budget");
             m_Glasses?.ClearCue();
             ShowPage(m_Panel);
             m_Busy = false;
@@ -205,16 +206,19 @@ namespace EyeLab.Probes
             }
         }
 
-        /// <summary>T6.6 gate B3a: ArUco detection and board pose with the native plugin, bench on pushed frames then live on the Eye.</summary>
-        IEnumerator Detect(ProbeConfig cfg)
+        /// <summary>
+        /// ArUco detection and board pose with the native plugin, bench on pushed frames then live on the Eye:
+        /// "detect" (T6.6, gate B3a) or "budget" (T6.7, modes and targets).
+        /// </summary>
+        IEnumerator Detect(ProbeConfig cfg, string variant)
         {
             yield return RequestCamera();
-            using (var run = new ProbeRun("detect"))
+            using (var run = new ProbeRun(variant))
             {
                 run.Meta("config", JsonUtility.ToJson(cfg));
                 GlassesMeta(run);
-                yield return DetectProbe.Run(run, SetStatus, ShowCue);
-                SetStatus("detect done: " + Path.GetFileName(run.Dir));
+                yield return DetectProbe.Run(run, SetStatus, ShowCue, variant);
+                SetStatus(variant + " done: " + Path.GetFileName(run.Dir));
             }
         }
 
@@ -426,7 +430,8 @@ namespace EyeLab.Probes
 
             // Jack, 2026-11-19: the XREAL controller's App, trigger pad and Home buttons sat under the probe buttons.
             // EyeLab draws an opaque cover over the whole controller canvas (it also takes the taps), then its own
-            // single column; older runs move to an Archive page.
+            // single column. Jack, 2026-11-20: the main page holds only the gate being run now; every other run sits on
+            // "Other runs" and comes back to the main page only when a session needs it.
             var cover = new GameObject("EyeLab Cover", typeof(RectTransform), typeof(Image));
             cover.transform.SetParent(canvas.transform, false);
             var crt = (RectTransform)cover.transform;
@@ -444,16 +449,17 @@ namespace EyeLab.Probes
             AddAction(font, "I see text + square", () => AnswerGlasses("all"), new Color(0.12f, 0.3f, 0.15f, 0.9f), row);
             AddAction(font, "Text only", () => AnswerGlasses("text only"), new Color(0.35f, 0.3f, 0.1f, 0.9f), row);
             AddAction(font, "Nothing", () => AnswerGlasses("nothing"), new Color(0.45f, 0.1f, 0.1f, 0.9f), row);
-            AddButton(font, "1  Head loop + Eye  (95 s)", new ProbeConfig { probe = "loop" });
-            AddButton(font, "2  Motion sync  (40 s)", new ProbeConfig { probe = "sync" });
-            AddButton(font, "3  Stereo pan  (35 s)", new ProbeConfig { probe = "pan" });
-            AddButton(font, "4  Rendering, rate each setting  (85 s)", new ProbeConfig { probe = "render" });
-            AddButton(font, "5  Detection with plate A  (100 s)", new ProbeConfig { probe = "detect" });
+            AddButton(font, "T6.7  Detection budget: plate A, plate L, board  (2.5 min)", new ProbeConfig { probe = "budget" });
             AddAction(font, "Place square ahead", () => m_Glasses?.PlaceReference(), new Color(0.1f, 0.25f, 0.45f, 0.9f));
-            AddAction(font, "Archive (older runs)", () => ShowPage(m_Panel2), new Color(0.22f, 0.22f, 0.25f, 0.9f));
+            AddAction(font, "Other runs", () => ShowPage(m_Panel2), new Color(0.22f, 0.22f, 0.25f, 0.9f));
             AddAction(font, "Quit EyeLab", () => { Debug.Log("[EyeLab probe] quit button"); Application.Quit(); });
 
             m_Panel2 = Column(canvas.transform);
+            AddButton(font, "T6.6  Detection, plate A, threads  (100 s)", new ProbeConfig { probe = "detect" }, m_Panel2);
+            AddButton(font, "T6.5  Rendering, rate each setting  (85 s)", new ProbeConfig { probe = "render" }, m_Panel2);
+            AddButton(font, "T6.3  Head loop + Eye  (95 s)", new ProbeConfig { probe = "loop" }, m_Panel2);
+            AddButton(font, "T6.3  Motion sync  (40 s)", new ProbeConfig { probe = "sync" }, m_Panel2);
+            AddButton(font, "T6.3  Stereo pan  (35 s)", new ProbeConfig { probe = "pan" }, m_Panel2);
             AddButton(font, "Timecode 60 s", new ProbeConfig { probe = "timecode" }, m_Panel2);
             AddButton(font, "Head 6DoF 2 min", new ProbeConfig { probe = "head" }, m_Panel2);
             AddButton(font, "Head 6DoF + Eye 2 min", new ProbeConfig { probe = "head_eye" }, m_Panel2);

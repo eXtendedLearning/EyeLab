@@ -33,6 +33,11 @@ PYTHON = HERE.parent
 REPO = PYTHON.parent
 DEFAULT_SET = PYTHON / "beampro_runs" / "b3a_set"
 DEFAULT_MARKERS = PYTHON / "config" / "markers" / "plate_A.markers.json"
+#: T6.7 targets: plate A, plate L (markers on two faces at 90 deg, so no planar ambiguity once both faces are seen),
+#: and the 5 x 7 ChArUco calibration board used as a marker board (its 17 ArUco markers, 19 mm; the chessboard
+#: corners are not used on the device yet).
+TARGET_MARKERS = {"plate_A": DEFAULT_MARKERS, "plate_L": PYTHON / "config" / "markers" / "plate_L.markers.json"}
+BOARD25 = "board25"
 # The Eye calibration from the PC gates (2026-10-21, 1280x720, RMS 0.47 px; local, gitignored run folder). It was
 # taken on the PC stream; whether it holds on the Beam Pro's stream is checked in B3b, not here: parity and timing
 # use the same K on both sides.
@@ -53,6 +58,41 @@ def board(markers_json: Path = DEFAULT_MARKERS) -> Tuple[List[int], np.ndarray]:
         ids.append(int(m.marker_id))
         corners.append(marker_object_corners(m.unv_position, m.normal, m.roll_deg, float(size_mm) / 1000.0))
     return ids, np.asarray(corners, dtype=np.float64)
+
+
+def charuco_markers() -> Tuple[List[int], np.ndarray]:
+    """The ChArUco calibration board's ArUco markers: ids and object corners (n, 4, 3), metres, OpenCV's board frame."""
+    from calibrate import BOARD_COLS, BOARD_ROWS, make_charuco_board
+    from gui_common import CHARUCO_MARKER_M, CHARUCO_SQUARE_M
+    b = make_charuco_board(BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_M, CHARUCO_MARKER_M)
+    return [int(i) for i in np.ravel(b.getIds())], np.asarray(b.getObjPoints(), dtype=np.float64).reshape(-1, 4, 3)
+
+
+def targets() -> List[dict]:
+    """The T6.7 targets for set.json: name, ids and corners (flat, metres) of each."""
+    out = []
+    for name, path in TARGET_MARKERS.items():
+        ids, corners = board(path)
+        out.append({"name": name, "ids": ids, "corners": corners.reshape(-1).tolist()})
+    ids, corners = charuco_markers()
+    out.append({"name": BOARD25, "ids": ids, "corners": corners.reshape(-1).tolist()})
+    return out
+
+
+def pose_lock_settings() -> dict:
+    """The planar-ambiguity thresholds of ``PoseLockConfig``, for the device's trusted-pose rule (T6.7)."""
+    from pose_lock import PoseLockConfig
+    cfg = PoseLockConfig()
+    return {"min_ambiguity_ratio": float(cfg.min_ambiguity_ratio),
+            "ambiguity_min_separation_deg": float(cfg.ambiguity_min_separation_deg)}
+
+
+def target_of(s: dict, name: Optional[str]) -> dict:
+    """A set target by name (plate_A, plate_L, board25); the set's own board (plate A) when absent or unknown."""
+    for t in s.get("targets") or []:
+        if t["name"] == name:
+            return t
+    return {"name": "plate_A", "ids": s["ids"], "corners": s["corners"]}
 
 
 def eye_calibration(path: Path = DEFAULT_CALIB) -> Tuple[np.ndarray, np.ndarray]:
@@ -196,6 +236,8 @@ def make_set(out: Path = DEFAULT_SET, calib: Path = DEFAULT_CALIB, markers: Path
         "ids": ids,
         "corners": corners.reshape(-1).tolist(),
         "frames": frames,
+        "targets": targets(),
+        "pose_lock": pose_lock_settings(),
     }
     (out / "set.json").write_text(json.dumps(s, indent=1), encoding="utf-8")
     (out / "truth.json").write_text(json.dumps(truth, indent=1), encoding="utf-8")
@@ -219,7 +261,8 @@ def load_set(set_dir: Path = DEFAULT_SET) -> Optional[dict]:
 class PythonPipeline:
     """CLAHE, detection and the board pose exactly as pose_estimator does them, with the set's tuning."""
 
-    def __init__(self, s: dict):
+    def __init__(self, s: dict, target: Optional[dict] = None):
+        """``target``: one of ``s["targets"]`` (name, ids, corners); default the set's own board (plate A)."""
         from pose_estimator import ArucoDetectorTuning, LStructureDetector, make_detector_parameters
         fields = dataclasses.fields(ArucoDetectorTuning)
         tuning = ArucoDetectorTuning(*[int(v) if f.type in (int, "int") else float(v) for f, v in zip(fields, s["tuning"])])
@@ -227,25 +270,39 @@ class PythonPipeline:
         self.clahe = cv2.createCLAHE(clipLimit=round(float(self.clip), 3), tileGridSize=(8, 8))
         dictionary = cv2.aruco.getPredefinedDictionary(int(s["dictionary"]))
         self.detector = cv2.aruco.ArucoDetector(dictionary, make_detector_parameters(tuning))
-        obj = np.asarray(s["corners"], np.float32).reshape(-1, 4, 3)
-        self.board = cv2.aruco.Board(list(obj), dictionary, np.asarray(s["ids"], np.int32))
+        t = target or s
+        obj = np.asarray(t["corners"], np.float32).reshape(-1, 4, 3)
+        self.board = cv2.aruco.Board(list(obj), dictionary, np.asarray(t["ids"], np.int32))
         self.K = np.asarray(s["K"], np.float64).reshape(3, 3)
         self.dist = np.asarray(s["dist"], np.float64)
         self._solve = LStructureDetector._solve_board_pose
         self._cls = LStructureDetector
 
-    def process(self, gray: np.ndarray) -> dict:
-        enhanced = self.clahe.apply(gray) if self.clip > 0 else gray
+    def process(self, gray: np.ndarray, roi: Optional[Sequence[int]] = None, prior=None) -> dict:
+        """As the plugin's ela_process_roi: ``roi`` (x, y, w, h) clipped to the frame, under 32 px = whole frame;
+        CLAHE and detection on the crop, corners in frame pixels; ``prior`` (rvec, tvec) picks the IPPE solution."""
+        x0, y0, h_img, w_img = 0, 0, gray.shape[0], gray.shape[1]
+        crop = gray
+        if roi is not None:
+            x, y, w, h = (int(v) for v in roi)
+            ax, ay = max(x, 0), max(y, 0)
+            bx, by = min(x + w, w_img), min(y + h, h_img)
+            if bx - ax >= 32 and by - ay >= 32:
+                x0, y0, crop = ax, ay, gray[ay:by, ax:bx]
+        enhanced = self.clahe.apply(crop) if self.clip > 0 else crop
         corners, ids, _rej = self.detector.detectMarkers(enhanced)
-        out = {"ids": [], "corners": {}, "pose": None}
+        out = {"ids": [], "corners": {}, "pose": None, "roi": (x0, y0, crop.shape[1], crop.shape[0])}
         if ids is None or len(ids) == 0:
             return out
+        if x0 or y0:
+            off = np.array([x0, y0], np.float32)
+            corners = tuple(c + off for c in corners)
         out["ids"] = [int(i) for i in ids.flatten()]
         out["corners"] = {int(i): c.reshape(4, 2) for i, c in zip(ids.flatten(), corners)}
         obj, img = self.board.matchImagePoints(corners, ids)
         if obj is None or len(obj) < 4:
             return out
-        rvec, tvec, _amb = self._solve(self._cls, obj, img, self.K, self.dist)
+        rvec, tvec, _amb = self._solve(self._cls, obj, img, self.K, self.dist, prior)
         if rvec is not None:
             out["pose"] = (np.asarray(rvec, np.float64).reshape(3), np.asarray(tvec, np.float64).reshape(3))
         return out
@@ -308,13 +365,14 @@ def bench_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
     if not rows:
         return ["   bench: no bench.csv"]
     out = [f"   bench: {len(rows)} rows (median/p95 ms over frames x reps)"]
-    out.append("   threads    frames  markers>0   clahe          detect         pose           total")
-    for tm in sorted({r["threads_req"] for r in rows}, key=lambda v: int(v)):
-        sel = [r for r in rows if r["threads_req"] == tm]
+    out.append("   mode threads  frames  markers>0   clahe          detect         pose           total")
+    groups = sorted({(r.get("mode") or "full", r["threads_req"]) for r in rows}, key=lambda g: (g[0] != "full", g[0], int(g[1])))
+    for mode, tm in groups:
+        sel = [r for r in rows if (r.get("mode") or "full") == mode and r["threads_req"] == tm]
         used = sel[0].get("threads", "?")
         frames = len({r["frame"] for r in sel})
         with_m = [r for r in sel if int(r["markers"] or 0) > 0]
-        out.append(f"   {('default' if tm == '-1' else tm)+' ('+used+')':10s} {frames:5d}   {len(with_m) / len(sel) * 100:5.0f} %  "
+        out.append(f"   {mode:4s} {('default' if tm == '-1' else tm)+' ('+used+')':8s} {frames:5d}   {len(with_m) / len(sel) * 100:5.0f} %  "
                    f"{_q([_f(r['clahe_ms']) for r in sel])}  {_q([_f(r['detect_ms']) for r in sel])}  "
                    f"{_q([_f(r['pose_ms']) for r in sel])}  {_q([_f(r['total_ms']) for r in sel])}")
         for label, key in (("synthetic plate A", "plate_"), ("real Eye frames with plate A", "eyeplate_")):
@@ -331,7 +389,7 @@ def bench_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
     truth = json.loads((set_dir / "truth.json").read_text(encoding="utf-8")) if (set_dir / "truth.json").exists() else {}
     py = PythonPipeline(s)
     dev_corners = _corners_by_frame(load_csv(run / "bench_corners.csv"), "frame")
-    first = {r["frame"]: r for r in rows if r["threads_req"] == "1" and r["rep"] == "0"}
+    first = {r["frame"]: r for r in rows if r["threads_req"] == "1" and r["rep"] == "0" and (r.get("mode") or "full") == "full"}
     res, err_dev, err_py, div = [], [], [], []
     for name, r in first.items():
         p = set_dir / name
@@ -354,7 +412,37 @@ def bench_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
         if acc:
             out.append(f"   truth error {label}: {len(acc)} poses, t median {quantile([a[0] for a in acc], 0.5):.2f} mm, "
                        f"max {max(a[0] for a in acc):.2f} mm; r median {quantile([a[1] for a in acc], 0.5):.3f} deg")
+    roi_rows = {r["frame"]: r for r in rows if r.get("mode") == "roi" and r["threads_req"] == "1" and r["rep"] == "0"}
+    if roi_rows:
+        res_roi, vs_full = [], []
+        for name, r in roi_rows.items():
+            p = set_dir / name
+            if not p.exists():
+                continue
+            box = _roi(r)
+            res_roi.append(compare(dev_corners.get(name + "#roi", {}), _pose(r), py.process(read_pgm(p), roi=box)))
+            vs_full.append(compare(dev_corners.get(name + "#roi", {}), _pose(r),
+                                   {"ids": list(dev_corners.get(name, {})), "corners": dev_corners.get(name, {}),
+                                    "pose": _pose(first[name]) if name in first else None}))
+        area = [_roi_share(r) for r in roi_rows.values()]
+        out.append(f"   roi: {len(roi_rows)} frames, region {_q([a * 100 for a in area])} % of the frame")
+        out.append(_parity_line("parity (bench, roi)", res_roi))
+        out.append(_parity_line("roi against full frame (device)", vs_full))
     return out
+
+
+def _roi(r: dict) -> Optional[Tuple[int, int, int, int]]:
+    """The region a row was processed in, or None for the whole frame (or a row from before ABI 3)."""
+    try:
+        box = tuple(int(r[k]) for k in ("roi_x", "roi_y", "roi_w", "roi_h"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return None if box == (0, 0, SIZE[0], SIZE[1]) else box
+
+
+def _roi_share(r: dict) -> float:
+    box = _roi(r)
+    return 1.0 if box is None else box[2] * box[3] / float(SIZE[0] * SIZE[1])
 
 
 #: corner difference (px) counted as equal in the parity test
@@ -461,12 +549,16 @@ def _ambiguity_line(sel: List[dict], corners: Dict[str, Dict[int, np.ndarray]], 
     cfg = PoseLockConfig()
     K = np.asarray(s["K"], float).reshape(3, 3)
     dist = np.asarray(s["dist"], float)
-    obj = dict(zip(s["ids"], np.asarray(s["corners"], float).reshape(len(s["ids"]), 4, 3)))
+    objs: Dict[str, Dict[int, np.ndarray]] = {}
     n = amb = 0
     ratio_diff: List[float] = []
     for r in sel:
         if r["pose_ok"] != "1" or r.get("planar") != "1":
             continue
+        t = target_of(s, r.get("target"))
+        if t["name"] not in objs:
+            objs[t["name"]] = dict(zip(t["ids"], np.asarray(t["corners"], float).reshape(len(t["ids"]), 4, 3)))
+        obj = objs[t["name"]]
         cs = corners.get(r["seq"], {})
         ids = [i for i in cs if i in obj]
         if not ids:
@@ -496,6 +588,7 @@ def live_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 60.0
     if not rows:
         return ["   live: no live.csv"]
     frames = load_csv(run / "frames.csv")
+    heads = {h["seq"]: h for h in load_csv(run / "head.csv")}
     s_amb = load_set(set_dir)
     live_corners = _corners_by_frame(load_csv(run / "live_corners.csv"), "seq") if s_amb is not None else {}
     device_ratio_valid = _plugin_abi(run) >= 2
@@ -528,6 +621,10 @@ def live_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 60.0
         margin = _render_margin(fr, rows, refresh_hz)
         if margin:
             out.append(margin)
+        if sel[0].get("mode"):
+            mode_line = _mode_line(sel)
+            if mode_line:
+                out.append(mode_line)
         if s_amb is not None:
             amb = _ambiguity_line(sel, live_corners, s_amb, device_ratio_valid)
             if amb:
@@ -539,17 +636,29 @@ def live_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 60.0
                        f"distance median {np.median(np.linalg.norm(tv, axis=1)):.0f} mm, rms {_q([_f(r['rms_px']) for r in sel])} px"
                        f"; high-pass std {np.linalg.norm(high_pass(tv).std(axis=0)):.2f} mm (head drift removed, "
                        f"wrong IPPE branches included)")
+            out.extend(_still_lines(sel, heads))
     s = s_amb
     saved = [r for r in rows if r.get("saved")]
     if s is not None and saved:
-        py = PythonPipeline(s)
+        pys: Dict[str, PythonPipeline] = {}
         dev_corners = _corners_by_frame(load_csv(run / "live_corners.csv"), "seq")
-        res = []
+        res, res_roi = [], []
         for r in saved:
             p = run / r["saved"]
-            if p.exists():
-                res.append(compare(dev_corners.get(r["seq"], {}), _pose(r), py.process(read_pgm(p))))
-        out.append(_parity_line("parity (Eye frames)", res))
+            if not p.exists():
+                continue
+            t = target_of(s, r.get("target"))
+            if t["name"] not in pys:
+                pys[t["name"]] = PythonPipeline(s, t)
+            prior = None
+            if _f(r.get("pr0")) is not None:
+                prior = (np.array([float(r[f"pr{k}"]) for k in range(3)]), np.zeros(3))
+            box = _roi(r)
+            c = compare(dev_corners.get(r["seq"], {}), _pose(r), pys[t["name"]].process(read_pgm(p), roi=box, prior=prior))
+            (res_roi if box is not None else res).append(c)
+        out.append(_parity_line("parity (Eye frames, full)", res))
+        if res_roi:
+            out.append(_parity_line("parity (Eye frames, roi)", res_roi))
         blind = [r for r in saved if int(r["markers"] or 0) == 0 and (run / r["saved"]).exists()]
         if blind:
             flipped = sum(1 for r in blind if len(_detect_ids(read_pgm(run / r["saved"])[::-1].copy(), s["ids"])) >= 2)
@@ -559,12 +668,60 @@ def live_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 60.0
     return out
 
 
+def _mode_line(sel: List[dict]) -> Optional[str]:
+    """T6.7: the step's mode and target, the region's size, and the trusted-pose and prior shares."""
+    r0 = sel[0]
+    posed = [r for r in sel if r["pose_ok"] == "1"]
+    acc = sum(1 for r in posed if r.get("accepted") == "1")
+    prior = sum(1 for r in posed if r.get("prior_used") == "1")
+    flipped = sum(1 for r in posed if r.get("solution") == "1")
+    roi = [r for r in sel if _roi(r) is not None]
+    cap = int(sel[-1].get("cap_skipped") or 0) - int(sel[0].get("cap_skipped") or 0)
+    line = (f"     mode {r0['mode']} on {r0.get('target') or 'plate_A'}, nice {r0.get('nice', '?')}: region on {len(roi)}/{len(sel)} frames"
+            + (f" ({_q([_roi_share(r) * 100 for r in roi])} % of the frame)" if roi else "")
+            + (f"; trusted {acc}/{len(posed)} poses, prior used {prior}, second IPPE solution kept {flipped}" if posed else ""))
+    if cap:
+        line += f"; capped away {cap} frames"
+    return line
+
+
+def _normal_dev(poses: List[Tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
+    """Angle (deg) of each pose's target z axis from the median direction: a wrong IPPE solution shows as > 10 deg."""
+    n = np.array([cv2.Rodrigues(np.asarray(p[0], float))[0][:, 2] for p in poses])
+    m = np.median(n, axis=0)
+    m /= max(np.linalg.norm(m), 1e-12)
+    return np.degrees(np.arccos(np.clip(n @ m, -1.0, 1.0)))
+
+
+def _still_lines(sel: List[dict], heads: Dict[str, dict]) -> List[str]:
+    """Still steps: wrong-solution poses (all and trusted), jitter of trusted poses, and the head's own motion."""
+    posed = [r for r in sel if r["pose_ok"] == "1"]
+    out = []
+    if len(posed) > 5:
+        dev = _normal_dev([_pose(r) for r in posed])
+        trusted = np.array([r.get("accepted") == "1" for r in posed]) if "accepted" in posed[0] else None
+        line = f"     wrong solution (normal > 10 deg from the median): {int(np.sum(dev > 10))}/{len(posed)} poses"
+        if trusted is not None and trusted.any():
+            line += f"; among trusted {int(np.sum((dev > 10) & trusted))}/{int(trusted.sum())}"
+            tv = np.array([_pose(r)[1] for r, ok in zip(posed, trusted) if ok]) * 1000
+            if len(tv) > 9:
+                line += f"; trusted high-pass std {np.linalg.norm(high_pass(tv).std(axis=0)):.2f} mm"
+        out.append(line)
+    hs = [heads[r["seq"]] for r in sel if r["seq"] in heads and heads[r["seq"]].get("ok") == "1"]
+    if len(hs) > 5:
+        pos = np.array([[float(h[f"m{i}"]) for i in (12, 13, 14)] for h in hs]) * 1000
+        out.append(f"     head (pose at cam_ts): position std {np.linalg.norm(pos.std(axis=0)):.2f} mm, "
+                   f"high-pass {np.linalg.norm(high_pass(pos).std(axis=0)):.2f} mm over {len(hs)} frames")
+    return out
+
+
 def detect_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
     from .beampro import load_json
     meta = load_json(run)
-    lines = [f"== {Path(run).name}  detect  app {meta.get('app_version', '?')}",
+    lines = [f"== {Path(run).name}  {meta.get('probe', 'detect')}  app {meta.get('app_version', '?')}",
              f"   plugin: {meta.get('plugin', meta.get('plugin_error', '?'))}",
              f"   set: {meta.get('set', '?')}; bench {meta.get('bench_status', '?')}",
+             *([f"   budget: {meta['budget']}"] if meta.get("budget") else []),
              f"   glasses seen: {meta.get('glasses_seen', '?')}; Eye frames {meta.get('eye_frames', '?')}, processed "
              f"{meta.get('processed', '?')}, skipped {meta.get('skipped', '?')}"
              + (f"; WORKER ERROR {meta['worker_error']}" if meta.get("worker_error") else "")]

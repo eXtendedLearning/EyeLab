@@ -9,6 +9,12 @@
 //      then solvePnPRefineLM; reprojection RMS                  (_reprojection_rms_px)
 // Not mirrored yet: board-guided refineDetectedMarkers, the pose lock and the Kalman filter (they come after B3a).
 //
+// T6.7 (ABI 3) adds, in ela_process_roi:
+//   - a region of interest: CLAHE and detection on a crop of the frame, corners returned in full-frame pixels;
+//   - the box of the whole board projected with the pose (where to look next frame);
+//   - a prior rotation: of the two IPPE solutions, the one nearest the prior is kept (pose_estimator's `prior`);
+// and ela_set_nice for the calling thread's scheduling priority.
+//
 // Plain C ABI for P/Invoke from Unity (EyeLab.Aruco.ArucoNative). Units: metres for object points, pixels for
 // image points. One handle per thread: nothing here is shared between handles except OpenCV's thread pool.
 
@@ -19,9 +25,13 @@
 #include <opencv2/objdetect/aruco_board.hpp>
 #include <opencv2/objdetect/aruco_detector.hpp>
 
+#include <sys/resource.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -34,7 +44,8 @@
 namespace {
 
 // 2 (0.4.008): ambiguity_ratio fixed (abi 1 read IPPE's float errors as double, so its ratio was garbage).
-constexpr int kAbi = 2;
+// 3 (0.4.009): ela_process_roi, ela_set_nice; ElaResult gains the ROI, the projected board box and the solution.
+constexpr int kAbi = 3;
 
 // The order of ArucoDetectorTuning's fields in python/pose_estimator.py.
 enum Tuning {
@@ -77,9 +88,11 @@ double MsSince(std::chrono::steady_clock::time_point t0) {
 }
 
 double RotationAngleDeg(const cv::Mat& r1, const cv::Mat& r2) {
-    cv::Mat R1, R2;
-    cv::Rodrigues(r1, R1);
-    cv::Rodrigues(r2, R2);
+    cv::Mat a, b, R1, R2;
+    r1.convertTo(a, CV_64F);   // IPPE's rvecs and a caller's prior may differ in depth
+    r2.convertTo(b, CV_64F);
+    cv::Rodrigues(a, R1);
+    cv::Rodrigues(b, R2);
     cv::Mat R = R1.t() * R2;
     double c = std::max(-1.0, std::min(1.0, (cv::trace(R)[0] - 1.0) / 2.0));
     return std::acos(c) * 180.0 / CV_PI;
@@ -127,6 +140,11 @@ struct ElaResult {
     double rvec[3], tvec[3];
     double rms_px;         // reprojection RMS over the matched points, NaN without a pose
     double ambiguity_ratio, ambiguity_deg;  // IPPE second/best error and the angle between them; NaN otherwise
+    // ABI 3
+    int32_t roi_x, roi_y, roi_w, roi_h;     // the region processed (the whole frame without a ROI)
+    int32_t solution;      // IPPE solution kept: 0 = lowest error, 1 = the other; -1 = not the IPPE path
+    int32_t prior_used;    // 1 = a prior was given and decided between two IPPE solutions
+    double proj_x0, proj_y0, proj_x1, proj_y1;  // box of every board corner projected with the pose; NaN without
 };
 
 ELA_EXPORT int ela_abi() { return kAbi; }
@@ -141,6 +159,16 @@ ELA_EXPORT int ela_info(char* buf, int n) {
 ELA_EXPORT int ela_set_threads(int n) {
     cv::setNumThreads(n);
     return cv::getNumThreads();
+}
+
+// Scheduling priority (nice, -20..19; higher yields more) of the calling thread only. OpenCV's pool threads keep
+// theirs, so this matters most with 1 OpenCV thread. Returns the nice value now in effect, or -100 on error.
+ELA_EXPORT int ela_set_nice(int nice) {
+    const id_t tid = static_cast<id_t>(gettid());
+    if (setpriority(PRIO_PROCESS, tid, nice) != 0) return -100;
+    errno = 0;
+    int now = getpriority(PRIO_PROCESS, tid);
+    return errno != 0 ? -100 : now;
 }
 
 ELA_EXPORT void* ela_create(int dictionary_id, const float* tuning, int n_tuning) {
@@ -182,22 +210,50 @@ ELA_EXPORT int ela_last_error(void* handle, char* buf, int n) {
     return static_cast<int>(std::strlen(buf));
 }
 
-// One frame: CLAHE, detection and (with a board and K) the board pose.
+// One frame: CLAHE, detection and (with a board and K) the board pose, on the whole frame (B3a; the parity path).
+ELA_EXPORT int ela_process_roi(void* handle, const uint8_t* y, int width, int height, int stride, const int* roi,
+                               const double* K, const double* dist, int n_dist, const double* prior_rvec, int max_out,
+                               int* ids_out, float* corners_out, ElaResult* res);
+
 // y: 8-bit luma, rows of `stride` bytes. K: 3x3 row-major, may be null (no pose). dist: n_dist coefficients.
 // ids_out[max_out], corners_out[max_out*8] receive the detected markers (all ids). Returns markers, or -1.
 ELA_EXPORT int ela_process(void* handle, const uint8_t* y, int width, int height, int stride, const double* K,
                            const double* dist, int n_dist, int max_out, int* ids_out, float* corners_out, ElaResult* res) {
+    return ela_process_roi(handle, y, width, height, stride, nullptr, K, dist, n_dist, nullptr, max_out, ids_out,
+                           corners_out, res);
+}
+
+// T6.7. roi: {x, y, w, h} in frame pixels, or null for the whole frame; it is clipped to the frame, and a region
+// under 32 px either way falls back to the whole frame. CLAHE and detection run on the crop only (so CLAHE's 8x8
+// tiles cover the crop, not the frame), and the corners come back in frame pixels. prior_rvec: a rotation (Rodrigues,
+// camera frame) or null; for a planar point set with two IPPE solutions, the one nearer the prior is kept, as
+// pose_estimator's _solve_board_pose does with a prior.
+ELA_EXPORT int ela_process_roi(void* handle, const uint8_t* y, int width, int height, int stride, const int* roi,
+                               const double* K, const double* dist, int n_dist, const double* prior_rvec, int max_out,
+                               int* ids_out, float* corners_out, ElaResult* res) {
     auto h = static_cast<Handle*>(handle);
     if (!h || !y || !res || width <= 0 || height <= 0 || stride < width) return -1;
     const double nan = std::nan("");
     *res = ElaResult{};
     res->rms_px = res->ambiguity_ratio = res->ambiguity_deg = nan;
+    res->proj_x0 = res->proj_y0 = res->proj_x1 = res->proj_y1 = nan;
+    res->solution = -1;
     try {
         auto t0 = std::chrono::steady_clock::now();
         cv::Mat gray(height, width, CV_8UC1, const_cast<uint8_t*>(y), static_cast<size_t>(stride));
-        const cv::Mat* in = &gray;
+        cv::Rect rect(0, 0, width, height);
+        if (roi) {
+            cv::Rect r = cv::Rect(roi[0], roi[1], roi[2], roi[3]) & rect;
+            if (r.width >= 32 && r.height >= 32) rect = r;
+        }
+        res->roi_x = rect.x;
+        res->roi_y = rect.y;
+        res->roi_w = rect.width;
+        res->roi_h = rect.height;
+        cv::Mat src = gray(rect);
+        const cv::Mat* in = &src;
         if (h->clahe) {
-            h->clahe->apply(gray, h->enhanced);
+            h->clahe->apply(src, h->enhanced);
             in = &h->enhanced;
         }
         res->clahe_ms = MsSince(t0);
@@ -207,6 +263,11 @@ ELA_EXPORT int ela_process(void* handle, const uint8_t* y, int width, int height
         h->ids.clear();
         h->rejected.clear();
         h->detector.detectMarkers(*in, h->corners, h->ids, h->rejected);
+        if (rect.x != 0 || rect.y != 0) {
+            const cv::Point2f off(static_cast<float>(rect.x), static_cast<float>(rect.y));
+            for (auto& c : h->corners)
+                for (auto& p : c) p += off;
+        }
         res->detect_ms = MsSince(t1);
         res->markers = static_cast<int32_t>(h->ids.size());
         res->rejected = static_cast<int32_t>(h->rejected.size());
@@ -245,6 +306,7 @@ ELA_EXPORT int ela_process(void* handle, const uint8_t* y, int width, int height
                         sol = 0;
                     }
                     if (sol > 0) {
+                        int k = 0;
                         if (sol > 1) {
                             // solvePnPGeneric returns the errors in the points' depth (float for Point2f/Point3f),
                             // so convert before reading them as double, as Python does with np.float64.
@@ -252,9 +314,15 @@ ELA_EXPORT int ela_process(void* handle, const uint8_t* y, int width, int height
                             errs.convertTo(e, CV_64F);
                             res->ambiguity_ratio = e.at<double>(1) / std::max(e.at<double>(0), 1e-9);
                             res->ambiguity_deg = RotationAngleDeg(rvecs[0], rvecs[1]);
+                            if (prior_rvec) {
+                                cv::Mat prior(3, 1, CV_64F, const_cast<double*>(prior_rvec));
+                                k = RotationAngleDeg(rvecs[1], prior) < RotationAngleDeg(rvecs[0], prior) ? 1 : 0;
+                                res->prior_used = 1;
+                            }
                         }
-                        rvec = rvecs[0];
-                        tvec = tvecs[0];
+                        res->solution = k;
+                        rvec = rvecs[k];
+                        tvec = tvecs[k];
                         ok = true;
                     }
                 }
@@ -279,6 +347,24 @@ ELA_EXPORT int ela_process(void* handle, const uint8_t* y, int width, int height
                     }
                     res->rms_px = std::sqrt(s / proj.size());
                     res->pose_ok = 1;
+                    // where the whole board is: every marker corner projected, also those not detected
+                    std::vector<cv::Point3f> all;
+                    for (const auto& m : h->board->getObjPoints()) all.insert(all.end(), m.begin(), m.end());
+                    std::vector<cv::Point2f> pa;
+                    cv::projectPoints(all, rvec, tvec, Km, D, pa);
+                    if (!pa.empty()) {
+                        float x0 = pa[0].x, y0 = pa[0].y, x1 = pa[0].x, y1 = pa[0].y;
+                        for (const auto& p : pa) {
+                            x0 = std::min(x0, p.x);
+                            y0 = std::min(y0, p.y);
+                            x1 = std::max(x1, p.x);
+                            y1 = std::max(y1, p.y);
+                        }
+                        res->proj_x0 = x0;
+                        res->proj_y0 = y0;
+                        res->proj_x1 = x1;
+                        res->proj_y1 = y1;
+                    }
                 }
             }
         }

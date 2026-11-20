@@ -112,6 +112,63 @@ class B3aTest(unittest.TestCase):
             self.assertGreater(a[0], 1.0)              # sorted by error: second over best is never below 1
         self.assertEqual(b3a.high_pass(np.ones((5, 3))).tolist(), np.zeros((5, 3)).tolist())
 
+    def test_targets_and_roi(self):
+        """T6.7: the set's targets, and detection in a region gives the full frame's markers in frame pixels."""
+        ts = {t["name"]: t for t in b3a.targets()}
+        self.assertEqual(ts["plate_A"]["ids"], [30, 31, 32])
+        self.assertEqual(ts["plate_L"]["ids"], [40, 41, 42, 43])
+        self.assertEqual(ts["board25"]["ids"], list(range(17)))           # 5 x 7 ChArUco: 17 markers
+        c = np.asarray(ts["board25"]["corners"]).reshape(-1, 4, 3)
+        self.assertAlmostEqual(float(np.linalg.norm(c[0][1] - c[0][0])), 0.019, places=6)   # gui_common marker side
+        self.assertEqual(b3a.pose_lock_settings(), {"min_ambiguity_ratio": 3.0, "ambiguity_min_separation_deg": 10.0})
+        s = {"ids": [30], "corners": [0.0] * 12}
+        self.assertEqual(b3a.target_of(s, "nothing")["name"], "plate_A")
+
+        K = np.array([[624.0, 0, 640], [0, 624, 360], [0, 0, 1]])
+        ids, corners = b3a.board()
+        img = b3a.render(K, np.zeros(5), ids, corners, np.array([np.pi, 0, 0]), np.array([0.05, 0.02, 0.5]), seed=3)
+        s = {"tuning": b3a.tuning_list(), "dictionary": 0, "ids": ids, "corners": corners.reshape(-1).tolist(),
+             "K": K.reshape(-1).tolist(), "dist": [0, 0, 0, 0, 0]}
+        py = b3a.PythonPipeline(s)
+        full = py.process(img)
+        self.assertEqual(sorted(full["ids"]), [30, 31, 32])
+        pts = np.concatenate(list(full["corners"].values()))
+        x0, y0 = pts.min(axis=0)
+        x1, y1 = pts.max(axis=0)
+        box = (int(x0) - 60, int(y0) - 60, int(x1 - x0) + 120, int(y1 - y0) + 120)
+        roi = py.process(img, roi=box)
+        self.assertEqual(sorted(roi["ids"]), [30, 31, 32])
+        self.assertEqual(roi["roi"], box)
+        # CLAHE's 8x8 tiles cover the crop, not the frame, so a few corners move (about 1 px here); against the true
+        # projection the region is no worse than the full frame
+        import cv2
+        rv, tv = np.array([np.pi, 0, 0]), np.array([0.05, 0.02, 0.5])
+        truth = {i: cv2.projectPoints(c, rv, tv, K, np.zeros(5))[0].reshape(4, 2) for i, c in zip(ids, corners)}
+        err = lambda res: float(np.mean([np.abs(res["corners"][i] - truth[i]).mean() for i in ids]))
+        self.assertLess(err(roi), err(full) + 0.1)
+        self.assertLess(float(np.mean([np.abs(roi["corners"][i] - full["corners"][i]).mean() for i in ids])), 0.5)
+        self.assertLess(float(np.linalg.norm(roi["pose"][1] - full["pose"][1])) * 1000, 5.0)
+        self.assertEqual(py.process(img, roi=(5, 5, 10, 10))["roi"], (0, 0, 1280, 720))   # too small: whole frame
+        self.assertIsNone(b3a._roi({"roi_x": "0", "roi_y": "0", "roi_w": "1280", "roi_h": "720"}))
+        self.assertEqual(b3a._roi({"roi_x": "10", "roi_y": "20", "roi_w": "300", "roi_h": "200"}), (10, 20, 300, 200))
+        self.assertIsNone(b3a._roi({}))
+
+    def test_mode_and_still_lines(self):
+        def row(seq, acc, rv, roi=("100", "100", "320", "240")):
+            return {"seq": str(seq), "pose_ok": "1", "accepted": acc, "prior_used": "0", "solution": "0", "mode": "roi",
+                    "target": "plate_L", "nice": "10", "cap_skipped": "0", "roi_x": roi[0], "roi_y": roi[1], "roi_w": roi[2],
+                    "roi_h": roi[3], "r0": str(rv[0]), "r1": str(rv[1]), "r2": str(rv[2]), "t0": "0", "t1": "0", "t2": "0.6"}
+        import cv2
+        Rg = cv2.Rodrigues(np.array([np.pi, 0.0, 0.0]))[0]
+        good = cv2.Rodrigues(Rg)[0].ravel()
+        bad = cv2.Rodrigues(Rg @ cv2.Rodrigues(np.radians([30.0, 0.0, 0.0]))[0])[0].ravel()   # normal 30 deg off
+        sel = [row(i, "1", good) for i in range(12)] + [row(12, "0", bad), row(13, "0", bad, ("0", "0", "1280", "720"))]
+        line = b3a._mode_line(sel)
+        self.assertIn("mode roi on plate_L, nice 10: region on 13/14 frames", line)
+        self.assertIn("trusted 12/14 poses", line)
+        still = b3a._still_lines(sel, {})
+        self.assertIn("wrong solution (normal > 10 deg from the median): 2/14 poses; among trusted 0/12", still[0])
+
 
 if __name__ == "__main__":
     unittest.main()

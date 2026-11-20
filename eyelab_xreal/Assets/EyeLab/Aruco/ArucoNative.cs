@@ -13,7 +13,9 @@ namespace EyeLab.Aruco
     public sealed class ArucoNative : IDisposable
     {
         const string Lib = "eyelab_aruco";
-        public const int Abi = 2;   // 2 (0.4.008): AmbiguityRatio valid; abi 1 read IPPE's float errors as double
+        // 2 (0.4.008): AmbiguityRatio valid; abi 1 read IPPE's float errors as double.
+        // 3 (0.4.009, T6.7): ProcessRoi (region of interest, prior), SetNice; Result gains the ROI, solution and board box.
+        public const int Abi = 3;
         public const int TuningCount = 14;
         public const int DictionaryArUco4x4_50 = 0;   // cv::aruco::DICT_4X4_50, the dictionary of every EyeLab marker
 
@@ -29,11 +31,16 @@ namespace EyeLab.Aruco
             public double ClaheMs, DetectMs, PoseMs, TotalMs;
             public double R0, R1, R2, T0, T1, T2;
             public double RmsPx, AmbiguityRatio, AmbiguityDeg;
+            // ABI 3
+            public int RoiX, RoiY, RoiW, RoiH;
+            public int Solution, PriorUsed;           // IPPE solution kept (-1 not IPPE); 1 = a prior chose it
+            public double ProjX0, ProjY0, ProjX1, ProjY1;   // the whole board projected with the pose (NaN without)
         }
 
         [DllImport(Lib)] static extern int ela_abi();
         [DllImport(Lib)] static extern int ela_info(StringBuilder buf, int n);
         [DllImport(Lib)] static extern int ela_set_threads(int n);
+        [DllImport(Lib)] static extern int ela_set_nice(int nice);
         [DllImport(Lib)] static extern IntPtr ela_create(int dictionaryId, float[] tuning, int nTuning);
         [DllImport(Lib)] static extern void ela_destroy(IntPtr h);
         [DllImport(Lib)] static extern int ela_set_board(IntPtr h, int[] ids, float[] obj, int n);
@@ -41,6 +48,9 @@ namespace EyeLab.Aruco
         [DllImport(Lib)]
         static extern int ela_process(IntPtr h, byte[] y, int width, int height, int stride, double[] k, double[] dist, int nDist,
                                       int maxOut, int[] idsOut, float[] cornersOut, ref Result res);
+        [DllImport(Lib)]
+        static extern int ela_process_roi(IntPtr h, byte[] y, int width, int height, int stride, int[] roi, double[] k, double[] dist,
+                                          int nDist, double[] priorRvec, int maxOut, int[] idsOut, float[] cornersOut, ref Result res);
 
         IntPtr m_Handle;
         public const int MaxMarkers = 64;
@@ -56,6 +66,9 @@ namespace EyeLab.Aruco
 
         /// <summary>OpenCV's worker threads (process-wide). 1 = single thread, -1 = OpenCV's default. Returns the count now used.</summary>
         public static int SetThreads(int n) => ela_set_threads(n);
+
+        /// <summary>Scheduling priority (nice) of the calling thread only; returns the value now in effect, -100 on error.</summary>
+        public static int SetNice(int nice) => ela_set_nice(nice);
 
         public ArucoNative(float[] tuning = null, int dictionary = DictionaryArUco4x4_50)
         {
@@ -77,6 +90,16 @@ namespace EyeLab.Aruco
         {
             res = default;
             return ela_process(m_Handle, y, width, height, stride, k, dist, dist?.Length ?? 0, MaxMarkers, Ids, Corners, ref res);
+        }
+
+        /// <summary>
+        /// T6.7: one frame, detection only inside <paramref name="roi"/> ({x, y, w, h}; null = whole frame), corners in frame
+        /// pixels; <paramref name="priorRvec"/> (null = none) picks the nearer of two IPPE solutions.
+        /// </summary>
+        public int ProcessRoi(byte[] y, int width, int height, int stride, int[] roi, double[] k, double[] dist, double[] priorRvec, out Result res)
+        {
+            res = default;
+            return ela_process_roi(m_Handle, y, width, height, stride, roi, k, dist, dist?.Length ?? 0, priorRvec, MaxMarkers, Ids, Corners, ref res);
         }
 
         public string LastError()

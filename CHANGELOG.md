@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.008<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.009<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,18 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.4.009) T6.7 detection budget gate built (`docs/tasks/T6.7-detection-budget.md`), not run yet.
+  - **Plugin ABI 3:** `ela_process_roi` detects in a region (corners back in frame pixels, the projected box of the whole
+    target, the IPPE solution kept, an optional prior) and `ela_set_nice` lowers the worker's priority.
+  - **Probe variant budget:** plate A, plate L and the 25 mm ChArUco board. Each step runs one mode: full frame, a 15 Hz cap,
+    or a region at 1 thread and nice 10. Poses are marked trusted by `PoseLockConfig`'s ambiguity rule. The head pose at
+    each frame's `cam_ts` is logged to `head.csv`.
+  - **Replay of run 2:** most wrong poses use two markers and IPPE's other solution is rarely right; a prior chain made
+    things worse (56 to 147 wrong poses), so no prior is used.
+  - **Report:** mode, region and trust lines; still lines with wrong-solution counts among all and trusted poses; the head
+    spread; parity split into full frame and region (the same crop: CLAHE on a crop moves corners by up to about 1 px).
+  - **Main page:** shows only the current gate; older gates are on **Other runs** (was "Archive").
 
 - (0.4.008) T6.6 run 2 analysed (`docs/tasks/T6.6-b3a-detection.md`). With the rows reversed, plate A is found on 97-100 % of the
   still frames.
