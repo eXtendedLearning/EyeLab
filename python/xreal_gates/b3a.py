@@ -399,12 +399,106 @@ def _parity_line(label: str, res: List[dict]) -> str:
             + (f"; pose on one side only {one}" if one else ""))
 
 
+def _plugin_abi(run: Path) -> int:
+    """The plugin ABI a run used, from run.json ``plugin`` ("eyelab_aruco abi N; ..."); 0 when unknown."""
+    try:
+        meta = json.loads((Path(run) / "run.json").read_text(encoding="utf-8"))
+        return int(str(meta.get("plugin", "")).split("abi", 1)[1].split(";", 1)[0])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def high_pass(t: np.ndarray, window: int = 9) -> np.ndarray:
+    """``t`` (n x 3) minus its running median over ``window`` samples: frame-to-frame noise without slow head drift."""
+    t = np.asarray(t, float)
+    h = window // 2
+    med = np.array([np.median(t[max(0, i - h):i + h + 1], axis=0) for i in range(len(t))])
+    return t - med
+
+
+def _render_margin(fr: List[dict], rows: List[dict], refresh_hz: float) -> Optional[str]:
+    """Late Unity frames split by whether the detection worker was busy at that frame (run 2: busy is the cause)."""
+    busy = sorted((int(r["start_mono_ns"]), int(r["end_mono_ns"])) for r in rows)
+    if not busy or not fr or "mono_ns" not in fr[0]:
+        return None
+    starts = np.array([b[0] for b in busy])
+    ends = np.array([b[1] for b in busy])
+    limit = 1000 / refresh_hz * 1.25
+    n_busy = n_idle = late_busy = late_idle = 0
+    for f in fr[1:]:
+        dt, m = _f(f["dt_ms"]), int(f["mono_ns"])
+        if dt is None:
+            continue
+        k = int(np.searchsorted(starts, m, side="right")) - 1
+        is_busy = k >= 0 and ends[k] >= m
+        late = dt > limit
+        if is_busy:
+            n_busy, late_busy = n_busy + 1, late_busy + late
+        else:
+            n_idle, late_idle = n_idle + 1, late_idle + late
+    n = n_busy + n_idle
+    if n == 0:
+        return None
+    pct = lambda a, b: f"{a / b * 100:.1f} %" if b else "-"
+    return (f"     render: worker busy on {n_busy / n * 100:.0f} % of Unity frames; late when busy {pct(late_busy, n_busy)} "
+            f"({n_busy}), idle {pct(late_idle, n_idle)} ({n_idle})")
+
+
+def ambiguity(obj: np.ndarray, img: np.ndarray, K: np.ndarray, dist: np.ndarray) -> Optional[Tuple[float, float]]:
+    """IPPE (ratio, separation deg) for a planar point set, as ``LStructureDetector._solve_board_pose`` computes it."""
+    from pose_estimator import rotation_angle_between
+    n, rvecs, _t, errs = cv2.solvePnPGeneric(np.asarray(obj, np.float64), np.asarray(img, np.float64), K, dist,
+                                              flags=cv2.SOLVEPNP_IPPE)
+    if n < 2:
+        return None
+    e = np.asarray(errs, np.float64).reshape(-1)
+    return float(e[1] / max(e[0], 1e-9)), float(rotation_angle_between(rvecs[0], rvecs[1]))
+
+
+def _ambiguity_line(sel: List[dict], corners: Dict[str, Dict[int, np.ndarray]], s: dict, device_valid: bool) -> Optional[str]:
+    """Share of poses PoseLock would call ambiguous, recomputed from the device's corners; device ratio checked if valid."""
+    from pose_lock import PoseLockConfig
+    cfg = PoseLockConfig()
+    K = np.asarray(s["K"], float).reshape(3, 3)
+    dist = np.asarray(s["dist"], float)
+    obj = dict(zip(s["ids"], np.asarray(s["corners"], float).reshape(len(s["ids"]), 4, 3)))
+    n = amb = 0
+    ratio_diff: List[float] = []
+    for r in sel:
+        if r["pose_ok"] != "1" or r.get("planar") != "1":
+            continue
+        cs = corners.get(r["seq"], {})
+        ids = [i for i in cs if i in obj]
+        if not ids:
+            continue
+        a = ambiguity(np.concatenate([obj[i] for i in ids]), np.concatenate([cs[i] for i in ids]), K, dist)
+        if a is None:
+            continue
+        n += 1
+        amb += a[0] < cfg.min_ambiguity_ratio and a[1] > cfg.ambiguity_min_separation_deg
+        dev = _f(r.get("amb_ratio"))
+        if device_valid and dev is not None:
+            ratio_diff.append(abs(dev - a[0]) / max(a[0], 1e-9))
+    if n == 0:
+        return None
+    line = (f"     ambiguous (IPPE ratio < {cfg.min_ambiguity_ratio:g}, > {cfg.ambiguity_min_separation_deg:g} deg apart): "
+            f"{amb}/{n} planar poses ({amb / n * 100:.0f} %)")
+    if ratio_diff:
+        line += f"; device ratio vs Python max {max(ratio_diff) * 100:.2f} %"
+    elif not device_valid:
+        line += "; device ratio not valid (plugin abi < 2)"
+    return line
+
+
 def live_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 60.0) -> List[str]:
     run = Path(run)
     rows = load_csv(run / "live.csv")
     if not rows:
         return ["   live: no live.csv"]
     frames = load_csv(run / "frames.csv")
+    s_amb = load_set(set_dir)
+    live_corners = _corners_by_frame(load_csv(run / "live_corners.csv"), "seq") if s_amb is not None else {}
+    device_ratio_valid = _plugin_abi(run) >= 2
     out = ["   live: per cue step; ms median/p95; age = monotonic now - cam_ts (HMD clock)"]
     out.append("   step       thr  done/s  skipped  markers  pose   total ms       wait ms        age ready ms    unity fps  >1 refresh")
     order: List[str] = []
@@ -431,12 +525,21 @@ def live_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 60.0
         eye_ms = [x for x in (_f(f.get("eye_ms")) for f in fr) if x is not None and x > 0]
         out.append(f"     age = arrival {_q(arrive)} + wait {_q(wait)} + processing {_q([_f(r['total_ms']) for r in sel])} ms"
                    + (f"; main-thread Eye work {_q(eye_ms)} ms on {len(eye_ms)} frames" if eye_ms else ""))
+        margin = _render_margin(fr, rows, refresh_hz)
+        if margin:
+            out.append(margin)
+        if s_amb is not None:
+            amb = _ambiguity_line(sel, live_corners, s_amb, device_ratio_valid)
+            if amb:
+                out.append(amb)
         still = [_pose(r) for r in sel if r["pose_ok"] == "1"]
         if step.endswith("_still") and len(still) > 5:
             tv = np.array([p[1] for p in still]) * 1000
             out.append(f"     still: {len(still)} poses, t std {np.linalg.norm(tv.std(axis=0)):.2f} mm, "
-                       f"distance median {np.median(np.linalg.norm(tv, axis=1)):.0f} mm, rms {_q([_f(r['rms_px']) for r in sel])} px")
-    s = load_set(set_dir)
+                       f"distance median {np.median(np.linalg.norm(tv, axis=1)):.0f} mm, rms {_q([_f(r['rms_px']) for r in sel])} px"
+                       f"; high-pass std {np.linalg.norm(high_pass(tv).std(axis=0)):.2f} mm (head drift removed, "
+                       f"wrong IPPE branches included)")
+    s = s_amb
     saved = [r for r in rows if r.get("saved")]
     if s is not None and saved:
         py = PythonPipeline(s)

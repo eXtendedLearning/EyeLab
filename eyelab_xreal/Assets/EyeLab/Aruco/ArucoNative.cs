@@ -13,7 +13,7 @@ namespace EyeLab.Aruco
     public sealed class ArucoNative : IDisposable
     {
         const string Lib = "eyelab_aruco";
-        public const int Abi = 1;
+        public const int Abi = 2;   // 2 (0.4.008): AmbiguityRatio valid; abi 1 read IPPE's float errors as double
         public const int TuningCount = 14;
         public const int DictionaryArUco4x4_50 = 0;   // cv::aruco::DICT_4X4_50, the dictionary of every EyeLab marker
 

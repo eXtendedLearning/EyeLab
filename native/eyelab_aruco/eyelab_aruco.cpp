@@ -33,7 +33,8 @@
 
 namespace {
 
-constexpr int kAbi = 1;
+// 2 (0.4.008): ambiguity_ratio fixed (abi 1 read IPPE's float errors as double, so its ratio was garbage).
+constexpr int kAbi = 2;
 
 // The order of ArucoDetectorTuning's fields in python/pose_estimator.py.
 enum Tuning {
@@ -245,7 +246,11 @@ ELA_EXPORT int ela_process(void* handle, const uint8_t* y, int width, int height
                     }
                     if (sol > 0) {
                         if (sol > 1) {
-                            res->ambiguity_ratio = errs.at<double>(1) / std::max(errs.at<double>(0), 1e-9);
+                            // solvePnPGeneric returns the errors in the points' depth (float for Point2f/Point3f),
+                            // so convert before reading them as double, as Python does with np.float64.
+                            cv::Mat e;
+                            errs.convertTo(e, CV_64F);
+                            res->ambiguity_ratio = e.at<double>(1) / std::max(e.at<double>(0), 1e-9);
                             res->ambiguity_deg = RotationAngleDeg(rvecs[0], rvecs[1]);
                         }
                         rvec = rvecs[0];

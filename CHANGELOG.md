@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.007<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.008<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -17,6 +17,17 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.4.008) T6.6 run 2 analysed (`docs/tasks/T6.6-b3a-detection.md`). With the rows reversed, plate A is found on 97-100 % of the
+  still frames.
+  - **Cost** (median per real Eye frame): 82 ms at 1 thread, 44 at 2, 37 at 4, 43 at 8.
+  - **Live:** processing 32-52 ms, pose age 146-179 ms (arrival 103-110). 4 threads gains nothing live.
+  - **Render margin not met:** late Unity frames 11-19 % against 2.8 %. The worker is busy on 99 % of the Unity frames; on idle
+    frames, late is 2.8 %.
+  - **Parity:** exact on the bench (0.0009 px, 0.001 mm). On live frames, 10 of 123 differ by 0.3-0.8 px in the sub-pixel refinement.
+  - **Ambiguity:** 35-67 % of plate A's poses are ambiguous, and about 10 % of still poses take the wrong solution.
+  - **Report:** adds the render margin split by worker busy or idle, the ambiguous share (recomputed from the corners, with
+    `PoseLockConfig`'s thresholds) and the high-pass still jitter.
+  - **Next:** T6.7, detection within budget (ROI, rate cap, `PoseLock`), then B3b.
 - (0.4.007) T6.6 run 1 analysed (`docs/tasks/T6.6-b3a-detection.md`). Live detection found nothing because
   the Eye rows reach the app bottom-up on the Beam Pro too (T6.1's "upright" was wrong, corrected there).
   `DetectProbe` now reverses them on copy and logs the main thread's Eye time per frame (`frames.csv` `eye_ms`).
@@ -105,6 +116,8 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Fixed
 
+- (0.4.008) Native ArUco plugin: the IPPE ambiguity ratio read OpenCV's float errors as double, so `amb_ratio` held garbage. The
+  errors are now converted first, as in `pose_estimator`. Plugin ABI 2 (`kAbi`, `ArucoNative.Abi`).
 - (0.4.004) Nothing in the glasses with 0.4.003: MSAA 4x and render scale 1.0 reverted to the 0.4.002 values
   (off, 0.8). Suspected cause; the new display counters will confirm it.
 - (0.4.003) Shimmering square in the glasses (Jack, 0.4.002): the Android pipeline asset rendered at scale 0.8

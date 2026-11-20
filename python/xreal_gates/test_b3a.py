@@ -85,6 +85,33 @@ class B3aTest(unittest.TestCase):
             self.assertIn("WARNING", text)
             self.assertIn("main-thread Eye work", text)
 
+    def test_render_margin_split(self):
+        """Late Unity frames are split by whether the detection worker was busy at that frame."""
+        rows = [{"start_mono_ns": "100", "end_mono_ns": "200"}, {"start_mono_ns": "300", "end_mono_ns": "400"}]
+        fr = [{"dt_ms": "16.7", "mono_ns": "0"},
+              {"dt_ms": "25.0", "mono_ns": "150"},    # busy, late
+              {"dt_ms": "16.7", "mono_ns": "350"},    # busy
+              {"dt_ms": "16.7", "mono_ns": "250"},    # idle
+              {"dt_ms": "30.0", "mono_ns": "500"}]    # idle, late
+        line = b3a._render_margin(fr, rows, 60.0)
+        self.assertIn("worker busy on 50 %", line)
+        self.assertIn("late when busy 50.0 % (2), idle 50.0 % (2)", line)
+
+    def test_ambiguity_matches_python_solver(self):
+        """The report's ambiguity reads IPPE's errors as float64: the ratio (second over best) is never below 1."""
+        K = np.array([[624.0, 0, 640], [0, 624, 360], [0, 0, 1]])
+        ids, corners = b3a.board()
+        obj = np.asarray(corners, float).reshape(-1, 3)
+        import cv2
+        for rvec, tvec in ((np.array([np.pi, 0, 0]), np.array([0, 0, 0.65])),
+                           (np.array([np.pi + 0.6, 0.4, 0]), np.array([0, 0, 0.35]))):
+            img = cv2.projectPoints(obj, rvec, tvec, K, np.zeros(5))[0].reshape(-1, 2)
+            img = img + np.random.default_rng(1).normal(0, 0.3, img.shape)
+            a = b3a.ambiguity(obj, img, K, np.zeros(5))
+            self.assertIsNotNone(a)
+            self.assertGreater(a[0], 1.0)              # sorted by error: second over best is never below 1
+        self.assertEqual(b3a.high_pass(np.ones((5, 3))).tolist(), np.zeros((5, 3)).tolist())
+
 
 if __name__ == "__main__":
     unittest.main()
