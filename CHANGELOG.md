@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.012<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.013<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,32 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.4.013) T6.9 run 1 analysed (`docs/tasks/T6.9-overlay-b3b.md`). The drawing is room-fixed to a few millimetres:
+  - plate L still 1.4-6.0 mm std (1.0 mm high-pass), mostly 6DoF drift along the line of sight; 3.6 mm while moving;
+  - the device chain equals Python's (0.000 mm);
+  - exposure to drawing 138 ms median;
+  - render floor with detection off 6.5-7.5 % late frames, detection on 2.8-6.3 %.
+
+  It was rated *clearly off* the markers by a constant offset. The vendor Eye intrinsics on the Beam Pro equal the
+  Surface's, and `rgb_from_head` matches, so the offset is the display's. The report skips each step's first second in
+  the room lines.
+- (0.4.013) T6.10 built (`docs/tasks/T6.10-align-by-eye.md`), not run yet.
+  - **View offset set by eye** (`ViewOffset.cs`): a head-frame correction between the head and the camera. TURN
+    rotates about the head origin, MOVE shifts; coarse and fine steps; Zero, Save, Done on the Beam Pro screen.
+    Saved to `calibration/view_offset.json` in the app's storage and loaded by the next align run.
+  - **Probe variant align:**
+    - a one-eye check (both eyes, left only, right only) before the alignment;
+    - the alignment (up to 150 s, ends with Done);
+    - checks still, moving, at 35 cm and at 1 m;
+    - plate L flat against solid, answered on the screen.
+
+    The main page shows only T6.10.
+  - **Solid style** (`PoseOverlay.cs`): marker outlines as 2.5 mm bars, a 25 mm post with a cap along each marker's
+    outward normal, shaded by a fixed light, depth-tested (`Resources/EyeLabVertexColor.shader`).
+  - **Cue player:** a step can end early (`cue_skip`).
+  - **Report:** applies each row's offset to the chain; distance and style per step; the offset at the start, its
+    adjustments, what was saved, and its angle as a shift at 35, 50 and 100 cm.
 
 - (0.4.012) T6.9 gate B3b built (`docs/tasks/T6.9-overlay-b3b.md`), not run yet.
   - **The pose drawn in the glasses, room-fixed** (`PoseOverlay.cs`): each trusted pose is carried into the room as

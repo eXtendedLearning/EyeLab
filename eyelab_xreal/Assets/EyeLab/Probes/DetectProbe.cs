@@ -30,6 +30,9 @@ namespace EyeLab.Probes
     /// tracking alone and measure the render floor without the worker. The wearer rates the drawing on the Beam Pro
     /// screen. A board pose with at least <see cref="TrustBoardMarkers"/> markers is trusted (T6.8: the ratio rule
     /// trusted 2 % of the board while 1 % was wrong).</item>
+    /// <item><b>align</b> (T6.10): the overlay with the wearer's view offset (<see cref="ViewOffset"/>) between the head and
+    /// the camera, set by eye with buttons on the Beam Pro and saved for the next run; a one-eye check before it, checks
+    /// at two distances after it, and the flat drawing against the solid one.</item>
     /// </list>
     /// Each run has two parts:
     /// <list type="number">
@@ -207,10 +210,44 @@ namespace EyeLab.Probes
             new CueStep("b_move_rate", "Rate it on the screen.", 6f, "RATE on the screen", ticks: true),
         };
 
-        /// <summary>The plan of a step: T6.6 steps by their thread count; T6.7 to T6.9 steps by their prefix and mode.</summary>
+        // ------------------------------------------------------------------ T6.10 (align)
+        // T6.9 run 1: room-fixed to a few mm, but "clearly off" the markers by a constant offset, with the camera side
+        // verified (intrinsics, rgb_from_head). The offset is the display's. First the one-eye check (stereo against
+        // boresight), then the alignment by eye, then two distances (an angle grows with distance, a shift does not),
+        // then flat against solid on plate L.
+        public static readonly string[] StyleAnswers = { "solid helps", "flat better", "about the same", "solid confusing" };
+        public const string AlignStep = "b_align";
+
+        public static List<CueStep> AlignCues() => new List<CueStep>
+        {
+            new CueStep("b_ready", "Align test. The ChArUco board upright, about fifty centimetres away. Green squares should appear.", 12f,
+                        "ChArUco board upright, about 50 cm", ticks: true),
+            new CueStep("b_both", "Both eyes open. Look at the squares and rate them on the screen.", 10f, "BOTH eyes: rate on the screen"),
+            new CueStep("b_left_only", "Close your right eye, so only your left eye sees. Rate on the screen.", 10f, "LEFT eye only: rate"),
+            new CueStep("b_right_only", "Now close your left eye, so only your right eye sees. Rate on the screen.", 10f, "RIGHT eye only: rate", ticks: true),
+            new CueStep(AlignStep, "Both eyes open. Align the squares on the markers with the buttons on the screen. " +
+                                   "Turn first; move only if turning cannot fix it. Press Save, then Done.", 150f,
+                        "ALIGN with the buttons, then SAVE and DONE", ticks: true),
+            new CueStep("b_check_still", "Hold still and rate the squares.", 10f, "Aligned: HOLD STILL, rate"),
+            new CueStep("b_check_move", "Move your head slowly, then rate.", 12f, "Move SLOWLY, then rate", metronome: 1f),
+            new CueStep("b_near_ready", "Bring the board closer, about thirty five centimetres.", 10f, "Board CLOSER, about 35 cm", ticks: true),
+            new CueStep("b_near", "Hold still and rate.", 10f, "Near: HOLD STILL, rate"),
+            new CueStep("b_far_ready", "Now about one metre away: move the board or step back.", 12f, "Board FAR, about 1 m", ticks: true),
+            new CueStep("b_far", "Hold still and rate.", 10f, "Far: HOLD STILL, rate"),
+            new CueStep("l_ready", "Now plate L, tilted forty five degrees, about sixty centimetres away.", 12f,
+                        "Plate L tilted 45 degrees, about 60 cm", ticks: true),
+            new CueStep("l_flat", "Flat squares. Look at them and move your head a little.", 10f, "FLAT: look, move a little", metronome: 1f),
+            new CueStep("l_solid", "Now the solid style, with bars and posts. Look and move your head a little.", 12f,
+                        "SOLID: look, move a little", metronome: 1f),
+            new CueStep("l_style", "Which shows better where the plate is in space? Answer on the screen.", 8f, "Flat or solid? Answer on the screen"),
+        };
+
+        /// <summary>The plan of a step: T6.6 steps by their thread count; T6.7 to T6.10 steps by their prefix and mode.</summary>
         public static Plan PlanFor(string variant, string stepId)
         {
             stepId = stepId ?? "";
+            if (variant == "align")
+                return new Plan("roi", 1, NiceRoi, stepId.StartsWith("l_") ? "plate_L" : "board25");
             if (variant == "overlay")
             {
                 string t = stepId.StartsWith("b_") ? "board25" : "plate_L";
@@ -290,7 +327,77 @@ namespace EyeLab.Probes
         static DetectProbe s_Active;
         const string OverlayFile = "overlay.csv";
         const string OverlayHeader = "seq,step,target,cam_ts,applied_mono_ns,unity_frame,px,py,pz,qx,qy,qz,qw," +
-                                     "head_px,head_py,head_pz,head_qx,head_qy,head_qz,head_qw";
+                                     "head_px,head_py,head_pz,head_qx,head_qy,head_qz,head_qw," +
+                                     "off_tx_mm,off_ty_mm,off_tz_mm,off_qx,off_qy,off_qz,off_qw,style";
+        // T6.10 view offset; null for T6.9 (no offset)
+        ViewOffset m_Offset;
+        bool m_OffsetSaved;
+        bool m_HasLast;
+        string m_LastTarget = "";
+        Vector3 m_LastHeadP, m_LastInP;
+        Quaternion m_LastHeadQ = Quaternion.identity, m_LastInQ = Quaternion.identity;
+
+        /// <summary>The running probe's step and variant ("" when none runs), for the Beam Pro screen.</summary>
+        public static string ActiveStep => s_Active != null ? s_Active.m_Step : "";
+        public static string ActiveVariant => s_Active != null ? s_Active.m_Variant : "";
+        public static string OffsetText => s_Active?.m_Offset != null
+            ? s_Active.m_Offset.Describe() + (s_Active.m_OffsetSaved ? " (saved)" : "") : "";
+
+        /// <summary>T6.10: turns the drawing about the head by <paramref name="dq"/> (head frame).</summary>
+        public static void TurnOffset(Quaternion dq, string label)
+        {
+            if (s_Active?.m_Offset == null) return;
+            s_Active.m_Offset.TurnAboutHead(dq);
+            s_Active.OffsetChanged("turn " + label);
+        }
+
+        /// <summary>T6.10: shifts the drawing by <paramref name="mm"/> (head frame, millimetres).</summary>
+        public static void MoveOffset(Vector3 mm, string label)
+        {
+            if (s_Active?.m_Offset == null) return;
+            s_Active.m_Offset.Move(mm);
+            s_Active.OffsetChanged("move " + label);
+        }
+
+        public static void ZeroOffset()
+        {
+            if (s_Active?.m_Offset == null) return;
+            s_Active.m_Offset = new ViewOffset();
+            s_Active.OffsetChanged("zero");
+        }
+
+        public static void SaveOffset()
+        {
+            DetectProbe p = s_Active;
+            if (p?.m_Offset == null) return;
+            try
+            {
+                p.m_Offset.Save(ViewOffset.DefaultPath);
+                p.m_OffsetSaved = true;
+                CuePlayer.Log(p.m_Run, "offset_saved", p.m_Step + ":" + p.m_Offset.Csv().Replace(',', ' '));
+                p.m_Run.Meta("view_offset_saved", p.m_Offset.Csv() + "; " + p.m_Offset.Describe());
+            }
+            catch (Exception e)
+            {
+                CuePlayer.Log(p.m_Run, "offset_save_error", e.GetType().Name + " " + e.Message);
+            }
+        }
+
+        /// <summary>T6.10: "done" ends the alignment step early.</summary>
+        public static void AlignDone()
+        {
+            if (s_Active == null || s_Active.m_Step != AlignStep) return;
+            CuePlayer.Ensure().SkipStep();
+        }
+
+        void OffsetChanged(string what)
+        {
+            m_OffsetSaved = false;
+            CuePlayer.Log(m_Run, "offset", m_Step + ":" + what + ":" + m_Offset.Csv().Replace(',', ' '));
+            if (!m_HasLast || m_Overlay == null) return;
+            PoseOverlay.Chain(m_LastHeadP, m_LastHeadQ, m_Offset, m_LastInP, m_LastInQ, out Vector3 p, out Quaternion q);
+            m_Overlay.Show(m_LastTarget, p, q, m_LastHeadP);
+        }
 
         /// <summary>A rating tap on the Beam Pro screen (T6.9), for the step now running.</summary>
         public static void Rate(string answer)
@@ -305,7 +412,7 @@ namespace EyeLab.Probes
             var go = new GameObject("EyeLab DetectProbe");
             var p = go.AddComponent<DetectProbe>();
             p.m_Run = run;
-            p.m_Variant = variant == "budget" || variant == "lean" || variant == "overlay" ? variant : "detect";
+            p.m_Variant = variant == "budget" || variant == "lean" || variant == "overlay" || variant == "align" ? variant : "detect";
             run.Meta("variant", p.m_Variant);
             string info;
             try { info = ArucoNative.Info(); }
@@ -325,8 +432,8 @@ namespace EyeLab.Probes
                 run.Meta("budget", $"cap {CapHz} Hz; roi margin {RoiMarginFrac} x box, min {RoiMarginMinPx} px; box/prior max age " +
                                    $"{RoiMaxAgeNs / 1e6} ms; roi nice {NiceRoi}; trusted: non-planar, or ratio >= " +
                                    $"{p.LockCfg.min_ambiguity_ratio}, or <= {p.LockCfg.ambiguity_min_separation_deg} deg apart (no prior); and rms <= {p.LockCfg.max_acquire_reproj_rms_px} px; next region = projected board joined with detected target markers" +
-                                   (p.m_Variant == "overlay" ? $"; or planar on >= {TrustBoardMarkers} markers" : ""));
-            if (p.m_Variant == "overlay") p.StartOverlay();
+                                   (p.Drawn ? $"; or planar on >= {TrustBoardMarkers} markers" : ""));
+            if (p.Drawn) p.StartOverlay();
 
             // Part 1: bench on the pushed frames, on a worker thread so the glasses keep drawing.
             if (p.m_Set != null && p.m_Set.frames != null && p.m_Set.frames.Length > 0)
@@ -350,7 +457,7 @@ namespace EyeLab.Probes
             // Part 2: live on the Eye.
             p.StartLive();
             float nextStatus = 0f;
-            List<CueStep> cues = p.m_Variant == "overlay" ? OverlayCues() : p.m_Variant == "lean" ? LeanCues()
+            List<CueStep> cues = p.m_Variant == "align" ? AlignCues() : p.m_Variant == "overlay" ? OverlayCues() : p.m_Variant == "lean" ? LeanCues()
                                : p.m_Variant == "budget" ? BudgetCues() : DetectCues();
             s_Active = p;
             yield return CuePlayer.Ensure().Play(run, cues, (text, left, frac, counter) =>
@@ -364,11 +471,14 @@ namespace EyeLab.Probes
             {
                 p.m_Step = step.Id;
                 p.m_ThreadsWanted = PlanFor(p.m_Variant, step.Id).Threads;
+                if (p.m_Variant == "align" && p.m_Overlay != null) p.m_Overlay.SetStyle(step.Id.Contains("_solid"));
             });
             p.StopLive();
             s_Active = null;
             while (p.m_Done.TryDequeue(out Done d)) p.Write(d);
             if (p.m_Overlay != null) Destroy(p.m_Overlay.gameObject);
+            if (p.m_Offset != null)
+                run.Meta("view_offset_end", p.m_Offset.Csv() + "; " + p.m_Offset.Describe() + (p.m_OffsetSaved ? "; saved" : "; not saved"));
             run.Meta("off_skipped", p.m_OffSkipped.ToString(CultureInfo.InvariantCulture));
             run.Meta("eye_frames", p.m_EyeFrames.ToString(CultureInfo.InvariantCulture));
             run.Meta("processed", p.m_Processed.ToString(CultureInfo.InvariantCulture));
@@ -472,7 +582,7 @@ namespace EyeLab.Probes
             if (!(r.T2 > 0)) return false;   // T6.9: T6.8 run 1 had 5 trusted non-planar plate L poses behind the camera (t_z ≈ −0.56 m, RMS 0.6-3 px)
             if (r.Planar != 1) return true;
             if (double.IsNaN(r.AmbiguityRatio)) return true;   // one IPPE solution only
-            if (m_Variant == "overlay" && r.BoardMarkers >= TrustBoardMarkers) return true;   // T6.9: the board
+            if (Drawn && r.BoardMarkers >= TrustBoardMarkers) return true;   // T6.9: the board
             return r.AmbiguityRatio >= LockCfg.min_ambiguity_ratio || r.AmbiguityDeg <= LockCfg.ambiguity_min_separation_deg;
         }
 
@@ -629,10 +739,20 @@ namespace EyeLab.Probes
             if (m_Overlay != null && PlanFor(m_Variant, m_Step).Mode == "off") m_Overlay.Hold();
         }
 
-        // ---- overlay (T6.9) -----------------------------------------------------------------------------------------
+        // ---- overlay (T6.9, T6.10) ----------------------------------------------------------------------------------
+
+        /// <summary>The variants that draw the pose in the glasses.</summary>
+        bool Drawn => m_Variant == "overlay" || m_Variant == "align";
 
         void StartOverlay()
         {
+            if (m_Variant == "align")
+            {
+                m_Offset = ViewOffset.LoadOrZero(ViewOffset.DefaultPath, out string offStatus);
+                m_Run.Meta("view_offset_start", m_Offset.Csv() + "; " + offStatus);
+                m_Run.Meta("view_offset_model", "in_head' = R_off * (rgb_from_head * cam) + t_off, head frame (Unity: x right, y up, z forward); " +
+                                                "turn = about the head origin (R_off' = dq R_off, t_off' = dq t_off), move = t_off += d");
+            }
             try
             {
                 Pose pose = default;
@@ -666,6 +786,7 @@ namespace EyeLab.Probes
                 m_Run.Meta("eye_vendor_intrinsics", "error " + e.GetType().Name + ": " + e.Message);
             }
             m_Overlay = PoseOverlay.Create(m_Set);
+            m_Run.Meta("overlay_solid_shader", m_Overlay.SolidShader);
         }
 
         /// <summary>Main thread: a trusted pose with its head pose moves the drawing; the shown pose goes to overlay.csv.</summary>
@@ -674,9 +795,13 @@ namespace EyeLab.Probes
             if (m_Overlay == null || !d.Accepted || !d.HeadOk || d.Mode == "off") return;
             PoseOverlay.CvToUnity(d.R.R0, d.R.R1, d.R.R2, d.R.T0, d.R.T1, d.R.T2, out Vector3 camP, out Quaternion camQ);
             PoseOverlay.NativeHeadToUnity(d.Head, out Vector3 headP, out Quaternion headQ);
-            PoseOverlay.Chain(headP, headQ, m_RgbFromHead, camP, camQ, out Vector3 p, out Quaternion q);
+            PoseOverlay.InHead(m_RgbFromHead, camP, camQ, out Vector3 inP, out Quaternion inQ);
+            PoseOverlay.Chain(headP, headQ, m_Offset, inP, inQ, out Vector3 p, out Quaternion q);
             if (PlanFor(m_Variant, m_Step).Mode == "off") return;   // the step changed to off while this frame ran
-            m_Overlay.Show(d.Target, p, q);
+            m_Overlay.Show(d.Target, p, q, headP);
+            m_HasLast = true;
+            m_LastTarget = d.Target;
+            m_LastHeadP = headP; m_LastHeadQ = headQ; m_LastInP = inP; m_LastInQ = inQ;
             var ci = CultureInfo.InvariantCulture;
             Camera cam = Camera.main;
             Vector3 hp = cam != null ? cam.transform.localPosition : Vector3.zero;
@@ -684,7 +809,18 @@ namespace EyeLab.Probes
             string f(float v) => v.ToString("R", ci);
             m_Run.Row(OverlayFile, OverlayHeader, string.Join(",", d.Seq.ToString(ci), d.Step, d.Target, d.CamTs.ToString(ci),
                 ProbeClocks.MonoNs.ToString(ci), Time.frameCount.ToString(ci), f(p.x), f(p.y), f(p.z), f(q.x), f(q.y), f(q.z), f(q.w),
-                f(hp.x), f(hp.y), f(hp.z), f(hq.x), f(hq.y), f(hq.z), f(hq.w)));
+                f(hp.x), f(hp.y), f(hp.z), f(hq.x), f(hq.y), f(hq.z), f(hq.w),
+                OffsetCsv(m_Offset), m_Overlay.Solid ? "solid" : "flat"));
+        }
+
+        /// <summary>The view offset as overlay.csv columns: translation (mm), then the rotation quaternion; zero when none.</summary>
+        static string OffsetCsv(ViewOffset o)
+        {
+            var ci = CultureInfo.InvariantCulture;
+            Vector3 t = o != null ? o.Translation * 1000f : Vector3.zero;
+            Quaternion q = o != null ? o.Rotation : Quaternion.identity;
+            string f(float v) => v.ToString("R", ci);
+            return string.Join(",", f(t.x), f(t.y), f(t.z), f(q.x), f(q.y), f(q.z), f(q.w));
         }
 
         /// <returns>true when a new frame was copied and handed to the worker.</returns>

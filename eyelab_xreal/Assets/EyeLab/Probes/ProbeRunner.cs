@@ -15,7 +15,7 @@ namespace EyeLab.Probes
     [Serializable]
     public sealed class ProbeConfig
     {
-        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | loop | sync | pan | render | detect | budget | lean | overlay | all
+        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | loop | sync | pan | render | detect | budget | lean | overlay | align | all
         public float seconds = 0f;         // 0 = the probe's default
         public float imu_seconds = 20f;
         public int save_every = 0;         // chain: 0; timecode: 1
@@ -44,6 +44,10 @@ namespace EyeLab.Probes
         string m_GlassesSeen = "not answered";
         CuePlayer m_Cues;
         bool m_Busy;
+        // T6.10 align run: one page, its part chosen by the step (rate, align controls, flat or solid)
+        GameObject m_AlignPage, m_AlignRate, m_AlignControls, m_AlignStyle;
+        Text m_AlignOffset, m_AlignMode, m_AlignStepSize, m_AlignMinus, m_AlignPlus;
+        bool m_AlignRun, m_AlignTurn = true, m_AlignFine;
 
         // ------------------------------------------------------------------ T6.3 cue scripts (Jack, 2026-11-18)
         static readonly CueStep[] LoopCues =
@@ -139,6 +143,42 @@ namespace EyeLab.Probes
             if (m_Panel2 != null) m_Panel2.SetActive(page == m_Panel2);
             if (m_RatePanel != null) m_RatePanel.SetActive(page == m_RatePanel);
             if (m_OverlayRatePanel != null) m_OverlayRatePanel.SetActive(page == m_OverlayRatePanel);
+            if (m_AlignPage != null) m_AlignPage.SetActive(page == m_AlignPage);
+        }
+
+        void Update()
+        {
+            if (!m_AlignRun || m_AlignPage == null) return;
+            string step = DetectProbe.ActiveStep;
+            bool align = step == DetectProbe.AlignStep, style = step == "l_style";
+            if (m_AlignControls.activeSelf != align) m_AlignControls.SetActive(align);
+            if (m_AlignStyle.activeSelf != style) m_AlignStyle.SetActive(style);
+            if (m_AlignRate.activeSelf != (!align && !style)) m_AlignRate.SetActive(!align && !style);
+            m_AlignOffset.text = "Offset: " + DetectProbe.OffsetText;
+        }
+
+        /// <summary>T6.10: one press of an arrow (dx, dy) or of minus/plus (dz) on the align page.</summary>
+        void Nudge(int dx, int dy, int dz, string label)
+        {
+            if (m_AlignTurn)
+            {
+                float s = m_AlignFine ? 0.1f : 0.5f;   // degrees; Unity: +yaw moves the drawing right, +pitch down, +roll anticlockwise
+                DetectProbe.TurnOffset(Quaternion.Euler(-dy * s, dx * s, dz * s), $"{label} {s} deg");
+            }
+            else
+            {
+                float s = m_AlignFine ? 1f : 5f;   // mm, head frame: x right, y up, z forward
+                DetectProbe.MoveOffset(new Vector3(dx, dy, dz) * s, $"{label} {s} mm");
+            }
+        }
+
+        void SetAlignLabels()
+        {
+            m_AlignMode.text = m_AlignTurn ? "Mode: TURN (tap for MOVE)" : "Mode: MOVE (tap for TURN)";
+            m_AlignStepSize.text = m_AlignTurn ? (m_AlignFine ? "Step 0.1 deg (fine)" : "Step 0.5 deg (coarse)")
+                                               : (m_AlignFine ? "Step 1 mm (fine)" : "Step 5 mm (coarse)");
+            m_AlignMinus.text = m_AlignTurn ? "Roll right" : "Nearer";
+            m_AlignPlus.text = m_AlignTurn ? "Roll left" : "Farther";
         }
 
         public IEnumerator RunProbe(ProbeConfig cfg)
@@ -162,6 +202,7 @@ namespace EyeLab.Probes
             if (p == "budget") yield return Detect(cfg, "budget");
             if (p == "lean") yield return Detect(cfg, "lean");
             if (p == "overlay") yield return Detect(cfg, "overlay");
+            if (p == "align") yield return Detect(cfg, "align");
             m_Glasses?.ClearCue();
             ShowPage(m_Panel);
             m_Busy = false;
@@ -220,9 +261,12 @@ namespace EyeLab.Probes
             {
                 run.Meta("config", JsonUtility.ToJson(cfg));
                 GlassesMeta(run);
-                bool overlay = variant == "overlay";
-                if (overlay) { ShowPage(m_OverlayRatePanel); m_Glasses?.SetOverlayLayout(true); }
+                bool overlay = variant == "overlay" || variant == "align";
+                if (variant == "overlay") ShowPage(m_OverlayRatePanel);
+                if (variant == "align") { m_AlignRun = true; ShowPage(m_AlignPage); }
+                if (overlay) m_Glasses?.SetOverlayLayout(true);
                 yield return DetectProbe.Run(run, SetStatus, ShowCue, variant);
+                m_AlignRun = false;
                 if (overlay) m_Glasses?.SetOverlayLayout(false);
                 SetStatus(variant + " done: " + Path.GetFileName(run.Dir));
             }
@@ -451,7 +495,7 @@ namespace EyeLab.Probes
             m_Glasses = GlassesView.Create(font);
 
             m_Panel = Column(canvas.transform);
-            AddButton(font, "T6.9  Overlay in the glasses: plate L, board  (2 min)", new ProbeConfig { probe = "overlay" });
+            AddButton(font, "T6.10  Align the overlay by eye: board, plate L  (5 min)", new ProbeConfig { probe = "align" });
             AddAction(font, "Other runs", () => ShowPage(m_Panel2), new Color(0.22f, 0.22f, 0.25f, 0.9f));
             AddAction(font, "Quit EyeLab", () => { Debug.Log("[EyeLab probe] quit button"); Application.Quit(); });
 
@@ -463,6 +507,7 @@ namespace EyeLab.Probes
             AddAction(font, "Text only", () => AnswerGlasses("text only"), new Color(0.35f, 0.3f, 0.1f, 0.9f), row);
             AddAction(font, "Nothing", () => AnswerGlasses("nothing"), new Color(0.45f, 0.1f, 0.1f, 0.9f), row);
             AddAction(font, "Place square ahead", () => m_Glasses?.PlaceReference(), new Color(0.1f, 0.25f, 0.45f, 0.9f), m_Panel2);
+            AddButton(font, "T6.9  Overlay in the glasses: plate L, board  (2 min)", new ProbeConfig { probe = "overlay" }, m_Panel2);
             AddButton(font, "T6.8  Lean detection: board, plate L tilted  (2 min)", new ProbeConfig { probe = "lean" }, m_Panel2);
             AddButton(font, "T6.7  Detection budget: plate A, plate L, board  (2.5 min)", new ProbeConfig { probe = "budget" }, m_Panel2);
             AddButton(font, "T6.6  Detection, plate A, threads  (100 s)", new ProbeConfig { probe = "detect" }, m_Panel2);
@@ -503,8 +548,67 @@ namespace EyeLab.Probes
                 string answer = DetectProbe.OverlayAnswers[i];
                 AddAction(font, char.ToUpperInvariant(answer[0]) + answer.Substring(1), () => DetectProbe.Rate(answer), overlayColors[i], m_OverlayRatePanel);
             }
+            BuildAlignPage(canvas.transform, font, overlayColors);
             ShowPage(m_Panel);
             Debug.Log("[EyeLab probe] buttons built on " + (canvas.gameObject.name));
+        }
+
+        /// <summary>
+        /// T6.10: the align run's page. Ratings in every step but two; in the align step, the offset controls (TURN about
+        /// the head or MOVE, coarse or fine, the four directions, roll or nearer/farther, Zero, Save, Done); in l_style,
+        /// flat against solid. Each tap is logged with its step.
+        /// </summary>
+        void BuildAlignPage(Transform canvas, Font font, Color[] rateColors)
+        {
+            Color grey = new Color(0.22f, 0.22f, 0.25f, 0.9f), blue = new Color(0.1f, 0.25f, 0.45f, 0.9f);
+            m_AlignPage = Column(canvas);
+            m_AlignRate = Sub(m_AlignPage.transform);
+            for (int i = 0; i < DetectProbe.OverlayAnswers.Length; i++)
+            {
+                string answer = DetectProbe.OverlayAnswers[i];
+                AddAction(font, char.ToUpperInvariant(answer[0]) + answer.Substring(1), () => DetectProbe.Rate(answer), rateColors[i], m_AlignRate);
+            }
+            m_AlignStyle = Sub(m_AlignPage.transform);
+            for (int i = 0; i < DetectProbe.StyleAnswers.Length; i++)
+            {
+                string answer = DetectProbe.StyleAnswers[i];
+                AddAction(font, char.ToUpperInvariant(answer[0]) + answer.Substring(1), () => DetectProbe.Rate(answer), rateColors[i], m_AlignStyle);
+            }
+            m_AlignControls = Sub(m_AlignPage.transform);
+            Transform r1 = Row(m_AlignControls.transform);
+            m_AlignMode = AddAction(font, "", () => { m_AlignTurn = !m_AlignTurn; SetAlignLabels(); }, grey, r1);
+            m_AlignStepSize = AddAction(font, "", () => { m_AlignFine = !m_AlignFine; SetAlignLabels(); }, grey, r1);
+            Transform r2 = Row(m_AlignControls.transform);
+            AddAction(font, "Left", () => Nudge(-1, 0, 0, "left"), blue, r2);
+            AddAction(font, "Up", () => Nudge(0, 1, 0, "up"), blue, r2);
+            AddAction(font, "Down", () => Nudge(0, -1, 0, "down"), blue, r2);
+            AddAction(font, "Right", () => Nudge(1, 0, 0, "right"), blue, r2);
+            Transform r3 = Row(m_AlignControls.transform);
+            m_AlignMinus = AddAction(font, "", () => Nudge(0, 0, -1, m_AlignTurn ? "roll right" : "nearer"), blue, r3);
+            m_AlignPlus = AddAction(font, "", () => Nudge(0, 0, 1, m_AlignTurn ? "roll left" : "farther"), blue, r3);
+            Transform r4 = Row(m_AlignControls.transform);
+            AddAction(font, "Zero", DetectProbe.ZeroOffset, new Color(0.45f, 0.1f, 0.1f, 0.9f), r4);
+            AddAction(font, "Save", DetectProbe.SaveOffset, new Color(0.12f, 0.3f, 0.15f, 0.9f), r4);
+            AddAction(font, "Done", DetectProbe.AlignDone, new Color(0.35f, 0.3f, 0.1f, 0.9f), r4);
+            m_AlignOffset = MakeText(m_AlignPage.transform, font, Vector2.zero, Vector2.one, 26);
+            m_AlignOffset.alignment = TextAnchor.MiddleCenter;
+            m_AlignOffset.gameObject.AddComponent<LayoutElement>().preferredHeight = 60;
+            SetAlignLabels();
+            m_AlignStyle.SetActive(false);
+            m_AlignControls.SetActive(false);
+        }
+
+        static GameObject Sub(Transform parent)
+        {
+            var go = new GameObject("part", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(LayoutElement));
+            go.transform.SetParent(parent, false);
+            var v = go.GetComponent<VerticalLayoutGroup>();
+            v.spacing = 12;
+            v.childForceExpandHeight = true;
+            v.childControlHeight = true;
+            v.childControlWidth = true;
+            go.GetComponent<LayoutElement>().flexibleHeight = 1;
+            return go;
         }
 
         /// <summary>
@@ -559,7 +663,7 @@ namespace EyeLab.Probes
             return row.transform;
         }
 
-        void AddAction(Font font, string label, UnityEngine.Events.UnityAction action, Color? color = null, object parent = null)
+        Text AddAction(Font font, string label, UnityEngine.Events.UnityAction action, Color? color = null, object parent = null)
         {
             var go = new GameObject(label, typeof(RectTransform), typeof(Image), typeof(Button));
             Transform where = parent is GameObject g ? g.transform : parent as Transform ?? m_Panel.transform;
@@ -569,6 +673,7 @@ namespace EyeLab.Probes
             Text t = MakeText(go.transform, font, Vector2.zero, Vector2.one, 30);
             t.text = label;
             t.alignment = TextAnchor.MiddleCenter;
+            return t;
         }
 
         void AddButton(Font font, string label, ProbeConfig cfg, GameObject panel = null)

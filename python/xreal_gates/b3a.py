@@ -765,14 +765,33 @@ def rgb_from_head(meta: dict) -> Tuple[np.ndarray, np.ndarray, bool]:
         return np.eye(3), np.zeros(3), False
 
 
+def view_offset(row: dict) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """T6.10: the view offset an overlay.csv row was drawn with (head frame; rotation, translation in metres), or None
+    for a T6.9 row (no offset columns)."""
+    try:
+        q = [float(row[k]) for k in ("off_qx", "off_qy", "off_qz", "off_qw")]
+        tm = np.array([float(row[k]) for k in ("off_tx_mm", "off_ty_mm", "off_tz_mm")]) / 1000
+    except (KeyError, ValueError, TypeError):
+        return None
+    return quat_matrix(*q), tm
+
+
+def offset_angle_deg(off: Tuple[np.ndarray, np.ndarray]) -> float:
+    R = off[0]
+    return math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(R) - 1) / 2))))
+
+
 def target_in_room(rvec: np.ndarray, tvec: np.ndarray, head: Tuple[np.ndarray, np.ndarray],
-                   rgb: Tuple[np.ndarray, np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
-    """As the device's PoseOverlay: world = head(cam_ts) * rgb_from_head * (F R F, F t), Unity-handed, metres."""
+                   rgb: Tuple[np.ndarray, np.ndarray],
+                   off: Optional[Tuple[np.ndarray, np.ndarray]] = None) -> Tuple[np.ndarray, np.ndarray]:
+    """As the device's PoseOverlay: world = head(cam_ts) * view_offset * rgb_from_head * (F R F, F t), Unity-handed,
+    metres. ``off`` (T6.10) is the head-frame offset; None is identity (T6.9)."""
     Rc = F_CV @ cv2.Rodrigues(np.asarray(rvec, float))[0] @ F_CV
     tc = F_CV @ np.asarray(tvec, float)
     RH, tH = head
     Rr, tr = rgb
-    return RH @ Rr @ Rc, tH + RH @ (Rr @ tc + tr)
+    Ro, to = off if off is not None else (np.eye(3), np.zeros(3))
+    return RH @ Ro @ Rr @ Rc, tH + RH @ (Ro @ (Rr @ tc + tr) + to)
 
 
 def _normal_dev(poses: List[Tuple[np.ndarray, np.ndarray]],
@@ -836,11 +855,12 @@ def scale_fit(a: np.ndarray, b: np.ndarray) -> Tuple[float, float]:
 
 
 def overlay_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 60.0) -> List[str]:
-    """T6.9 (B3b): each trusted pose carried into the room as the device drew it; how still the target stays there."""
+    """T6.9 (B3b): each trusted pose carried into the room as the device drew it; how still the target stays there.
+    T6.10 (align): the same with the view offset each pose was drawn with, and the offset's story."""
     from .beampro import load_json
     run = Path(run)
     meta = load_json(run)
-    if meta.get("variant") != "overlay":
+    if meta.get("variant") not in ("overlay", "align"):
         return []
     Rr, tr, rgb_ok = rgb_from_head(meta)
     rgb = (Rr, tr)
@@ -858,34 +878,46 @@ def overlay_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 6
     for r in load_csv(run / "frames.csv"):
         if r["step"] not in order:
             order.append(r["step"])
-    out.append("   room: trusted poses carried into the room (target centre); std and high-pass of its position, "
-               "orientation spread; the head's own range; scale = the camera-translation factor that keeps it stillest")
+    out.append("   room: trusted poses carried into the room (target centre), first second of each step skipped; distance "
+               "from the camera; std and high-pass of its position, orientation spread; the head's own range; scale = the "
+               "camera-translation factor that keeps it stillest")
     diffs = []
+    last_off: Optional[Tuple[np.ndarray, np.ndarray]] = None
     for step in order:
         sel = [r for r in rows if r["step"] == step and r["seq"] in heads]
+        if sel:   # as the still metrics: the step's first second is settling
+            t0 = int(sel[0]["cam_ts"])
+            sel = [r for r in sel if int(r["cam_ts"]) - t0 >= SETTLE_S * 1e9]
         if len(sel) < 5:
             continue
-        pw, Rw, a, b, hp, hR = [], [], [], [], [], []
+        pw, Rw, a, b, hp, hR, dist, styles = [], [], [], [], [], [], [], set()
         for r in sel:
             rv, tv = _pose(r)
             head = head_unity(heads[r["seq"]])
-            R, t0 = target_in_room(rv, tv, head, rgb)
+            d = shown.get(r["seq"])
+            off = view_offset(d) if d is not None else last_off
+            last_off = off
+            if d is not None and d.get("style"):
+                styles.add(d["style"])
+            R, t0 = target_in_room(rv, tv, head, rgb, off)
             c = centres.get(r["target"], np.zeros(3))
             cu = F_CV @ c
             pw.append(t0 + R @ cu)
             Rw.append(R)
             RH, tH = head
             Rc = F_CV @ cv2.Rodrigues(np.asarray(rv, float))[0] @ F_CV
-            a.append(tH + RH @ tr)
-            b.append(RH @ Rr @ (F_CV @ np.asarray(tv, float) + Rc @ cu))
+            Ro, to = off if off is not None else (np.eye(3), np.zeros(3))
+            a.append(tH + RH @ (Ro @ tr + to))
+            b.append(RH @ Ro @ Rr @ (F_CV @ np.asarray(tv, float) + Rc @ cu))
             hp.append(tH)
             hR.append(RH)
-            d = shown.get(r["seq"])
+            dist.append(float(np.linalg.norm(np.asarray(tv, float) + cv2.Rodrigues(np.asarray(rv, float))[0] @ c)))
             if d is not None:
                 diffs.append(float(np.linalg.norm(t0 - np.array([float(d[k]) for k in ("px", "py", "pz")])) * 1000))
         pw = np.array(pw) * 1000
         hp = np.array(hp) * 1000
-        line = (f"     {step:12s} {len(sel):4d} poses on {sel[0]['target']}: std {np.linalg.norm(pw.std(axis=0)):6.2f} mm, "
+        line = (f"     {step:13s} {len(sel):4d} poses on {sel[0]['target']} at {np.median(dist) * 1000:4.0f} mm"
+                f"{' (' + '/'.join(sorted(styles)) + ')' if styles else ''}: std {np.linalg.norm(pw.std(axis=0)):6.2f} mm, "
                 f"high-pass {np.linalg.norm(high_pass(pw).std(axis=0)):5.2f} mm, orientation {_rot_spread_deg(Rw):5.2f} deg; "
                 f"head range {np.linalg.norm(np.ptp(hp, axis=0)):6.0f} mm, {2 * _rot_spread_deg(hR):5.1f} deg")
         if np.linalg.norm(np.ptp(hp, axis=0)) > 50:
@@ -906,10 +938,35 @@ def overlay_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 6
         if dt:
             late = sum(1 for x in dt if x > 1000 / refresh_hz * 1.25) / len(dt) * 100
             out.append(f"   {step:12s} detection off: {len(dt) / (sum(dt) / 1000):5.1f} fps, late {late:4.1f} % (the render floor)")
-    ratings = [e["detail"] for e in load_csv(run / "events.csv") if e.get("event") == "rating"]
+    events = load_csv(run / "events.csv")
+    ratings = [e["detail"] for e in events if e.get("event") == "rating"]
     out.append("   ratings: " + ("; ".join(ratings) if ratings else "none"))
+    if meta.get("variant") == "align":
+        out += align_lines(meta, events, shown)
     if not rgb_ok:
         out.append("   WARNING: no rgb_from_head on the device: identity used")
+    return out
+
+
+def align_lines(meta: dict, events: List[dict], shown: Dict[str, dict]) -> List[str]:
+    """T6.10: the view offset at the start, each adjustment, what was saved, and the offset's angle and its shift at
+    the distances checked."""
+    out = [f"   view offset at start: {meta.get('view_offset_start', '?')}"]
+    adj = [e["detail"] for e in events if e.get("event") == "offset"]
+    skipped = [e["detail"] for e in events if e.get("event") == "cue_skip"]
+    out.append(f"   adjustments: {len(adj)}" + (f"; last {adj[-1]}" if adj else "")
+               + (f"; skipped {', '.join(skipped)}" if skipped else ""))
+    out.append(f"   saved: {meta.get('view_offset_saved', 'no')}; at the end: {meta.get('view_offset_end', '?')}")
+    offs = [view_offset(d) for d in shown.values()]
+    offs = [o for o in offs if o is not None]
+    if offs:
+        o = offs[-1]
+        ang = offset_angle_deg(o)
+        out.append(f"   last drawn offset: {ang:.2f} deg, shift {np.linalg.norm(o[1]) * 1000:.1f} mm; the angle alone moves the "
+                   f"drawing {math.radians(ang) * 350:.1f} / {math.radians(ang) * 500:.1f} / {math.radians(ang) * 1000:.1f} mm "
+                   f"at 35 / 50 / 100 cm")
+    if meta.get("overlay_solid_shader"):
+        out.append(f"   solid style shader: {meta['overlay_solid_shader']}")
     return out
 
 

@@ -230,6 +230,32 @@ class B3aTest(unittest.TestCase):
         self.assertTrue(ok and np.allclose(t, [0.01, 0.03, 0.02]) and np.allclose(R, rot([0, 0.02, 0])))
         self.assertFalse(b3a.rgb_from_head({})[2])
 
+    def test_view_offset_chain(self):
+        """T6.10: with a head-frame view offset, world = H off rgb C; an overlay.csv row carries it, a T6.9 row has none."""
+        import cv2
+        F = np.diag([1.0, -1.0, 1.0])
+
+        def rot(v):
+            return cv2.Rodrigues(np.asarray(v, float))[0]
+        Rw, tw = rot([0.1, 0.4, -0.2]), np.array([0.2, 1.1, 0.6])
+        Rr, tr = rot([0.01, 0.02, 0.0]), np.array([0.001, 0.005, 0.028])
+        RH, tH = rot([0.2, -0.3, 0.05]), np.array([0.0, 1.5, 0.1])
+        ang = np.radians(1.3) / 2                                             # 1.3 deg yaw, 2 mm up
+        row = {"off_tx_mm": "0", "off_ty_mm": "2", "off_tz_mm": "0",
+               "off_qx": "0", "off_qy": repr(float(np.sin(ang))), "off_qz": "0", "off_qw": repr(float(np.cos(ang)))}
+        off = b3a.view_offset(row)
+        self.assertTrue(np.allclose(off[0], rot([0, np.radians(1.3), 0])) and np.allclose(off[1], [0, 0.002, 0]))
+        self.assertAlmostEqual(b3a.offset_angle_deg(off), 1.3, places=6)
+        Ro, to = off
+        RC = (RH @ Ro @ Rr).T @ Rw                                           # world = H (Ro (rgb C) + to)
+        tC = (RH @ Ro @ Rr).T @ (tw - tH - RH @ (Ro @ tr + to))
+        rv, tv = cv2.Rodrigues(F @ RC @ F)[0].ravel(), F @ tC
+        R, t = b3a.target_in_room(rv, tv, (RH, tH), (Rr, tr), off)
+        self.assertTrue(np.allclose(R, Rw, atol=1e-9) and np.allclose(t, tw, atol=1e-9))
+        R0, t0 = b3a.target_in_room(rv, tv, (RH, tH), (Rr, tr))
+        self.assertGreater(np.linalg.norm(t0 - tw), 0.005)                   # without it the drawing is off
+        self.assertIsNone(b3a.view_offset({"seq": "1", "px": "0"}))
+
     def test_scale_fit(self):
         rng = np.random.default_rng(5)
         a = rng.normal(0, 0.2, (50, 3))                     # head part moves

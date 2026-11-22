@@ -114,6 +114,11 @@ namespace EyeLab.Probes
 
         public void PlayEnd() => m_Audio.PlayOneShot(m_End);
 
+        bool m_SkipRequested;
+
+        /// <summary>Ends the running step now (T6.10: "done" after the alignment); logged as cue_skip.</summary>
+        public void SkipStep() => m_SkipRequested = true;
+
         public static void Log(ProbeRun run, string name, string detail) =>
             run.Row(EventFile, EventHeader, $"{name},{detail.Replace(',', ';')},{ProbeClocks.Now().Csv()}");
 
@@ -140,11 +145,13 @@ namespace EyeLab.Probes
                 Say(s.Say);
                 float t0 = Time.realtimeSinceStartup, nextBeat = s.Metronome;
                 int ticksPlayed = 0;
+                m_SkipRequested = false;
                 string counter = $"step {i + 1}/{steps.Count}";
                 while (true)
                 {
                     float el = Time.realtimeSinceStartup - t0, left = s.Seconds - el;
                     if (left <= 0f) break;
+                    if (m_SkipRequested) { m_SkipRequested = false; Log(run, "cue_skip", s.Id); break; }
                     if (abort != null && abort()) { Log(run, "cue_abort", s.Id); yield break; }
                     if (s.Ticks && ticksPlayed < 3 && left <= 3 - ticksPlayed) { m_Audio.PlayOneShot(m_Tick); ticksPlayed++; }
                     if (s.Metronome > 0f && el >= nextBeat) { m_Audio.PlayOneShot(m_Soft); nextBeat += s.Metronome; }
