@@ -23,6 +23,8 @@ namespace EyeLab.Probes
     /// full frame capped at 15 Hz, or a region of interest around the target's last box), a thread count, the worker's
     /// nice value and a target (plate A, plate L, the ChArUco board's markers). Each pose is marked trusted or not by
     /// PoseLock's planar-ambiguity rule (thresholds from set.json).</item>
+    /// <item><b>lean</b> (T6.8): region detection only, at every Eye frame or capped at 15 Hz, on the ChArUco board and
+    /// plate L tilted so both faces show; trusted also needs PoseLock's RMS ceiling (a non-planar solve can diverge).</item>
     /// </list>
     /// Each run has two parts:
     /// <list type="number">
@@ -53,6 +55,7 @@ namespace EyeLab.Probes
         {
             public float min_ambiguity_ratio = 3f;          // python/pose_lock.py PoseLockConfig, written into set.json
             public float ambiguity_min_separation_deg = 10f;
+            public float max_acquire_reproj_rms_px = 15f;    // T6.8: PoseLock's ceiling for any candidate
         }
 
         [Serializable]
@@ -75,7 +78,7 @@ namespace EyeLab.Probes
         /// <summary>How a cue step processes frames.</summary>
         public readonly struct Plan
         {
-            public readonly string Mode;    // full | cap | roi
+            public readonly string Mode;    // full | cap | roi | roi15 (region, capped at CapHz)
             public readonly int Threads, Nice;
             public readonly string Target;  // a set.json target name; "" = the set's own board (plate A)
             public Plan(string mode, int threads, int nice, string target) { Mode = mode; Threads = threads; Nice = nice; Target = target; }
@@ -153,10 +156,36 @@ namespace EyeLab.Probes
             new CueStep("b_roi_move", "Move your head slowly. Keep the board in view.", 12f, "Move SLOWLY, board in view", metronome: 1f),
         };
 
-        /// <summary>The plan of a step: T6.6 steps by their thread count; T6.7 steps by their prefix and mode.</summary>
+        // ------------------------------------------------------------------ T6.8 (lean)
+        // T6.7 run 1: the region at 1 thread was the only mode near the render margin (5-7 % late against 12-18 %);
+        // plate A at 75 cm was too small for a stable normal. Board first, then plate L tilted about 45 degrees so
+        // both faces show (standing on the table, its upward face was edge-on). Each target: region at every Eye
+        // frame, then capped at 15 Hz, still and moving.
+        public static List<CueStep> LeanCues() => new List<CueStep>
+        {
+            new CueStep("b_ready", "Lean detection test. The ChArUco board upright, about sixty centimetres away.", 10f,
+                        "ChArUco board upright, about 60 cm", ticks: true),
+            new CueStep("b_roi_still", "Look at the board and hold still.", 12f, "Board: HOLD STILL", ticks: true),
+            new CueStep("b_r15_still", "Keep holding still.", 12f, "Keep HOLDING STILL", ticks: true),
+            new CueStep("b_roi_move", "Move your head slowly. Keep the board in view.", 12f, "Move SLOWLY, board in view", metronome: 1f),
+            new CueStep("b_r15_move", "Keep moving slowly.", 12f, "Keep moving SLOWLY", metronome: 1f),
+            new CueStep("l_ready", "Now plate L, where the board was. Tilt it about forty five degrees towards you, so you see both faces.", 14f,
+                        "Plate L tilted 45 degrees, both faces visible", ticks: true),
+            new CueStep("l_roi_still", "Look at plate L and hold still.", 12f, "Plate L: HOLD STILL", ticks: true),
+            new CueStep("l_r15_still", "Keep holding still.", 12f, "Keep HOLDING STILL", ticks: true),
+            new CueStep("l_roi_move", "Move your head slowly. Keep the plate in view.", 12f, "Move SLOWLY, plate in view", metronome: 1f),
+            new CueStep("l_r15_move", "Keep moving slowly.", 12f, "Keep moving SLOWLY", metronome: 1f),
+        };
+
+        /// <summary>The plan of a step: T6.6 steps by their thread count; T6.7 and T6.8 steps by their prefix and mode.</summary>
         public static Plan PlanFor(string variant, string stepId)
         {
             stepId = stepId ?? "";
+            if (variant == "lean")
+            {
+                string t = stepId.StartsWith("l_") ? "plate_L" : "board25";
+                return new Plan(stepId.Contains("_r15_") ? "roi15" : "roi", 1, NiceRoi, t);
+            }
             if (variant != "budget") return new Plan("full", ThreadsFor(stepId), 0, "");
             string target = stepId.StartsWith("l_") ? "plate_L" : stepId.StartsWith("b_") ? "board25" : "plate_A";
             if (stepId.Contains("_full_")) return new Plan("full", 2, 0, target);
@@ -224,7 +253,7 @@ namespace EyeLab.Probes
             var go = new GameObject("EyeLab DetectProbe");
             var p = go.AddComponent<DetectProbe>();
             p.m_Run = run;
-            p.m_Variant = variant == "budget" ? "budget" : "detect";
+            p.m_Variant = variant == "budget" || variant == "lean" ? variant : "detect";
             run.Meta("variant", p.m_Variant);
             string info;
             try { info = ArucoNative.Info(); }
@@ -240,10 +269,10 @@ namespace EyeLab.Probes
             Debug.Log("[EyeLab probe] " + info);
             p.m_Set = LoadSet(run);
             p.m_Display = XREALDisplay();
-            if (p.m_Variant == "budget")
+            if (p.m_Variant != "detect")
                 run.Meta("budget", $"cap {CapHz} Hz; roi margin {RoiMarginFrac} x box, min {RoiMarginMinPx} px; box/prior max age " +
                                    $"{RoiMaxAgeNs / 1e6} ms; roi nice {NiceRoi}; trusted: non-planar, or ratio >= " +
-                                   $"{p.LockCfg.min_ambiguity_ratio}, or <= {p.LockCfg.ambiguity_min_separation_deg} deg apart (no prior); next region = projected board joined with detected target markers");
+                                   $"{p.LockCfg.min_ambiguity_ratio}, or <= {p.LockCfg.ambiguity_min_separation_deg} deg apart (no prior); and rms <= {p.LockCfg.max_acquire_reproj_rms_px} px; next region = projected board joined with detected target markers");
 
             // Part 1: bench on the pushed frames, on a worker thread so the glasses keep drawing.
             if (p.m_Set != null && p.m_Set.frames != null && p.m_Set.frames.Length > 0)
@@ -267,7 +296,7 @@ namespace EyeLab.Probes
             // Part 2: live on the Eye.
             p.StartLive();
             float nextStatus = 0f;
-            List<CueStep> cues = p.m_Variant == "budget" ? BudgetCues() : DetectCues();
+            List<CueStep> cues = p.m_Variant == "lean" ? LeanCues() : p.m_Variant == "budget" ? BudgetCues() : DetectCues();
             yield return CuePlayer.Ensure().Play(run, cues, (text, left, frac, counter) =>
             {
                 show?.Invoke(text, left, frac, counter);
@@ -380,6 +409,7 @@ namespace EyeLab.Probes
         bool Trusted(in ArucoNative.Result r)
         {
             if (r.PoseOk != 1) return false;
+            if (!(r.RmsPx <= LockCfg.max_acquire_reproj_rms_px)) return false;   // T6.8: run 1's plate L solves up to 2198 px
             if (r.Planar != 1) return true;
             if (double.IsNaN(r.AmbiguityRatio)) return true;   // one IPPE solution only
             return r.AmbiguityRatio >= LockCfg.min_ambiguity_ratio || r.AmbiguityDeg <= LockCfg.ambiguity_min_separation_deg;
@@ -405,7 +435,7 @@ namespace EyeLab.Probes
                         // T6.6: full frame at 1, 2, 4, 8 threads. T6.7: full at 1 and 2, then the ROI around the full
                         // frame's projected box at 1 thread (the live ROI mode), for its cost and its parity.
                         var modes = new List<(string mode, int threads)>();
-                        if (m_Variant == "budget") { modes.Add(("full", 1)); modes.Add(("full", 2)); modes.Add(("roi", 1)); }
+                        if (m_Variant != "detect") { modes.Add(("full", 1)); modes.Add(("full", 2)); modes.Add(("roi", 1)); }
                         else foreach (int t in DetectBenchThreads) modes.Add(("full", t));
                         foreach ((string mode, int tm) in modes)
                         {
@@ -617,21 +647,21 @@ namespace EyeLab.Probes
                                        W = m_W, H = m_H, Stride = m_Stride, HeadOk = m_HeadFrontOk, Head = (float[])m_HeadFront.Clone() };
                     }
                     Plan plan = PlanFor(m_Variant, d.Step);
-                    if (plan.Mode == "cap" && lastStart != 0 && ProbeClocks.MonoNs - lastStart < 1e9 / CapHz)
+                    if ((plan.Mode == "cap" || plan.Mode == "roi15") && lastStart != 0 && ProbeClocks.MonoNs - lastStart < 1e9 / CapHz)
                     {
                         Interlocked.Increment(ref m_CapSkipped);
                         continue;
                     }
                     if (plan.Threads != threadsSet) { ArucoNative.SetThreads(plan.Threads); threadsSet = plan.Threads; }
                     if (plan.Nice != niceSet) { int now = ArucoNative.SetNice(plan.Nice); niceSet = plan.Nice; if (now == -100) m_Error = "setpriority failed"; }
-                    if (m_Variant == "budget" && plan.Target != targetSet)
+                    if (m_Variant != "detect" && plan.Target != targetSet)
                     {
                         SetTarget(det, plan.Target);
                         targetSet = plan.Target;
                         bx0 = by0 = bx1 = by1 = double.NaN;
                     }
                     int[] roi = null;
-                    if (plan.Mode == "roi" && d.CamTs - boxTs < RoiMaxAgeNs) roi = RoiAround(bx0, by0, bx1, by1, d.W, d.H);
+                    if (plan.Mode.StartsWith("roi") && d.CamTs - boxTs < RoiMaxAgeNs) roi = RoiAround(bx0, by0, bx1, by1, d.W, d.H);
                     d.Threads = plan.Threads;
                     d.Nice = plan.Nice;
                     d.Mode = plan.Mode;

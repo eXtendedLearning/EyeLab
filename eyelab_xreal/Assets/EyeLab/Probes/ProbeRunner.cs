@@ -159,6 +159,7 @@ namespace EyeLab.Probes
             if (p == "render") yield return Render(cfg);
             if (p == "detect") yield return Detect(cfg, "detect");
             if (p == "budget") yield return Detect(cfg, "budget");
+            if (p == "lean") yield return Detect(cfg, "lean");
             m_Glasses?.ClearCue();
             ShowPage(m_Panel);
             m_Busy = false;
@@ -208,7 +209,7 @@ namespace EyeLab.Probes
 
         /// <summary>
         /// ArUco detection and board pose with the native plugin, bench on pushed frames then live on the Eye:
-        /// "detect" (T6.6, gate B3a) or "budget" (T6.7, modes and targets).
+        /// "detect" (T6.6, gate B3a), "budget" (T6.7, modes and targets) or "lean" (T6.8, region only).
         /// </summary>
         IEnumerator Detect(ProbeConfig cfg, string variant)
         {
@@ -445,16 +446,19 @@ namespace EyeLab.Probes
             m_Glasses = GlassesView.Create(font);
 
             m_Panel = Column(canvas.transform);
-            var row = Row(m_Panel.transform);
-            AddAction(font, "I see text + square", () => AnswerGlasses("all"), new Color(0.12f, 0.3f, 0.15f, 0.9f), row);
-            AddAction(font, "Text only", () => AnswerGlasses("text only"), new Color(0.35f, 0.3f, 0.1f, 0.9f), row);
-            AddAction(font, "Nothing", () => AnswerGlasses("nothing"), new Color(0.45f, 0.1f, 0.1f, 0.9f), row);
-            AddButton(font, "T6.7  Detection budget: plate A, plate L, board  (2.5 min)", new ProbeConfig { probe = "budget" });
-            AddAction(font, "Place square ahead", () => m_Glasses?.PlaceReference(), new Color(0.1f, 0.25f, 0.45f, 0.9f));
+            AddButton(font, "T6.8  Lean detection: board, plate L tilted  (2 min)", new ProbeConfig { probe = "lean" });
             AddAction(font, "Other runs", () => ShowPage(m_Panel2), new Color(0.22f, 0.22f, 0.25f, 0.9f));
             AddAction(font, "Quit EyeLab", () => { Debug.Log("[EyeLab probe] quit button"); Application.Quit(); });
 
+            // Jack, 2026-11-22: the glasses always show the text and the square now, so the glasses check and the
+            // square placement left the main page; they come back only when something about the display changes.
             m_Panel2 = Column(canvas.transform);
+            var row = Row(m_Panel2.transform);
+            AddAction(font, "I see text + square", () => AnswerGlasses("all"), new Color(0.12f, 0.3f, 0.15f, 0.9f), row);
+            AddAction(font, "Text only", () => AnswerGlasses("text only"), new Color(0.35f, 0.3f, 0.1f, 0.9f), row);
+            AddAction(font, "Nothing", () => AnswerGlasses("nothing"), new Color(0.45f, 0.1f, 0.1f, 0.9f), row);
+            AddAction(font, "Place square ahead", () => m_Glasses?.PlaceReference(), new Color(0.1f, 0.25f, 0.45f, 0.9f), m_Panel2);
+            AddButton(font, "T6.7  Detection budget: plate A, plate L, board  (2.5 min)", new ProbeConfig { probe = "budget" }, m_Panel2);
             AddButton(font, "T6.6  Detection, plate A, threads  (100 s)", new ProbeConfig { probe = "detect" }, m_Panel2);
             AddButton(font, "T6.5  Rendering, rate each setting  (85 s)", new ProbeConfig { probe = "render" }, m_Panel2);
             AddButton(font, "T6.3  Head loop + Eye  (95 s)", new ProbeConfig { probe = "loop" }, m_Panel2);

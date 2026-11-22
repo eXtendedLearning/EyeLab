@@ -15,7 +15,8 @@ namespace EyeLab.Aruco
         const string Lib = "eyelab_aruco";
         // 2 (0.4.008): AmbiguityRatio valid; abi 1 read IPPE's float errors as double.
         // 3 (0.4.009, T6.7): ProcessRoi (region of interest, prior), SetNice; Result gains the ROI, solution and board box.
-        public const int Abi = 3;
+        // 4 (0.4.010): the region is grown to multiples of 8 (CLAHE's tiles) and its perimeter rates scaled by frame / region.
+        public const int Abi = 4;
         public const int TuningCount = 14;
         public const int DictionaryArUco4x4_50 = 0;   // cv::aruco::DICT_4X4_50, the dictionary of every EyeLab marker
 

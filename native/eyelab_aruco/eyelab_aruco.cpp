@@ -45,7 +45,9 @@ namespace {
 
 // 2 (0.4.008): ambiguity_ratio fixed (abi 1 read IPPE's float errors as double, so its ratio was garbage).
 // 3 (0.4.009): ela_process_roi, ela_set_nice; ElaResult gains the ROI, the projected board box and the solution.
-constexpr int kAbi = 3;
+// 4 (0.4.010): the region is grown to multiples of 8 (CLAHE's tiles) and the perimeter rates are scaled by
+//   frame / region, so a region keeps the frame's pixel limits.
+constexpr int kAbi = 4;
 
 // The order of ArucoDetectorTuning's fields in python/pose_estimator.py.
 enum Tuning {
@@ -116,6 +118,8 @@ bool Planar(const std::vector<cv::Point3f>& pts, double tol_m = 1e-4) {
 
 struct Handle {
     cv::aruco::ArucoDetector detector;
+    cv::aruco::DetectorParameters params;   // the frame's parameters; a region scales its perimeter rates (ABI 4)
+    double perimeter_scale = 1.0;           // the scale the detector holds now
     cv::Ptr<cv::CLAHE> clahe;
     float clip = 0.f;
     std::unique_ptr<cv::aruco::Board> board;
@@ -175,6 +179,7 @@ ELA_EXPORT void* ela_create(int dictionary_id, const float* tuning, int n_tuning
     if (!tuning || n_tuning < kTuningCount) return nullptr;
     try {
         auto h = new Handle{cv::aruco::ArucoDetector(cv::aruco::getPredefinedDictionary(dictionary_id), MakeParams(tuning))};
+        h->params = MakeParams(tuning);
         h->clip = tuning[kClipLimit];
         if (h->clip > 0.f) h->clahe = cv::createCLAHE(h->clip, cv::Size(8, 8));
         return h;
@@ -244,7 +249,18 @@ ELA_EXPORT int ela_process_roi(void* handle, const uint8_t* y, int width, int he
         cv::Rect rect(0, 0, width, height);
         if (roi) {
             cv::Rect r = cv::Rect(roi[0], roi[1], roi[2], roi[3]) & rect;
-            if (r.width >= 32 && r.height >= 32) rect = r;
+            if (r.width >= 32 && r.height >= 32) {
+                // 0.4.010: grown to multiples of 8 (CLAHE's tile grid), moved back inside the frame if needed. An odd
+                // size makes CLAHE pad the crop and interpolate over fractional tiles, where the device and Python
+                // differed by up to 0.74 px on 3/23 bench frames of T6.7 run 1; whole-sized tiles matched exactly.
+                int w8 = std::min(width - width % 8, (r.width + 7) / 8 * 8);
+                int h8 = std::min(height - height % 8, (r.height + 7) / 8 * 8);
+                r.x = std::max(0, std::min(r.x, width - w8));
+                r.y = std::max(0, std::min(r.y, height - h8));
+                r.width = w8;
+                r.height = h8;
+                rect = r;
+            }
         }
         res->roi_x = rect.x;
         res->roi_y = rect.y;
@@ -262,6 +278,17 @@ ELA_EXPORT int ela_process_roi(void* handle, const uint8_t* y, int width, int he
         h->corners.clear();
         h->ids.clear();
         h->rejected.clear();
+        // 0.4.010 (ABI 4): ArUco's perimeter rates are fractions of the image's larger side, so on a crop they fall
+        // in pixels and let smaller contours through. Scaled by frame / crop they keep the frame's pixel limits: the
+        // region finds what the full frame would, and detection on run 1's regions took 30 % less time.
+        const double scale = static_cast<double>(std::max(width, height)) / std::max(rect.width, rect.height);
+        if (scale != h->perimeter_scale) {
+            cv::aruco::DetectorParameters p = h->params;
+            p.minMarkerPerimeterRate *= scale;
+            p.maxMarkerPerimeterRate *= scale;
+            h->detector.setDetectorParameters(p);
+            h->perimeter_scale = scale;
+        }
         h->detector.detectMarkers(*in, h->corners, h->ids, h->rejected);
         if (rect.x != 0 || rect.y != 0) {
             const cv::Point2f off(static_cast<float>(rect.x), static_cast<float>(rect.y));

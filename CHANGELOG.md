@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.009<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.010<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,21 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.4.010) T6.7 run 1 analysed (`docs/tasks/T6.7-detection-budget.md`).
+  - **Cost:** the region at 1 thread costs 25-35 ms live and gives 27-29 poses/s with 5-7 % late Unity frames. Full frames at
+    2 threads give 12-18 % late. A 15 Hz cap on the full frame does not help (69 ms per frame keeps the worker busy).
+  - **Age:** 124-148 ms with the region, 176-183 ms with full frames.
+  - **Pose:** plate A at 75 cm is too small (25-28 % of still poses on the wrong solution, and a room-fixed reference does
+    not fix them). The board gives 1 % wrong and 2.8 mm high-pass. Plate L standing on the table shows one face, and its
+    non-planar solves could diverge (RMS up to 2198 px) while trusted.
+  - **Parity:** full frames exact; the region exact on 20/23 bench frames, the rest had sizes that were not multiples of 8.
+- (0.4.010) T6.8 lean region detection built (`docs/tasks/T6.8-lean-detection.md`), not run yet.
+  - **Plugin ABI 4:** regions grown to multiples of 8; ArUco's perimeter rates scaled by frame / region (30 % cheaper
+    offline, same markers). The Python mirror follows the run's ABI.
+  - **Trust rule:** also needs PoseLock's RMS ceiling (15 px), for non-planar poses too.
+  - **Probe variant lean:** region only, every Eye frame or capped at 15 Hz, on the board and plate L tilted 45°.
+  - **Main page:** only T6.8. T6.7, the glasses check and "Place square ahead" moved to Other runs.
 
 - (0.4.009) T6.7 detection budget gate built (`docs/tasks/T6.7-detection-budget.md`), not run yet.
   - **Plugin ABI 3:** `ela_process_roi` detects in a region (corners back in frame pixels, the projected box of the whole

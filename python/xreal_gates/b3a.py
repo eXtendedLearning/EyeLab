@@ -80,11 +80,12 @@ def targets() -> List[dict]:
 
 
 def pose_lock_settings() -> dict:
-    """The planar-ambiguity thresholds of ``PoseLockConfig``, for the device's trusted-pose rule (T6.7)."""
+    """``PoseLockConfig``'s planar-ambiguity thresholds (T6.7) and RMS ceiling (T6.8), for the device's trusted-pose rule."""
     from pose_lock import PoseLockConfig
     cfg = PoseLockConfig()
     return {"min_ambiguity_ratio": float(cfg.min_ambiguity_ratio),
-            "ambiguity_min_separation_deg": float(cfg.ambiguity_min_separation_deg)}
+            "ambiguity_min_separation_deg": float(cfg.ambiguity_min_separation_deg),
+            "max_acquire_reproj_rms_px": float(cfg.max_acquire_reproj_rms_px)}
 
 
 def target_of(s: dict, name: Optional[str]) -> dict:
@@ -261,8 +262,10 @@ def load_set(set_dir: Path = DEFAULT_SET) -> Optional[dict]:
 class PythonPipeline:
     """CLAHE, detection and the board pose exactly as pose_estimator does them, with the set's tuning."""
 
-    def __init__(self, s: dict, target: Optional[dict] = None):
-        """``target``: one of ``s["targets"]`` (name, ids, corners); default the set's own board (plate A)."""
+    def __init__(self, s: dict, target: Optional[dict] = None, snap8: bool = True):
+        """``target``: one of ``s["targets"]`` (name, ids, corners); default the set's own board (plate A).
+        ``snap8``: grow a region to multiples of 8 as plugin ABI 4 does (False mirrors ABI 3 runs, 0.4.009)."""
+        self.snap8 = snap8
         from pose_estimator import ArucoDetectorTuning, LStructureDetector, make_detector_parameters
         fields = dataclasses.fields(ArucoDetectorTuning)
         tuning = ArucoDetectorTuning(*[int(v) if f.type in (int, "int") else float(v) for f, v in zip(fields, s["tuning"])])
@@ -270,6 +273,9 @@ class PythonPipeline:
         self.clahe = cv2.createCLAHE(clipLimit=round(float(self.clip), 3), tileGridSize=(8, 8))
         dictionary = cv2.aruco.getPredefinedDictionary(int(s["dictionary"]))
         self.detector = cv2.aruco.ArucoDetector(dictionary, make_detector_parameters(tuning))
+        self._params = lambda: make_detector_parameters(tuning)
+        self._dictionary = dictionary
+        self._scaled = {}
         t = target or s
         obj = np.asarray(t["corners"], np.float32).reshape(-1, 4, 3)
         self.board = cv2.aruco.Board(list(obj), dictionary, np.asarray(t["ids"], np.int32))
@@ -278,19 +284,36 @@ class PythonPipeline:
         self._solve = LStructureDetector._solve_board_pose
         self._cls = LStructureDetector
 
+    def _scaled_detector(self, scale: float):
+        """As plugin ABI 4: the perimeter rates scaled by frame / region, so a region keeps the frame's pixel limits."""
+        if scale not in self._scaled:
+            prm = self._params()
+            prm.minMarkerPerimeterRate *= scale
+            prm.maxMarkerPerimeterRate *= scale
+            self._scaled[scale] = cv2.aruco.ArucoDetector(self._dictionary, prm)
+        return self._scaled[scale]
+
     def process(self, gray: np.ndarray, roi: Optional[Sequence[int]] = None, prior=None) -> dict:
         """As the plugin's ela_process_roi: ``roi`` (x, y, w, h) clipped to the frame, under 32 px = whole frame;
         CLAHE and detection on the crop, corners in frame pixels; ``prior`` (rvec, tvec) picks the IPPE solution."""
         x0, y0, h_img, w_img = 0, 0, gray.shape[0], gray.shape[1]
+        detector = self.detector
         crop = gray
         if roi is not None:
             x, y, w, h = (int(v) for v in roi)
             ax, ay = max(x, 0), max(y, 0)
             bx, by = min(x + w, w_img), min(y + h, h_img)
-            if bx - ax >= 32 and by - ay >= 32:
+            if bx - ax >= 32 and by - ay >= 32 and not self.snap8:
                 x0, y0, crop = ax, ay, gray[ay:by, ax:bx]
+            elif bx - ax >= 32 and by - ay >= 32:
+                # 0.4.010, as the plugin: grown to multiples of 8 (CLAHE's tiles), moved back inside the frame
+                w8 = min(w_img - w_img % 8, (bx - ax + 7) // 8 * 8)
+                h8 = min(h_img - h_img % 8, (by - ay + 7) // 8 * 8)
+                ax, ay = max(0, min(ax, w_img - w8)), max(0, min(ay, h_img - h8))
+                x0, y0, crop = ax, ay, gray[ay:ay + h8, ax:ax + w8]
+                detector = self._scaled_detector(max(w_img, h_img) / max(w8, h8))
         enhanced = self.clahe.apply(crop) if self.clip > 0 else crop
-        corners, ids, _rej = self.detector.detectMarkers(enhanced)
+        corners, ids, _rej = detector.detectMarkers(enhanced)
         out = {"ids": [], "corners": {}, "pose": None, "roi": (x0, y0, crop.shape[1], crop.shape[0])}
         if ids is None or len(ids) == 0:
             return out
@@ -387,7 +410,7 @@ def bench_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
     if s is None:
         return out + [f"   parity: no set.json in {set_dir}"]
     truth = json.loads((set_dir / "truth.json").read_text(encoding="utf-8")) if (set_dir / "truth.json").exists() else {}
-    py = PythonPipeline(s)
+    py = PythonPipeline(s, snap8=_plugin_abi(run) >= 4)
     dev_corners = _corners_by_frame(load_csv(run / "bench_corners.csv"), "frame")
     first = {r["frame"]: r for r in rows if r["threads_req"] == "1" and r["rep"] == "0" and (r.get("mode") or "full") == "full"}
     res, err_dev, err_py, div = [], [], [], []
@@ -649,7 +672,7 @@ def live_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 60.0
                 continue
             t = target_of(s, r.get("target"))
             if t["name"] not in pys:
-                pys[t["name"]] = PythonPipeline(s, t)
+                pys[t["name"]] = PythonPipeline(s, t, snap8=_plugin_abi(run) >= 4)
             prior = None
             if _f(r.get("pr0")) is not None:
                 prior = (np.array([float(r[f"pr{k}"]) for k in range(3)]), np.zeros(3))

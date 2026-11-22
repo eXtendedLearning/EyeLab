@@ -120,7 +120,8 @@ class B3aTest(unittest.TestCase):
         self.assertEqual(ts["board25"]["ids"], list(range(17)))           # 5 x 7 ChArUco: 17 markers
         c = np.asarray(ts["board25"]["corners"]).reshape(-1, 4, 3)
         self.assertAlmostEqual(float(np.linalg.norm(c[0][1] - c[0][0])), 0.019, places=6)   # gui_common marker side
-        self.assertEqual(b3a.pose_lock_settings(), {"min_ambiguity_ratio": 3.0, "ambiguity_min_separation_deg": 10.0})
+        self.assertEqual(b3a.pose_lock_settings(), {"min_ambiguity_ratio": 3.0, "ambiguity_min_separation_deg": 10.0,
+                                                    "max_acquire_reproj_rms_px": 15.0})
         s = {"ids": [30], "corners": [0.0] * 12}
         self.assertEqual(b3a.target_of(s, "nothing")["name"], "plate_A")
 
@@ -138,7 +139,15 @@ class B3aTest(unittest.TestCase):
         box = (int(x0) - 60, int(y0) - 60, int(x1 - x0) + 120, int(y1 - y0) + 120)
         roi = py.process(img, roi=box)
         self.assertEqual(sorted(roi["ids"]), [30, 31, 32])
-        self.assertEqual(roi["roi"], box)
+        rx, ry, rw, rh = roi["roi"]                                       # ABI 4: grown to multiples of 8, same origin
+        self.assertEqual((rx, ry, rw % 8, rh % 8), (box[0], box[1], 0, 0))
+        self.assertTrue(box[2] <= rw < box[2] + 8 and box[3] <= rh < box[3] + 8)
+        self.assertEqual(py.process(img, roi=(1235, 677, 100, 100))["roi"], (1232, 672, 48, 48))   # edge: moved back inside
+        self.assertEqual(b3a.PythonPipeline(s, snap8=False).process(img, roi=box)["roi"], box)  # ABI 3 runs
+        # ABI 4 also scales ArUco's perimeter rates by frame / region: the pixel limits stay the frame's
+        d = py._scaled_detector(1280 / max(rw, rh)).getDetectorParameters()
+        self.assertAlmostEqual(d.minMarkerPerimeterRate * max(rw, rh),
+                               py.detector.getDetectorParameters().minMarkerPerimeterRate * 1280, 6)
         # CLAHE's 8x8 tiles cover the crop, not the frame, so a few corners move (about 1 px here); against the true
         # projection the region is no worse than the full frame
         import cv2
