@@ -293,9 +293,10 @@ class PythonPipeline:
             self._scaled[scale] = cv2.aruco.ArucoDetector(self._dictionary, prm)
         return self._scaled[scale]
 
-    def process(self, gray: np.ndarray, roi: Optional[Sequence[int]] = None, prior=None) -> dict:
+    def process(self, gray: np.ndarray, roi: Optional[Sequence[int]] = None, prior=None, raw: bool = False) -> dict:
         """As the plugin's ela_process_roi: ``roi`` (x, y, w, h) clipped to the frame, under 32 px = whole frame;
-        CLAHE and detection on the crop, corners in frame pixels; ``prior`` (rvec, tvec) picks the IPPE solution."""
+        CLAHE and detection on the crop, corners in frame pixels; ``prior`` (rvec, tvec) picks the IPPE solution.
+        ``raw``: also the corners before sub-pixel refinement (``out["raw"]``), to tell refinement flips apart."""
         x0, y0, h_img, w_img = 0, 0, gray.shape[0], gray.shape[1]
         detector = self.detector
         crop = gray
@@ -315,6 +316,12 @@ class PythonPipeline:
         enhanced = self.clahe.apply(crop) if self.clip > 0 else crop
         corners, ids, _rej = detector.detectMarkers(enhanced)
         out = {"ids": [], "corners": {}, "pose": None, "roi": (x0, y0, crop.shape[1], crop.shape[0])}
+        if raw:
+            prm = detector.getDetectorParameters()
+            prm.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_NONE
+            c0, i0, _ = cv2.aruco.ArucoDetector(self._dictionary, prm).detectMarkers(enhanced)
+            out["raw"] = ({int(i): c.reshape(4, 2) + np.array([x0, y0], np.float32) for i, c in zip(i0.flatten(), c0)}
+                          if i0 is not None else {})
         if ids is None or len(ids) == 0:
             return out
         if x0 or y0:
@@ -357,12 +364,24 @@ def compare(dev_corners: Dict[int, np.ndarray], dev_pose: Optional[Tuple[np.ndar
     d_ids, p_ids = set(dev_corners), set(py["ids"])
     common = d_ids & p_ids
     corner = max((float(np.abs(dev_corners[i] - py["corners"][i]).max()) for i in common), default=float("nan"))
+    # A refinement flip: the sub-pixel refinement kept a corner on one side and rejected it (unrefined corner) on the
+    # other. T6.8 run 1: 65 of 80 differing live corners, full frames and regions alike; floating point, not the crop.
+    differ = flips = 0
+    for i in common:
+        for k in range(4):
+            if np.abs(dev_corners[i][k] - py["corners"][i][k]).max() <= PARITY_PX:
+                continue
+            differ += 1
+            r = py.get("raw", {}).get(i)
+            if r is not None and min(np.abs(dev_corners[i][k] - r[k]).max(),
+                                     np.abs(py["corners"][i][k] - r[k]).max()) <= PARITY_PX:
+                flips += 1
     t_mm = r_deg = float("nan")
     if dev_pose is not None and py["pose"] is not None:
         t_mm = float(np.linalg.norm(dev_pose[1] - py["pose"][1]) * 1000)
         r_deg = rotation_deg(dev_pose[0], py["pose"][0])
     return {"ids_equal": d_ids == p_ids, "only_device": sorted(d_ids - p_ids), "only_python": sorted(p_ids - d_ids),
-            "corner_px": corner, "t_mm": t_mm, "r_deg": r_deg,
+            "corner_px": corner, "t_mm": t_mm, "r_deg": r_deg, "differ": differ, "flips": flips,
             "pose_both": dev_pose is not None and py["pose"] is not None,
             "pose_one": (dev_pose is None) != (py["pose"] is None)}
 
@@ -443,7 +462,7 @@ def bench_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
             if not p.exists():
                 continue
             box = _roi(r)
-            res_roi.append(compare(dev_corners.get(name + "#roi", {}), _pose(r), py.process(read_pgm(p), roi=box)))
+            res_roi.append(compare(dev_corners.get(name + "#roi", {}), _pose(r), py.process(read_pgm(p), roi=box, raw=True)))
             vs_full.append(compare(dev_corners.get(name + "#roi", {}), _pose(r),
                                    {"ids": list(dev_corners.get(name, {})), "corners": dev_corners.get(name, {}),
                                     "pose": _pose(first[name]) if name in first else None}))
@@ -502,12 +521,14 @@ def _parity_line(label: str, res: List[dict]) -> str:
     r = [c["r_deg"] for c in res if c["pose_both"]]
     one = sum(1 for c in res if c["pose_one"])
     diff = [f"{c['only_device']}/{c['only_python']}" for c in res if not c["ids_equal"]]
+    differ, flips = sum(c.get("differ", 0) for c in res), sum(c.get("flips", 0) for c in res)
     return (f"   {label}: {len(res)} frames, ids equal {same}/{len(res)}"
             + (f" (device-only/python-only: {', '.join(diff[:4])})" if diff else "")
             + (f"; corners max {max(corner):.4f} px, within {PARITY_PX} px on "
                f"{sum(1 for x in corner if x <= PARITY_PX)}/{len(corner)}" if corner else "")
             + (f"; pose max {max(t):.3f} mm, {max(r):.4f} deg over {len(t)}" if t else "")
-            + (f"; pose on one side only {one}" if one else ""))
+            + (f"; pose on one side only {one}" if one else "")
+            + (f"; differing corners {differ}, of which {flips} refinement flips (one side unrefined)" if differ else ""))
 
 
 def _plugin_abi(run: Path) -> int:
@@ -677,7 +698,7 @@ def live_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 60.0
             if _f(r.get("pr0")) is not None:
                 prior = (np.array([float(r[f"pr{k}"]) for k in range(3)]), np.zeros(3))
             box = _roi(r)
-            c = compare(dev_corners.get(r["seq"], {}), _pose(r), pys[t["name"]].process(read_pgm(p), roi=box, prior=prior))
+            c = compare(dev_corners.get(r["seq"], {}), _pose(r), pys[t["name"]].process(read_pgm(p), roi=box, prior=prior, raw=True))
             (res_roi if box is not None else res).append(c)
         out.append(_parity_line("parity (Eye frames, full)", res))
         if res_roi:
@@ -708,9 +729,23 @@ def _mode_line(sel: List[dict]) -> Optional[str]:
     return line
 
 
-def _normal_dev(poses: List[Tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
-    """Angle (deg) of each pose's target z axis from the median direction: a wrong IPPE solution shows as > 10 deg."""
+SETTLE_S = 1.0   # still metrics skip a step's first second: T6.8 run 1's trusted "wrong" board poses all fell in it
+
+
+def _head_rotation(h: dict) -> np.ndarray:
+    """Head rotation at ``cam_ts`` (Unity, column-major m0..m15)."""
+    return np.array([float(h[f"m{i}"]) for i in range(16)]).reshape(4, 4).T[:3, :3]
+
+
+def _normal_dev(poses: List[Tuple[np.ndarray, np.ndarray]],
+                heads: Optional[List[np.ndarray]] = None) -> np.ndarray:
+    """Angle (deg) of each pose's target z axis from the median direction: a wrong IPPE solution shows as > 10 deg.
+    With ``heads`` (one rotation per pose), the normals are carried into the room first (OpenCV to Unity:
+    F = diag(1, -1, 1), Eye-to-head rotation taken as identity), so a head turn is not counted as a wrong pose."""
     n = np.array([cv2.Rodrigues(np.asarray(p[0], float))[0][:, 2] for p in poses])
+    if heads is not None:
+        F = np.diag([1.0, -1.0, 1.0])
+        n = np.array([H @ F @ v for H, v in zip(heads, n)])
     m = np.median(n, axis=0)
     m /= max(np.linalg.norm(m), 1e-12)
     return np.degrees(np.arccos(np.clip(n @ m, -1.0, 1.0)))
@@ -719,11 +754,19 @@ def _normal_dev(poses: List[Tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
 def _still_lines(sel: List[dict], heads: Dict[str, dict]) -> List[str]:
     """Still steps: wrong-solution poses (all and trusted), jitter of trusted poses, and the head's own motion."""
     posed = [r for r in sel if r["pose_ok"] == "1"]
+    settle = bool(posed) and bool(posed[0].get("cam_ts"))
+    if settle:
+        t0 = int(sel[0]["cam_ts"])
+        posed = [r for r in posed if int(r["cam_ts"]) - t0 >= SETTLE_S * 1e9]
     out = []
     if len(posed) > 5:
-        dev = _normal_dev([_pose(r) for r in posed])
+        hr = [heads[r["seq"]] for r in posed if r["seq"] in heads and heads[r["seq"]].get("ok") == "1"]
+        room = len(hr) == len(posed)
+        dev = _normal_dev([_pose(r) for r in posed], [_head_rotation(h) for h in hr] if room else None)
         trusted = np.array([r.get("accepted") == "1" for r in posed]) if "accepted" in posed[0] else None
-        line = f"     wrong solution (normal > 10 deg from the median): {int(np.sum(dev > 10))}/{len(posed)} poses"
+        line = (f"     wrong solution ({'room ' if room else ''}normal > 10 deg from the median"
+                f"{f', first {SETTLE_S:.0f} s skipped' if settle else ''}): "
+                f"{int(np.sum(dev > 10))}/{len(posed)} poses")
         if trusted is not None and trusted.any():
             line += f"; among trusted {int(np.sum((dev > 10) & trusted))}/{int(trusted.sum())}"
             tv = np.array([_pose(r)[1] for r, ok in zip(posed, trusted) if ok]) * 1000

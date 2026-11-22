@@ -177,6 +177,33 @@ class B3aTest(unittest.TestCase):
         self.assertIn("trusted 12/14 poses", line)
         still = b3a._still_lines(sel, {})
         self.assertIn("wrong solution (normal > 10 deg from the median): 2/14 poses; among trusted 0/12", still[0])
+        # with cam_ts the first second is skipped (5 of 14 rows at 0.2 s apart)
+        for i, r in enumerate(sel):
+            r["cam_ts"] = str(int(i * 0.2e9))
+        still = b3a._still_lines(sel, {})
+        self.assertIn("first 1 s skipped): 2/9 poses", still[0])
+        # with the head pose the normal is taken in the room: a head turned so that the "bad" camera normal is the
+        # good one in the room makes those frames right
+        F = np.diag([1.0, -1.0, 1.0])
+        Rb = cv2.Rodrigues(bad)[0]
+
+        def head(R):
+            m = np.eye(4)
+            m[:3, :3] = R
+            return {"ok": "1", **{f"m{i}": repr(float(v)) for i, v in enumerate(m.T.ravel())}}
+        # H @ F @ n_bad = F @ n_good: H = F @ (Rg Rb^T) @ F rotates the bad normal onto the good one
+        turned = F @ Rg @ Rb.T @ F
+        heads = {r["seq"]: head(F @ F if r["r0"] == str(good[0]) else turned) for r in sel}
+        still = b3a._still_lines(sel, heads)
+        self.assertIn("wrong solution (room normal > 10 deg from the median, first 1 s skipped): 0/9 poses", still[0])
+
+    def test_refinement_flips(self):
+        dev = {7: np.array([[10.0, 10.0], [20.0, 10.0], [20.0, 20.0], [10.0, 20.0]])}
+        py = {"ids": [7], "corners": {7: dev[7] + [[0.0, 0.0], [0.5, 0.0], [0.0, 0.3], [0.0, 0.0]]}, "pose": None,
+              "raw": {7: dev[7] + [[0.0, 0.0], [0.5, 0.0], [0.7, 0.7], [0.0, 0.0]]}}
+        c = b3a.compare(dev, None, py)
+        self.assertEqual((c["differ"], c["flips"]), (2, 1))   # corner 1: python kept the unrefined one
+        self.assertIn("differing corners 2, of which 1 refinement flips", b3a._parity_line("x", [c]))
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.010<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.011<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,19 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.4.011) T6.8 run 1 analysed (`docs/tasks/T6.8-lean-detection.md`).
+  - **Margin:** 4.7 % late Unity frames at 27.6 poses/s with the region on the board; with the worker idle it is 3-7 %,
+    so the rest is not detection. The 15 Hz cap gives 11 Hz (one frame too few between starts).
+  - **Cost:** the bench region is 28 % cheaper on real frames (21.2 ms); the live board is unchanged (24.9 ms).
+  - **Pose:** plate L tilted 45° gives non-planar poses on 89 % of still frames, 0 of 112 trusted poses wrong, 4.6 mm
+    high-pass. The board is right (0-1 % wrong) but the ratio rule trusts only 2 % of it.
+  - **Parity:** the differences left are sub-pixel refinement flips (one side keeps the unrefined corner), on full frames
+    as well as regions; CLAHE tiles refuted as the cause. Next: B3b.
+- (0.4.011) B3a report: still metrics skip each step's first second and take the target normal in the room (head pose at
+  `cam_ts`), so settling and head turns no longer count as wrong poses; parity counts refinement flips.
+- (0.4.011) `tools/watch_beampro_run.ps1`: waits for the next probe run on the Beam Pro and pulls it file by file, for an
+  agent to run in the background while a protocol is under way.
 
 - (0.4.010) T6.7 run 1 analysed (`docs/tasks/T6.7-detection-budget.md`).
   - **Cost:** the region at 1 thread costs 25-35 ms live and gives 27-29 poses/s with 5-7 % late Unity frames. Full frames at
