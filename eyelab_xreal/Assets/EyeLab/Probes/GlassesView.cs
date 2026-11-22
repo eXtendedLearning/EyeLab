@@ -68,6 +68,16 @@ namespace EyeLab.Probes
 
         public void ClearCue() => SetCue("", 0f, "");
 
+        /// <summary>
+        /// T6.9: during the overlay run the cue moves up (about 10 degrees above the centre) so it does not cover the
+        /// target, and the room-fixed square is hidden so it does not sit behind the drawing.
+        /// </summary>
+        public void SetOverlayLayout(bool on)
+        {
+            if (m_Cue != null) m_Cue.transform.parent.localPosition = new Vector3(0f, on ? 0.36f : -0.06f, 2f);
+            if (m_Reference != null && m_Placed && m_Reference.parent != m_Cam.transform) m_Reference.gameObject.SetActive(!on);
+        }
+
         /// <summary>Put the room-fixed square 1.5 m ahead of where the head now looks (button "Place square").</summary>
         public void PlaceReference()
         {

@@ -25,6 +25,11 @@ namespace EyeLab.Probes
     /// PoseLock's planar-ambiguity rule (thresholds from set.json).</item>
     /// <item><b>lean</b> (T6.8): region detection only, at every Eye frame or capped at 15 Hz, on the ChArUco board and
     /// plate L tilted so both faces show; trusted also needs PoseLock's RMS ceiling (a non-planar solve can diverge).</item>
+    /// <item><b>overlay</b> (T6.9, gate B3b): the region as in T6.8, and each trusted pose drawn in the glasses, room-fixed
+    /// (<see cref="PoseOverlay"/>): plate L tilted, then the board. Steps with detection off hold the drawing by head
+    /// tracking alone and measure the render floor without the worker. The wearer rates the drawing on the Beam Pro
+    /// screen. A board pose with at least <see cref="TrustBoardMarkers"/> markers is trusted (T6.8: the ratio rule
+    /// trusted 2 % of the board while 1 % was wrong).</item>
     /// </list>
     /// Each run has two parts:
     /// <list type="number">
@@ -104,6 +109,7 @@ namespace EyeLab.Probes
         const float RoiMarginFrac = 0.5f;     // ROI = projected board box grown by this share of its larger side ...
         const float RoiMarginMinPx = 48f;     // ... and at least this many pixels on each side
         const int NiceRoi = 10;
+        public const int TrustBoardMarkers = 12;   // T6.9: a planar pose on this many markers or more is trusted
 
         // ------------------------------------------------------------------ T6.6 (detect)
         static readonly int[] DetectBenchThreads = { 1, 2, 4, 8 };
@@ -177,10 +183,39 @@ namespace EyeLab.Probes
             new CueStep("l_r15_move", "Keep moving slowly.", 12f, "Keep moving SLOWLY", metronome: 1f),
         };
 
-        /// <summary>The plan of a step: T6.6 steps by their thread count; T6.7 and T6.8 steps by their prefix and mode.</summary>
+        // ------------------------------------------------------------------ T6.9 (overlay, B3b)
+        // T6.8 run 1: the region at every Eye frame, 1 thread, nice 10 (27.6 poses/s, late frames at the idle floor);
+        // plate L tilted 45 degrees is the target with no wrong trusted pose. Each phase is rated on the screen.
+        public static readonly string[] OverlayAnswers = { "on the markers", "a few mm off", "clearly off", "swims when I move", "not shown" };
+
+        public static List<CueStep> OverlayCues() => new List<CueStep>
+        {
+            new CueStep("l_ready", "Overlay test. Plate L about sixty centimetres away, tilted about forty five degrees towards you. " +
+                                   "Green squares should appear on its markers.", 14f, "Plate L tilted 45 degrees, about 60 cm", ticks: true),
+            new CueStep("l_still", "Hold still. Look at where the green squares sit on the markers.", 12f, "Plate L: HOLD STILL, look at the squares"),
+            new CueStep("l_still_rate", "Rate it on the screen.", 6f, "RATE on the screen", ticks: true),
+            new CueStep("l_move", "Move your head slowly. Keep the plate in view, and watch the squares.", 12f, "Move SLOWLY, plate in view", metronome: 1f),
+            new CueStep("l_move_rate", "Rate it on the screen.", 6f, "RATE on the screen", ticks: true),
+            new CueStep("l_off_still", "Detection is off now. The squares turn orange and stay by head tracking only. Hold still.", 10f,
+                        "Detection OFF: HOLD STILL"),
+            new CueStep("l_off_move", "Move your head slowly. Do the orange squares stay on the markers?", 12f, "Detection OFF: move SLOWLY", metronome: 1f),
+            new CueStep("l_off_rate", "Rate it on the screen.", 6f, "RATE on the screen", ticks: true),
+            new CueStep("b_ready", "Now the ChArUco board, upright, where the plate was.", 12f, "ChArUco board upright, about 60 cm", ticks: true),
+            new CueStep("b_still", "Hold still and look at the squares on the board.", 12f, "Board: HOLD STILL, look at the squares"),
+            new CueStep("b_still_rate", "Rate it on the screen.", 6f, "RATE on the screen", ticks: true),
+            new CueStep("b_move", "Move your head slowly. Keep the board in view.", 12f, "Move SLOWLY, board in view", metronome: 1f),
+            new CueStep("b_move_rate", "Rate it on the screen.", 6f, "RATE on the screen", ticks: true),
+        };
+
+        /// <summary>The plan of a step: T6.6 steps by their thread count; T6.7 to T6.9 steps by their prefix and mode.</summary>
         public static Plan PlanFor(string variant, string stepId)
         {
             stepId = stepId ?? "";
+            if (variant == "overlay")
+            {
+                string t = stepId.StartsWith("b_") ? "board25" : "plate_L";
+                return new Plan(stepId.Contains("_off_") ? "off" : "roi", 1, NiceRoi, t);
+            }
             if (variant == "lean")
             {
                 string t = stepId.StartsWith("l_") ? "plate_L" : "board25";
@@ -247,13 +282,30 @@ namespace EyeLab.Probes
         double m_LastTotal;
         double m_EyeMs;
         string m_LastMode = "";
+        // T6.9 overlay
+        PoseOverlay m_Overlay;
+        Pose m_RgbFromHead = new Pose(Vector3.zero, Quaternion.identity);
+        bool m_HasRgbFromHead;
+        long m_OffSkipped;
+        static DetectProbe s_Active;
+        const string OverlayFile = "overlay.csv";
+        const string OverlayHeader = "seq,step,target,cam_ts,applied_mono_ns,unity_frame,px,py,pz,qx,qy,qz,qw," +
+                                     "head_px,head_py,head_pz,head_qx,head_qy,head_qz,head_qw";
+
+        /// <summary>A rating tap on the Beam Pro screen (T6.9), for the step now running.</summary>
+        public static void Rate(string answer)
+        {
+            if (s_Active == null) return;
+            CuePlayer.Log(s_Active.m_Run, "rating", s_Active.m_Step + ":" + answer);
+            Debug.Log($"[EyeLab probe] overlay rating: {s_Active.m_Step} = {answer}");
+        }
 
         public static IEnumerator Run(ProbeRun run, Action<string> status, Action<string, float, float, string> show, string variant = "detect")
         {
             var go = new GameObject("EyeLab DetectProbe");
             var p = go.AddComponent<DetectProbe>();
             p.m_Run = run;
-            p.m_Variant = variant == "budget" || variant == "lean" ? variant : "detect";
+            p.m_Variant = variant == "budget" || variant == "lean" || variant == "overlay" ? variant : "detect";
             run.Meta("variant", p.m_Variant);
             string info;
             try { info = ArucoNative.Info(); }
@@ -272,7 +324,9 @@ namespace EyeLab.Probes
             if (p.m_Variant != "detect")
                 run.Meta("budget", $"cap {CapHz} Hz; roi margin {RoiMarginFrac} x box, min {RoiMarginMinPx} px; box/prior max age " +
                                    $"{RoiMaxAgeNs / 1e6} ms; roi nice {NiceRoi}; trusted: non-planar, or ratio >= " +
-                                   $"{p.LockCfg.min_ambiguity_ratio}, or <= {p.LockCfg.ambiguity_min_separation_deg} deg apart (no prior); and rms <= {p.LockCfg.max_acquire_reproj_rms_px} px; next region = projected board joined with detected target markers");
+                                   $"{p.LockCfg.min_ambiguity_ratio}, or <= {p.LockCfg.ambiguity_min_separation_deg} deg apart (no prior); and rms <= {p.LockCfg.max_acquire_reproj_rms_px} px; next region = projected board joined with detected target markers" +
+                                   (p.m_Variant == "overlay" ? $"; or planar on >= {TrustBoardMarkers} markers" : ""));
+            if (p.m_Variant == "overlay") p.StartOverlay();
 
             // Part 1: bench on the pushed frames, on a worker thread so the glasses keep drawing.
             if (p.m_Set != null && p.m_Set.frames != null && p.m_Set.frames.Length > 0)
@@ -296,7 +350,9 @@ namespace EyeLab.Probes
             // Part 2: live on the Eye.
             p.StartLive();
             float nextStatus = 0f;
-            List<CueStep> cues = p.m_Variant == "lean" ? LeanCues() : p.m_Variant == "budget" ? BudgetCues() : DetectCues();
+            List<CueStep> cues = p.m_Variant == "overlay" ? OverlayCues() : p.m_Variant == "lean" ? LeanCues()
+                               : p.m_Variant == "budget" ? BudgetCues() : DetectCues();
+            s_Active = p;
             yield return CuePlayer.Ensure().Play(run, cues, (text, left, frac, counter) =>
             {
                 show?.Invoke(text, left, frac, counter);
@@ -310,7 +366,10 @@ namespace EyeLab.Probes
                 p.m_ThreadsWanted = PlanFor(p.m_Variant, step.Id).Threads;
             });
             p.StopLive();
+            s_Active = null;
             while (p.m_Done.TryDequeue(out Done d)) p.Write(d);
+            if (p.m_Overlay != null) Destroy(p.m_Overlay.gameObject);
+            run.Meta("off_skipped", p.m_OffSkipped.ToString(CultureInfo.InvariantCulture));
             run.Meta("eye_frames", p.m_EyeFrames.ToString(CultureInfo.InvariantCulture));
             run.Meta("processed", p.m_Processed.ToString(CultureInfo.InvariantCulture));
             run.Meta("skipped", p.m_Skipped.ToString(CultureInfo.InvariantCulture));
@@ -410,8 +469,10 @@ namespace EyeLab.Probes
         {
             if (r.PoseOk != 1) return false;
             if (!(r.RmsPx <= LockCfg.max_acquire_reproj_rms_px)) return false;   // T6.8: run 1's plate L solves up to 2198 px
+            if (!(r.T2 > 0)) return false;   // T6.9: T6.8 run 1 had 5 trusted non-planar plate L poses behind the camera (t_z ≈ −0.56 m, RMS 0.6-3 px)
             if (r.Planar != 1) return true;
             if (double.IsNaN(r.AmbiguityRatio)) return true;   // one IPPE solution only
+            if (m_Variant == "overlay" && r.BoardMarkers >= TrustBoardMarkers) return true;   // T6.9: the board
             return r.AmbiguityRatio >= LockCfg.min_ambiguity_ratio || r.AmbiguityDeg <= LockCfg.ambiguity_min_separation_deg;
         }
 
@@ -564,7 +625,66 @@ namespace EyeLab.Probes
             }
             m_Run.Row(FramesFile, FramesHeader, $"{m_Step},{m_ThreadsWanted},{Time.frameCount},{(Time.unscaledDeltaTime * 1000f).ToString("R", ci)}," +
                                                 $"{present},{ProbeClocks.MonoNs},{m_EyeMs.ToString("F3", ci)}");
-            while (m_Done.TryDequeue(out Done d)) Write(d);
+            while (m_Done.TryDequeue(out Done d)) { Apply(d); Write(d); }
+            if (m_Overlay != null && PlanFor(m_Variant, m_Step).Mode == "off") m_Overlay.Hold();
+        }
+
+        // ---- overlay (T6.9) -----------------------------------------------------------------------------------------
+
+        void StartOverlay()
+        {
+            try
+            {
+                Pose pose = default;
+                m_HasRgbFromHead = XREALPlugin.GetDevicePoseFromHead(XREALComponent.XREAL_COMPONENT_RGB_CAMERA, ref pose);
+                if (m_HasRgbFromHead) m_RgbFromHead = pose;
+            }
+            catch (Exception e)
+            {
+                m_Run.Meta("rgb_from_head_error", e.GetType().Name + ": " + e.Message);
+            }
+            var ci = CultureInfo.InvariantCulture;
+            Vector3 rp = m_RgbFromHead.position;
+            Quaternion rq = m_RgbFromHead.rotation;
+            m_Run.Meta("rgb_from_head", (m_HasRgbFromHead ? "ok" : "unavailable, identity") +
+                       $"; p {rp.x.ToString("R", ci)} {rp.y.ToString("R", ci)} {rp.z.ToString("R", ci)}" +
+                       $"; q {rq.x.ToString("R", ci)} {rq.y.ToString("R", ci)} {rq.z.ToString("R", ci)} {rq.w.ToString("R", ci)}");
+            m_Run.Meta("overlay_chain", "world = head(cam_ts) native with z flipped (S R S, S = diag(1,1,-1)) * rgb_from_head * " +
+                                        "F R F, t (x,-y,z); latest trusted pose, no filter");
+            try
+            {
+                // the vendor's Eye intrinsics on this host, against the set's calibration (Surface, 1280x720: vendor fx 2.7 % short)
+                Vector2 f = default, c = default;
+                Vector2Int res = default;
+                bool okI = XREALPlugin.GetCameraIntrinsic(XREALComponent.XREAL_COMPONENT_RGB_CAMERA, ref f, ref c);
+                bool okR = XREALPlugin.GetDeviceResolution(XREALComponent.XREAL_COMPONENT_RGB_CAMERA, ref res);
+                m_Run.Meta("eye_vendor_intrinsics", (okI ? $"fx {f.x.ToString("R", ci)} fy {f.y.ToString("R", ci)} cx {c.x.ToString("R", ci)} cy {c.y.ToString("R", ci)}" : "unavailable") +
+                           (okR ? $"; resolution {res.x}x{res.y}" : ""));
+            }
+            catch (Exception e)
+            {
+                m_Run.Meta("eye_vendor_intrinsics", "error " + e.GetType().Name + ": " + e.Message);
+            }
+            m_Overlay = PoseOverlay.Create(m_Set);
+        }
+
+        /// <summary>Main thread: a trusted pose with its head pose moves the drawing; the shown pose goes to overlay.csv.</summary>
+        void Apply(in Done d)
+        {
+            if (m_Overlay == null || !d.Accepted || !d.HeadOk || d.Mode == "off") return;
+            PoseOverlay.CvToUnity(d.R.R0, d.R.R1, d.R.R2, d.R.T0, d.R.T1, d.R.T2, out Vector3 camP, out Quaternion camQ);
+            PoseOverlay.NativeHeadToUnity(d.Head, out Vector3 headP, out Quaternion headQ);
+            PoseOverlay.Chain(headP, headQ, m_RgbFromHead, camP, camQ, out Vector3 p, out Quaternion q);
+            if (PlanFor(m_Variant, m_Step).Mode == "off") return;   // the step changed to off while this frame ran
+            m_Overlay.Show(d.Target, p, q);
+            var ci = CultureInfo.InvariantCulture;
+            Camera cam = Camera.main;
+            Vector3 hp = cam != null ? cam.transform.localPosition : Vector3.zero;
+            Quaternion hq = cam != null ? cam.transform.localRotation : Quaternion.identity;
+            string f(float v) => v.ToString("R", ci);
+            m_Run.Row(OverlayFile, OverlayHeader, string.Join(",", d.Seq.ToString(ci), d.Step, d.Target, d.CamTs.ToString(ci),
+                ProbeClocks.MonoNs.ToString(ci), Time.frameCount.ToString(ci), f(p.x), f(p.y), f(p.z), f(q.x), f(q.y), f(q.z), f(q.w),
+                f(hp.x), f(hp.y), f(hp.z), f(hq.x), f(hq.y), f(hq.z), f(hq.w)));
         }
 
         /// <returns>true when a new frame was copied and handed to the worker.</returns>
@@ -647,6 +767,11 @@ namespace EyeLab.Probes
                                        W = m_W, H = m_H, Stride = m_Stride, HeadOk = m_HeadFrontOk, Head = (float[])m_HeadFront.Clone() };
                     }
                     Plan plan = PlanFor(m_Variant, d.Step);
+                    if (plan.Mode == "off")
+                    {
+                        Interlocked.Increment(ref m_OffSkipped);   // T6.9: detection off, the worker stays idle
+                        continue;
+                    }
                     if ((plan.Mode == "cap" || plan.Mode == "roi15") && lastStart != 0 && ProbeClocks.MonoNs - lastStart < 1e9 / CapHz)
                     {
                         Interlocked.Increment(ref m_CapSkipped);

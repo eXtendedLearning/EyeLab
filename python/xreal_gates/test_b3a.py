@@ -187,15 +187,56 @@ class B3aTest(unittest.TestCase):
         F = np.diag([1.0, -1.0, 1.0])
         Rb = cv2.Rodrigues(bad)[0]
 
+        S = np.diag([1.0, 1.0, -1.0])
+
         def head(R):
+            """A Unity-handed head rotation, stored as the native pose (z flipped: S R S)."""
             m = np.eye(4)
-            m[:3, :3] = R
+            m[:3, :3] = S @ R @ S
             return {"ok": "1", **{f"m{i}": repr(float(v)) for i, v in enumerate(m.T.ravel())}}
         # H @ F @ n_bad = F @ n_good: H = F @ (Rg Rb^T) @ F rotates the bad normal onto the good one
         turned = F @ Rg @ Rb.T @ F
         heads = {r["seq"]: head(F @ F if r["r0"] == str(good[0]) else turned) for r in sel}
         still = b3a._still_lines(sel, heads)
         self.assertIn("wrong solution (room normal > 10 deg from the median, first 1 s skipped): 0/9 poses", still[0])
+
+    def test_overlay_chain(self):
+        """The room pose from an Eye pose, the native head pose and rgb_from_head, as the device's PoseOverlay."""
+        import cv2
+        rng = np.random.default_rng(3)
+        S, F = np.diag([1.0, 1.0, -1.0]), np.diag([1.0, -1.0, 1.0])
+
+        def rot(v):
+            return cv2.Rodrigues(np.asarray(v, float))[0]
+        Rw, tw = rot([0.3, -0.2, 0.1]), np.array([0.1, 1.2, 0.8])            # the target in the room (Unity)
+        Rr, tr = rot([0.02, -0.01, 0.005]), np.array([0.01, 0.03, 0.02])     # Eye camera in the head (Unity)
+        qx, qy, qz, qw = 0.0, np.sin(0.01), 0.0, np.cos(0.01)
+        self.assertTrue(np.allclose(b3a.quat_matrix(qx, qy, qz, qw), rot([0, 0.02, 0])))
+        for _ in range(5):
+            RH, tH = rot(rng.normal(0, 0.4, 3)), rng.normal(0, 0.5, 3)        # head (Unity)
+            # camera pose in Unity: world = H rgb C  ->  C = (H rgb)^-1 world
+            RC = (RH @ Rr).T @ Rw
+            tC = (RH @ Rr).T @ (tw - tH - RH @ tr)
+            rv = cv2.Rodrigues(F @ RC @ F)[0].ravel()
+            tv = F @ tC
+            Rn, tn = S @ RH @ S, S @ tH                                      # native: z flipped
+            M = np.eye(4)
+            M[:3, :3], M[:3, 3] = Rn, tn
+            h = {f"m{i}": str(x) for i, x in enumerate(M.T.ravel())}
+            R, t = b3a.target_in_room(rv, tv, b3a.head_unity(h), (Rr, tr))
+            self.assertTrue(np.allclose(R, Rw, atol=1e-9) and np.allclose(t, tw, atol=1e-9))
+        meta = {"rgb_from_head": f"ok; p 0.01 0.03 0.02; q {float(qx)!r} {float(qy)!r} {float(qz)!r} {float(qw)!r}"}
+        R, t, ok = b3a.rgb_from_head(meta)
+        self.assertTrue(ok and np.allclose(t, [0.01, 0.03, 0.02]) and np.allclose(R, rot([0, 0.02, 0])))
+        self.assertFalse(b3a.rgb_from_head({})[2])
+
+    def test_scale_fit(self):
+        rng = np.random.default_rng(5)
+        a = rng.normal(0, 0.2, (50, 3))                     # head part moves
+        b = -a / 0.9 + rng.normal(0, 1e-4, (50, 3))         # camera translation 1/0.9 too long: s = 0.9 keeps it still
+        s, spread = b3a.scale_fit(a, b)
+        self.assertAlmostEqual(s, 0.9, places=3)
+        self.assertLess(spread, 0.5)
 
     def test_refinement_flips(self):
         dev = {7: np.array([[10.0, 10.0], [20.0, 10.0], [20.0, 20.0], [10.0, 20.0]])}

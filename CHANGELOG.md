@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.011<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.012<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,21 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.4.012) T6.9 gate B3b built (`docs/tasks/T6.9-overlay-b3b.md`), not run yet.
+  - **The pose drawn in the glasses, room-fixed** (`PoseOverlay.cs`): each trusted pose is carried into the room as
+    head(`cam_ts`) · `rgb_from_head` · F·cam·F and drawn as the target's marker outlines. No filter and no view offset
+    yet.
+  - **Probe variant overlay:** plate L tilted, then the board; region at every Eye frame; steps with detection off
+    (the drawing holds by head tracking alone, and the render floor is measured); ratings on the Beam Pro screen.
+    The main page shows only T6.9.
+  - **Trust rule:** t_z > 0 for every pose (T6.8 run 1 had 5 trusted plate L poses behind the camera, 1.2 m off in
+    the room); a planar pose on 12 or more markers is trusted (the board).
+  - **Report:** room std, high-pass and orientation per step, the head's range, a scale fit against head tracking,
+    the device chain against Python, the detection-off frame rate, the ratings.
+- (0.4.012) The native head pose (`GetHeadPoseAtTime`) is Unity's tracking pose with z flipped: position (x, y, −z),
+  rotation S·R·S. Fitted on the T6.3 loop run, 0.0 mm and 0.01° median. The 0.4.011 report's room normal used the
+  wrong flip; corrected (T6.8 numbers barely change).
 
 - (0.4.011) T6.8 run 1 analysed (`docs/tasks/T6.8-lean-detection.md`).
   - **Margin:** 4.7 % late Unity frames at 27.6 poses/s with the region on the board; with the worker idle it is 3-7 %,

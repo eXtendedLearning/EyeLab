@@ -732,16 +732,54 @@ def _mode_line(sel: List[dict]) -> Optional[str]:
 SETTLE_S = 1.0   # still metrics skip a step's first second: T6.8 run 1's trusted "wrong" board poses all fell in it
 
 
+S_Z = np.diag([1.0, 1.0, -1.0])   # native head pose to Unity: z flipped
+F_CV = np.diag([1.0, -1.0, 1.0])  # OpenCV to Unity (THEORY 6.3)
+
+
+def head_unity(h: dict) -> Tuple[np.ndarray, np.ndarray]:
+    """The native head pose at ``cam_ts`` (4x4 column-major, right-handed) as Unity's tracking pose: rotation S R S,
+    position S t, S = diag(1, 1, -1). Fitted on the T6.3 loop run (2 m walk): 0.0 mm, 0.01 deg median against Unity's
+    head pose; identity and the x and y flips are 178-262 mm off."""
+    M = np.array([float(h[f"m{i}"]) for i in range(16)]).reshape(4, 4).T
+    return S_Z @ M[:3, :3] @ S_Z, S_Z @ M[:3, 3]
+
+
 def _head_rotation(h: dict) -> np.ndarray:
-    """Head rotation at ``cam_ts`` (Unity, column-major m0..m15)."""
-    return np.array([float(h[f"m{i}"]) for i in range(16)]).reshape(4, 4).T[:3, :3]
+    """Head rotation at ``cam_ts``, Unity-handed."""
+    return head_unity(h)[0]
+
+
+def quat_matrix(x: float, y: float, z: float, w: float) -> np.ndarray:
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                     [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                     [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+
+
+def rgb_from_head(meta: dict) -> Tuple[np.ndarray, np.ndarray, bool]:
+    """The vendor Eye-camera-from-head pose the device logged (``rgb_from_head``: "ok; p x y z; q x y z w")."""
+    s = meta.get("rgb_from_head", "")
+    try:
+        parts = {seg.strip().split(" ")[0]: [float(v) for v in seg.strip().split(" ")[1:]] for seg in s.split(";")[1:]}
+        return quat_matrix(*parts["q"]), np.array(parts["p"]), s.startswith("ok")
+    except (KeyError, ValueError, TypeError):
+        return np.eye(3), np.zeros(3), False
+
+
+def target_in_room(rvec: np.ndarray, tvec: np.ndarray, head: Tuple[np.ndarray, np.ndarray],
+                   rgb: Tuple[np.ndarray, np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+    """As the device's PoseOverlay: world = head(cam_ts) * rgb_from_head * (F R F, F t), Unity-handed, metres."""
+    Rc = F_CV @ cv2.Rodrigues(np.asarray(rvec, float))[0] @ F_CV
+    tc = F_CV @ np.asarray(tvec, float)
+    RH, tH = head
+    Rr, tr = rgb
+    return RH @ Rr @ Rc, tH + RH @ (Rr @ tc + tr)
 
 
 def _normal_dev(poses: List[Tuple[np.ndarray, np.ndarray]],
                 heads: Optional[List[np.ndarray]] = None) -> np.ndarray:
     """Angle (deg) of each pose's target z axis from the median direction: a wrong IPPE solution shows as > 10 deg.
-    With ``heads`` (one rotation per pose), the normals are carried into the room first (OpenCV to Unity:
-    F = diag(1, -1, 1), Eye-to-head rotation taken as identity), so a head turn is not counted as a wrong pose."""
+    With ``heads`` (one Unity-handed head rotation per pose), the normals are carried into the room first (OpenCV to
+    Unity: F = diag(1, -1, 1), Eye-to-head rotation taken as identity), so a head turn is not counted as a wrong pose."""
     n = np.array([cv2.Rodrigues(np.asarray(p[0], float))[0][:, 2] for p in poses])
     if heads is not None:
         F = np.diag([1.0, -1.0, 1.0])
@@ -781,6 +819,100 @@ def _still_lines(sel: List[dict], heads: Dict[str, dict]) -> List[str]:
     return out
 
 
+def _rot_spread_deg(Rs: List[np.ndarray]) -> float:
+    """Median angle of each rotation from their chordal mean."""
+    U, _, Vt = np.linalg.svd(np.sum(Rs, axis=0))
+    M = U @ np.diag([1, 1, np.linalg.det(U @ Vt)]) @ Vt
+    return float(np.median([math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(M.T @ R) - 1) / 2)))) for R in Rs]))
+
+
+def scale_fit(a: np.ndarray, b: np.ndarray) -> Tuple[float, float]:
+    """World positions a + s b (a: head and rgb part, b: the camera translation carried into the room): the s that keeps
+    the target most still, and the spread (mm) there. A wrong marker size or K scales b only, so s far from 1 names a
+    scale error that reprojection cannot (AGENTS.md invariant)."""
+    da, db = a - a.mean(axis=0), b - b.mean(axis=0)
+    s = -float(np.sum(da * db) / max(np.sum(db * db), 1e-18))
+    return s, float(np.linalg.norm((da + s * db).std(axis=0)) * 1000)
+
+
+def overlay_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 60.0) -> List[str]:
+    """T6.9 (B3b): each trusted pose carried into the room as the device drew it; how still the target stays there."""
+    from .beampro import load_json
+    run = Path(run)
+    meta = load_json(run)
+    if meta.get("variant") != "overlay":
+        return []
+    Rr, tr, rgb_ok = rgb_from_head(meta)
+    rgb = (Rr, tr)
+    out = [f"   overlay: rgb_from_head {meta.get('rgb_from_head', '?')}",
+           f"   eye vendor intrinsics: {meta.get('eye_vendor_intrinsics', '?')}"]
+    s = load_set(set_dir)
+    centres = {}
+    if s is not None:
+        for tg in s.get("targets", []):
+            centres[tg["name"]] = np.asarray(tg["corners"], float).reshape(-1, 3).mean(axis=0)
+    rows = [r for r in load_csv(run / "live.csv") if r["pose_ok"] == "1" and r.get("accepted") == "1"]
+    heads = {h["seq"]: h for h in load_csv(run / "head.csv") if h.get("ok") == "1"}
+    shown = {r["seq"]: r for r in load_csv(run / "overlay.csv")}
+    order: List[str] = []
+    for r in load_csv(run / "frames.csv"):
+        if r["step"] not in order:
+            order.append(r["step"])
+    out.append("   room: trusted poses carried into the room (target centre); std and high-pass of its position, "
+               "orientation spread; the head's own range; scale = the camera-translation factor that keeps it stillest")
+    diffs = []
+    for step in order:
+        sel = [r for r in rows if r["step"] == step and r["seq"] in heads]
+        if len(sel) < 5:
+            continue
+        pw, Rw, a, b, hp, hR = [], [], [], [], [], []
+        for r in sel:
+            rv, tv = _pose(r)
+            head = head_unity(heads[r["seq"]])
+            R, t0 = target_in_room(rv, tv, head, rgb)
+            c = centres.get(r["target"], np.zeros(3))
+            cu = F_CV @ c
+            pw.append(t0 + R @ cu)
+            Rw.append(R)
+            RH, tH = head
+            Rc = F_CV @ cv2.Rodrigues(np.asarray(rv, float))[0] @ F_CV
+            a.append(tH + RH @ tr)
+            b.append(RH @ Rr @ (F_CV @ np.asarray(tv, float) + Rc @ cu))
+            hp.append(tH)
+            hR.append(RH)
+            d = shown.get(r["seq"])
+            if d is not None:
+                diffs.append(float(np.linalg.norm(t0 - np.array([float(d[k]) for k in ("px", "py", "pz")])) * 1000))
+        pw = np.array(pw) * 1000
+        hp = np.array(hp) * 1000
+        line = (f"     {step:12s} {len(sel):4d} poses on {sel[0]['target']}: std {np.linalg.norm(pw.std(axis=0)):6.2f} mm, "
+                f"high-pass {np.linalg.norm(high_pass(pw).std(axis=0)):5.2f} mm, orientation {_rot_spread_deg(Rw):5.2f} deg; "
+                f"head range {np.linalg.norm(np.ptp(hp, axis=0)):6.0f} mm, {2 * _rot_spread_deg(hR):5.1f} deg")
+        if np.linalg.norm(np.ptp(hp, axis=0)) > 50:
+            sc, spread = scale_fit(np.array(a), np.array(b))
+            line += f"; scale {sc:.3f} (std there {spread:.2f} mm)"
+        out.append(line)
+    if diffs:
+        out.append(f"   device chain against Python: {len(diffs)} shown poses, position differs by max {max(diffs):.3f} mm")
+    if shown:
+        lat = [(int(d["applied_mono_ns"]) - int(d["cam_ts"])) / 1e6 for d in shown.values()]
+        out.append(f"   shown: {len(shown)} poses, exposure to drawing {_q(lat)} ms (applied on the main thread)")
+    live_steps = {r["step"] for r in load_csv(run / "live.csv")}
+    frames = load_csv(run / "frames.csv")
+    for step in order:
+        if step in live_steps:
+            continue
+        dt = [x for x in (_f(f["dt_ms"]) for f in frames if f["step"] == step) if x is not None][1:]
+        if dt:
+            late = sum(1 for x in dt if x > 1000 / refresh_hz * 1.25) / len(dt) * 100
+            out.append(f"   {step:12s} detection off: {len(dt) / (sum(dt) / 1000):5.1f} fps, late {late:4.1f} % (the render floor)")
+    ratings = [e["detail"] for e in load_csv(run / "events.csv") if e.get("event") == "rating"]
+    out.append("   ratings: " + ("; ".join(ratings) if ratings else "none"))
+    if not rgb_ok:
+        out.append("   WARNING: no rgb_from_head on the device: identity used")
+    return out
+
+
 def detect_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
     from .beampro import load_json
     meta = load_json(run)
@@ -791,4 +923,4 @@ def detect_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
              f"   glasses seen: {meta.get('glasses_seen', '?')}; Eye frames {meta.get('eye_frames', '?')}, processed "
              f"{meta.get('processed', '?')}, skipped {meta.get('skipped', '?')}"
              + (f"; WORKER ERROR {meta['worker_error']}" if meta.get("worker_error") else "")]
-    return lines + bench_report(run, set_dir) + live_report(run, set_dir)
+    return lines + bench_report(run, set_dir) + live_report(run, set_dir) + overlay_report(run, set_dir)

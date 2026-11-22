@@ -15,7 +15,7 @@ namespace EyeLab.Probes
     [Serializable]
     public sealed class ProbeConfig
     {
-        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | loop | sync | pan | render | detect | budget | all
+        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | loop | sync | pan | render | detect | budget | lean | overlay | all
         public float seconds = 0f;         // 0 = the probe's default
         public float imu_seconds = 20f;
         public int save_every = 0;         // chain: 0; timecode: 1
@@ -40,7 +40,7 @@ namespace EyeLab.Probes
 
         Text m_Status;
         GlassesView m_Glasses;
-        GameObject m_Panel, m_Panel2, m_RatePanel;
+        GameObject m_Panel, m_Panel2, m_RatePanel, m_OverlayRatePanel;
         string m_GlassesSeen = "not answered";
         CuePlayer m_Cues;
         bool m_Busy;
@@ -138,6 +138,7 @@ namespace EyeLab.Probes
             if (m_Panel != null) m_Panel.SetActive(page == m_Panel);
             if (m_Panel2 != null) m_Panel2.SetActive(page == m_Panel2);
             if (m_RatePanel != null) m_RatePanel.SetActive(page == m_RatePanel);
+            if (m_OverlayRatePanel != null) m_OverlayRatePanel.SetActive(page == m_OverlayRatePanel);
         }
 
         public IEnumerator RunProbe(ProbeConfig cfg)
@@ -160,6 +161,7 @@ namespace EyeLab.Probes
             if (p == "detect") yield return Detect(cfg, "detect");
             if (p == "budget") yield return Detect(cfg, "budget");
             if (p == "lean") yield return Detect(cfg, "lean");
+            if (p == "overlay") yield return Detect(cfg, "overlay");
             m_Glasses?.ClearCue();
             ShowPage(m_Panel);
             m_Busy = false;
@@ -218,7 +220,10 @@ namespace EyeLab.Probes
             {
                 run.Meta("config", JsonUtility.ToJson(cfg));
                 GlassesMeta(run);
+                bool overlay = variant == "overlay";
+                if (overlay) { ShowPage(m_OverlayRatePanel); m_Glasses?.SetOverlayLayout(true); }
                 yield return DetectProbe.Run(run, SetStatus, ShowCue, variant);
+                if (overlay) m_Glasses?.SetOverlayLayout(false);
                 SetStatus(variant + " done: " + Path.GetFileName(run.Dir));
             }
         }
@@ -446,7 +451,7 @@ namespace EyeLab.Probes
             m_Glasses = GlassesView.Create(font);
 
             m_Panel = Column(canvas.transform);
-            AddButton(font, "T6.8  Lean detection: board, plate L tilted  (2 min)", new ProbeConfig { probe = "lean" });
+            AddButton(font, "T6.9  Overlay in the glasses: plate L, board  (2 min)", new ProbeConfig { probe = "overlay" });
             AddAction(font, "Other runs", () => ShowPage(m_Panel2), new Color(0.22f, 0.22f, 0.25f, 0.9f));
             AddAction(font, "Quit EyeLab", () => { Debug.Log("[EyeLab probe] quit button"); Application.Quit(); });
 
@@ -458,6 +463,7 @@ namespace EyeLab.Probes
             AddAction(font, "Text only", () => AnswerGlasses("text only"), new Color(0.35f, 0.3f, 0.1f, 0.9f), row);
             AddAction(font, "Nothing", () => AnswerGlasses("nothing"), new Color(0.45f, 0.1f, 0.1f, 0.9f), row);
             AddAction(font, "Place square ahead", () => m_Glasses?.PlaceReference(), new Color(0.1f, 0.25f, 0.45f, 0.9f), m_Panel2);
+            AddButton(font, "T6.8  Lean detection: board, plate L tilted  (2 min)", new ProbeConfig { probe = "lean" }, m_Panel2);
             AddButton(font, "T6.7  Detection budget: plate A, plate L, board  (2.5 min)", new ProbeConfig { probe = "budget" }, m_Panel2);
             AddButton(font, "T6.6  Detection, plate A, threads  (100 s)", new ProbeConfig { probe = "detect" }, m_Panel2);
             AddButton(font, "T6.5  Rendering, rate each setting  (85 s)", new ProbeConfig { probe = "render" }, m_Panel2);
@@ -484,6 +490,18 @@ namespace EyeLab.Probes
             {
                 string answer = RenderProbe.Answers[i];
                 AddAction(font, char.ToUpperInvariant(answer[0]) + answer.Substring(1), () => RenderProbe.Rate(answer), rateColors[i], m_RatePanel);
+            }
+            // T6.9: shown only during the overlay run; each tap is logged with the step it falls in.
+            m_OverlayRatePanel = Column(canvas.transform);
+            Color[] overlayColors =
+            {
+                new Color(0.12f, 0.3f, 0.15f, 0.9f), new Color(0.25f, 0.32f, 0.12f, 0.9f), new Color(0.35f, 0.3f, 0.1f, 0.9f),
+                new Color(0.45f, 0.1f, 0.1f, 0.9f), new Color(0.22f, 0.22f, 0.25f, 0.9f),
+            };
+            for (int i = 0; i < DetectProbe.OverlayAnswers.Length; i++)
+            {
+                string answer = DetectProbe.OverlayAnswers[i];
+                AddAction(font, char.ToUpperInvariant(answer[0]) + answer.Substring(1), () => DetectProbe.Rate(answer), overlayColors[i], m_OverlayRatePanel);
             }
             ShowPage(m_Panel);
             Debug.Log("[EyeLab probe] buttons built on " + (canvas.gameObject.name));
