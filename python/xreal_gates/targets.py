@@ -10,7 +10,8 @@ dimension comes from its single definition elsewhere:
   Pose from the plate's ArUco marker corners plus the printed saddle points that
   the validation detector (``validation.detect.locate_points``) finds around them.
 - ``board25``: the 5 x 7 ChArUco calibration board of ``calibrate.py``
-  (25 mm squares, 19 mm markers, ``gui_common``), pose from its ChArUco corners.
+  (25 mm squares, 19 mm markers, ``gui_common``; printed 3.9 % larger, and posed at the printed size),
+  pose from its ChArUco corners.
 
 Target frames are right-handed (plates: Z out of the printed surface; board:
 OpenCV's ChArUco frame). The Unity side converts with ``F = diag(1, -1, 1)``.
@@ -211,13 +212,13 @@ class BoardTarget(GateTarget):
 
     def __init__(self):
         from calibrate import BOARD_COLS, BOARD_ROWS, make_charuco_board
-        from gui_common import CHARUCO_MARKER_M, CHARUCO_SQUARE_M
+        from gui_common import CHARUCO_MARKER_PRINTED_M, CHARUCO_SQUARE_PRINTED_M
 
-        self.cols, self.rows, self.square = BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_M
-        self.board = make_charuco_board(BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_M, CHARUCO_MARKER_M)
+        self.cols, self.rows, self.square = BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_PRINTED_M
+        self.board = make_charuco_board(BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_PRINTED_M, CHARUCO_MARKER_PRINTED_M)
         self.detector = cv2.aruco.CharucoDetector(self.board)
-        self.label = (f"ChArUco {BOARD_COLS}x{BOARD_ROWS}, {CHARUCO_SQUARE_M * 1000:.0f} mm squares, "
-                      f"{CHARUCO_MARKER_M * 1000:.0f} mm markers")
+        self.label = (f"ChArUco {BOARD_COLS}x{BOARD_ROWS}, {CHARUCO_SQUARE_PRINTED_M * 1000:.2f} mm squares as printed, "
+                      f"{CHARUCO_MARKER_PRINTED_M * 1000:.2f} mm markers")
         self.source = "calibrate.make_charuco_board"
 
     def estimate(self, gray, K, dist) -> PoseEstimate:

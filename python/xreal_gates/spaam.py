@@ -34,7 +34,25 @@ import numpy as np
 
 from .beampro import load_csv
 
-BOARD_CENTRE = np.array([0.0625, 0.0875, 0.0])   # middle square of board25 (marker 8), board frame, metres
+BOARD_CENTRE = np.array([0.0625, 0.0875, 0.0])   # middle square of board25 (marker 8) at the nominal 25 mm, board frame, metres
+#: The Eye camera's pose in the head on this One Pro + Eye, as every run from 0.4.012 logs it. T6.11 run 1 (variant
+#: spaam, 0.4.014) did not log it, and its first analysis fell back to identity: a 1.1 deg pitch and a 28 mm lever arm
+#: left out, which made its taps disagree with T6.12's by about 17 mm (2026-11-23).
+BEAMPRO_RGB_FROM_HEAD = "ok; p 0.00127746048 0.00535731856 0.0281137042; q -0.00971239 -0.005232626 -0.00308899628 0.9999344"
+
+
+def board_centre(meta: dict) -> np.ndarray:
+    """The tap point in the board frame (metres, OpenCV), as the run's set placed it: from 0.4.016 the device logs
+    ``board_centre_m`` (marker 8's centre at the printed size); earlier runs posed the board at the nominal size."""
+    try:
+        return np.array([float(v) for v in str(meta["board_centre_m"]).split()[:3]])
+    except (KeyError, ValueError):
+        return BOARD_CENTRE.copy()
+
+
+def rgb_meta(meta: dict) -> dict:
+    """``meta`` with the device's ``rgb_from_head`` filled in when the run did not log it (T6.11 run 1)."""
+    return meta if "rgb_from_head" in meta else dict(meta, rgb_from_head=BEAMPRO_RGB_FROM_HEAD.replace("ok;", "ok (filled in);", 1))
 WINDOW_S = 2.0
 NAMES = ["cx_mm", "cy_mm", "cz_mm", "inv_D_per_m", "scale", "px_deg", "py_deg"]
 
@@ -134,14 +152,14 @@ def tap_points(run: Path, set_dir: Optional[Path] = None) -> Tuple[List[dict], D
     from .beampro import load_json
     run = Path(run)
     meta = load_json(run)
-    rgb = b3a.rgb_from_head(meta)[:2]
+    rgb = b3a.rgb_from_head(rgb_meta(meta))[:2]
     eyes = {"L": pose_from_meta(meta.get("display_left_from_head", "")),
             "R": pose_from_meta(meta.get("display_right_from_head", ""))}
     events = load_csv(run / "events.csv")
     bad = {e["detail"].split(":")[-1] for e in events if e.get("event") == "tap_bad"}
     heads = {h["seq"]: h for h in load_csv(run / "head.csv") if h.get("ok") == "1"}
     live = [r for r in load_csv(run / "live.csv") if trusted_board(r) and r["seq"] in heads]
-    cu = b3a.F_CV @ BOARD_CENTRE
+    cu = b3a.F_CV @ board_centre(meta)
     room = []
     for r in live:
         rv, tv = b3a._pose(r)
@@ -168,7 +186,9 @@ def tap_points(run: Path, set_dir: Optional[Path] = None) -> Tuple[List[dict], D
                      "spread_mm": float(np.linalg.norm(pts.std(axis=0)) * 1000), "P": Pe, "uv": uv,
                      "dist_mm": float(np.linalg.norm(Pe) * 1000)})
     notes = {"eye_L": meta.get("display_left_from_head", "?"), "eye_R": meta.get("display_right_from_head", "?"),
-             "bad": ", ".join(sorted(bad, key=int)) if bad else "none"}
+             "bad": ", ".join(sorted(bad, key=int)) if bad else "none",
+             "rgb": "logged" if "rgb_from_head" in meta else "not logged: the device's value from later runs",
+             "centre": "logged by the device" if "board_centre_m" in meta else "nominal 25 mm board"}
     return taps, notes
 
 
@@ -253,6 +273,7 @@ def spaam_report(run: Path) -> List[str]:
         out.append(f"   device tap points against Python: {len(diffs)} taps, median {np.median(diffs):.2f} mm, max {max(diffs):.2f} mm")
     good = [t for t in taps if t["ok"]]
     out.append(f"   taps: {len(taps)} (bad, dropped: {notes['bad']}); with the board seen in the 2 s before: {len(good)}")
+    out.append(f"   tap point: rgb_from_head {notes['rgb']}; board centre {notes['centre']}")
     fits = {}
     for eye in ("L", "R"):
         lines, params = eye_lines([t for t in good if t["eye"] == eye], eye)
@@ -262,13 +283,26 @@ def spaam_report(run: Path) -> List[str]:
     return out + spacing_line(meta, fits)
 
 
+TAPS_HEADER = "wearing,camera,eye,step,px,py,pz,u,v"
+
+
+def run_camera(meta: dict) -> str:
+    """The camera calibration a run's poses used (the set's ``calibration``), the key of the device's tap store."""
+    import re
+    m = re.search(r"calibration ([^;]+);", str(meta.get("set", "")))
+    return m.group(1).strip() if m else "?"
+
+
 def export_taps(runs: List[Path]) -> List[str]:
-    """The good taps of ``runs`` as the device's ``calibration/spaam_taps.csv`` (EyeModel.cs): one wearing per run."""
-    lines = ["wearing,eye,step,px,py,pz,u,v"]
+    """The good taps of ``runs`` as the device's ``calibration/eye_taps.csv`` (EyeModel.cs): one wearing per run, each
+    tap with the camera calibration its point was measured with (the device fits only taps of its current one)."""
+    from .beampro import load_json
+    lines = [TAPS_HEADER]
     for run in runs:
+        cam = run_camera(load_json(Path(run)))
         for t in tap_points(Path(run))[0]:
             if t["ok"]:
-                lines.append(",".join([Path(run).name, t["eye"], t["step"]] + [repr(float(x)) for x in (*t["P"], *t["uv"])]))
+                lines.append(",".join([Path(run).name, cam, t["eye"], t["step"]] + [repr(float(x)) for x in (*t["P"], *t["uv"])]))
     return lines
 
 

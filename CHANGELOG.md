@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.015<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.016<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -17,6 +17,27 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.4.016) T6.12 run 1 analysed (`docs/tasks/T6.12-eye-calibration.md`).
+  - **Within a wearing:** "This round" was *on the markers* at 35 and 60 cm, but it swam at 1 m and on plate L.
+  - **Three defects:**
+    - The tap store was never written: the adb-pushed seed belonged to the shell user.
+    - T6.11's seed taps were computed without the camera's `rgb_from_head`. With it, the two wearings agree to 3-4 mm, so
+      the calibration carries over.
+    - **The Eye camera model is 25-28 % short in focal length on the Beam Pro.** A tape check with the glasses on the
+      table put the board at 399 and 786 mm with the lens at 500 and 1000 mm, so fx is about 790 px, not 624. This
+      explains T6.9's offset, T6.10's opposite-eye error, T6.11's 42 mm "eye spacing" and the swim.
+  - The ChArUco print measures 25.97 mm per square (3.9 % over nominal).
+- (0.4.016) T6.13 built (`docs/tasks/T6.13-beampro-eye-calibration.md`): the Eye camera calibrated on the Beam Pro.
+  - **Run:** a `camcal` run with the glasses on the table. The board is moved through the view, then held at 50 and
+    100 cm, set with a tape and ended by NEXT.
+  - **Python:** `bp-calib` calibrates from the saved frames and accepts a result only if the tape distances come out
+    right. It writes `config/cameras/beampro_eye.*` and updates the frame set (`b3a.update_set`).
+  - **board25:** posed at the printed size (`gui_common.CHARUCO_SQUARE_PRINTED_M`, one definition).
+  - **Logged by every variant:** `rgb_from_head`, the vendor intrinsics and the tap point's board centre.
+  - **Eye-tap store:** `eye_taps.csv`, keyed by the camera calibration, so taps measured under the old model are not
+    pooled. A store pushed over adb is replaced by an app-owned copy.
+  - Eye-model buttons without a model say "(none)".
+  - The main page shows T6.13, then T6.12.
 - (0.4.015) T6.11 run 1 analysed (`docs/tasks/T6.11-spaam-taps.md`). 24 taps, all usable once the board rule applies to
   SPAAM runs.
   - **SDK model error:** the board's centre is drawn 8-10 mm right and 6-8 mm low in the left eye, and 11 mm left and

@@ -18,6 +18,9 @@ namespace EyeLab.Probes
     /// The SDK draws P at P_xy / P_z, so drawing the point Q = (uv·P_z, P_z) instead puts it where the wearer sees P
     /// (the overlay shader does this per eye). T6.11 run 1 (Jack): left eye C = (+9.4, −7.4, −14.8) mm, right eye
     /// (−12.1, −8.7, −12.4) mm; leave-one-out 1.9 / 2.9 mm against 12-14 mm for the SDK's model.
+    /// <para>T6.13: those taps were measured with an Eye camera model 25-28 % short in focal length (tape check,
+    /// 2026-11-23), which put every real point about a quarter too near. The store therefore keys each tap by the camera
+    /// calibration its point came from (the frame set's <c>calibration</c>), and a fit uses only the current one's.</para>
     /// </summary>
     public static class EyeModel
     {
@@ -25,7 +28,7 @@ namespace EyeLab.Probes
 
         public struct Tap
         {
-            public string Wearing, Eye, Step;
+            public string Wearing, Camera, Eye, Step;
             public double Px, Py, Pz, U, V;
         }
 
@@ -36,13 +39,13 @@ namespace EyeLab.Probes
             public int left_taps, right_taps, wearings;
             public float left_loo_mm, right_loo_mm;
             public float inv_d_per_m = (float)W;
-            public string saved_utc = "", source = "";
+            public string saved_utc = "", source = "", camera = "";
         }
 
         public static string Dir => Path.Combine(Application.persistentDataPath, "calibration");
-        public static string TapsPath => Path.Combine(Dir, "spaam_taps.csv");
+        public static string TapsPath => Path.Combine(Dir, "eye_taps.csv");   // T6.13; spaam_taps.csv (T6.12) is left as it is
         public static string ModelPath => Path.Combine(Dir, "eye_model.json");
-        const string TapsHeader = "wearing,eye,step,px,py,pz,u,v";
+        const string TapsHeader = "wearing,camera,eye,step,px,py,pz,u,v";
 
         public static void Predict(double[] c, double px, double py, double pz, out double u, out double v)
         {
@@ -164,7 +167,8 @@ namespace EyeLab.Probes
             return errs[errs.Count / 2];
         }
 
-        public static List<Tap> LoadTaps()
+        /// <summary>The stored taps measured under the camera calibration <paramref name="camera"/>.</summary>
+        public static List<Tap> LoadTaps(string camera)
         {
             var list = new List<Tap>();
             try
@@ -174,18 +178,18 @@ namespace EyeLab.Probes
                 foreach (string line in File.ReadAllLines(TapsPath))
                 {
                     string[] f = line.Split(',');
-                    if (f.Length < 8 || f[0] == "wearing") continue;
+                    if (f.Length < 9 || f[0] == "wearing" || f[1] != camera) continue;
                     list.Add(new Tap
                     {
-                        Wearing = f[0], Eye = f[1], Step = f[2],
-                        Px = double.Parse(f[3], ci), Py = double.Parse(f[4], ci), Pz = double.Parse(f[5], ci),
-                        U = double.Parse(f[6], ci), V = double.Parse(f[7], ci),
+                        Wearing = f[0], Camera = f[1], Eye = f[2], Step = f[3],
+                        Px = double.Parse(f[4], ci), Py = double.Parse(f[5], ci), Pz = double.Parse(f[6], ci),
+                        U = double.Parse(f[7], ci), V = double.Parse(f[8], ci),
                     });
                 }
             }
             catch (Exception e)
             {
-                Debug.LogWarning("[EyeLab probe] spaam_taps.csv unreadable: " + e.Message);
+                Debug.LogWarning("[EyeLab probe] eye_taps.csv unreadable: " + e.Message);
             }
             return list;
         }
@@ -197,9 +201,17 @@ namespace EyeLab.Probes
             var b = new StringBuilder();
             if (!File.Exists(TapsPath)) b.Append(TapsHeader).Append('\n');
             foreach (Tap t in taps)
-                b.Append(string.Join(",", t.Wearing, t.Eye, t.Step, t.Px.ToString("R", ci), t.Py.ToString("R", ci), t.Pz.ToString("R", ci),
+                b.Append(string.Join(",", t.Wearing, t.Camera, t.Eye, t.Step, t.Px.ToString("R", ci), t.Py.ToString("R", ci), t.Pz.ToString("R", ci),
                                      t.U.ToString("R", ci), t.V.ToString("R", ci))).Append('\n');
-            File.AppendAllText(TapsPath, b.ToString());
+            try { File.AppendAllText(TapsPath, b.ToString()); }
+            catch (UnauthorizedAccessException)
+            {
+                // a store pushed over adb belongs to the shell user, and the app may read it but not write it (T6.12 run 1):
+                // the folder is the app's, so replace the file with an app-owned copy that has the new taps too
+                string old = File.ReadAllText(TapsPath);
+                File.Delete(TapsPath);
+                File.WriteAllText(TapsPath, old + (old.EndsWith("\n") || old.Length == 0 ? "" : "\n") + b.ToString());
+            }
         }
 
         public static Saved LoadSaved()

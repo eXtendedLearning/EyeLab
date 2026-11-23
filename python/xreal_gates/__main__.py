@@ -12,6 +12,8 @@
 - ``timecode [--seconds S]``: fullscreen optical timecode for the camera-to-app latency (T5.1 Phase 1).
 - ``serve --target plateA[,board25] [--calib YAML] [--port 8765]``: the G5 and demo pose service (ADR-001 Step C).
 - ``bp RUN [RUN ...]``: Beam Pro probe runs (T6.0 inventory, T6.1 Eye chain and timecode).
+- ``bp-calib RUN [--write]``: T6.13, the Eye's intrinsics on the Beam Pro from a camcal run, with the tape check;
+  ``--write`` saves the profile and puts it into the frame set (push ``beampro_runs/b3a_set`` to ``files/b3a``).
 """
 
 from __future__ import annotations
@@ -72,9 +74,13 @@ def main(argv=None) -> int:
     p_b3.add_argument("--bottom-up", action="store_true", help="the --eye-plate frames are stored bottom-up (0.4.006 runs)")
     p_sp = sub.add_parser("spaam-pool", help="T6.11: SPAAM taps of several Beam Pro runs, per run and pooled per eye")
     p_sp.add_argument("runs", nargs="+", type=Path)
-    p_se = sub.add_parser("spaam-export", help="T6.12: SPAAM taps of runs as the device's calibration/spaam_taps.csv")
+    p_se = sub.add_parser("spaam-export", help="T6.12: SPAAM taps of runs as the device's calibration/eye_taps.csv")
     p_se.add_argument("runs", nargs="+", type=Path)
     p_se.add_argument("--out", type=Path, required=True)
+    p_bc = sub.add_parser("bp-calib", help="T6.13: Eye intrinsics on the Beam Pro from a camcal run, tape-checked")
+    p_bc.add_argument("run", type=Path)
+    p_bc.add_argument("--write", action="store_true", help="save config/cameras/beampro_eye.* and update the frame set")
+    p_bc.add_argument("--force", action="store_true", help="with --write: write even if the checks failed")
     p_bp = sub.add_parser("bp", help="Beam Pro probe runs (T6.0, T6.1)")
     p_bp.add_argument("runs", nargs="+", type=Path)
     args = parser.parse_args(argv)
@@ -160,6 +166,19 @@ def main(argv=None) -> int:
         for line in pooled_report(args.runs):
             print(line)
         return 0
+    if args.cmd == "bp-calib":
+        from . import b3a, calib
+        s0 = b3a.load_set()
+        rep = calib.calibrate_beampro(args.run, s0["K"] if s0 else None, s0["dist"] if s0 else None)
+        for line in calib.describe_beampro(rep):
+            print(line)
+        if args.write and (rep["accepted"] or args.force):
+            yml, js = calib.write_beampro(rep)
+            s1 = b3a.update_set(b3a.DEFAULT_SET, js)
+            print(f"wrote {yml} and {js}; frame set {b3a.DEFAULT_SET} now uses '{s1['calibration']}': push the folder to files/b3a")
+        elif args.write:
+            print("not written (checks failed); --force to write anyway")
+        return 0 if rep["accepted"] else 1
     if args.cmd == "bp":
         from .beampro import report as bp_report
         for run in args.runs:

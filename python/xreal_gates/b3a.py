@@ -63,8 +63,8 @@ def board(markers_json: Path = DEFAULT_MARKERS) -> Tuple[List[int], np.ndarray]:
 def charuco_markers() -> Tuple[List[int], np.ndarray]:
     """The ChArUco calibration board's ArUco markers: ids and object corners (n, 4, 3), metres, OpenCV's board frame."""
     from calibrate import BOARD_COLS, BOARD_ROWS, make_charuco_board
-    from gui_common import CHARUCO_MARKER_M, CHARUCO_SQUARE_M
-    b = make_charuco_board(BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_M, CHARUCO_MARKER_M)
+    from gui_common import CHARUCO_MARKER_PRINTED_M, CHARUCO_SQUARE_PRINTED_M
+    b = make_charuco_board(BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_PRINTED_M, CHARUCO_MARKER_PRINTED_M)
     return [int(i) for i in np.ravel(b.getIds())], np.asarray(b.getObjPoints(), dtype=np.float64).reshape(-1, 4, 3)
 
 
@@ -982,3 +982,33 @@ def detect_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
              + (f"; WORKER ERROR {meta['worker_error']}" if meta.get("worker_error") else "")]
     from .spaam import spaam_report
     return lines + bench_report(run, set_dir) + live_report(run, set_dir) + overlay_report(run, set_dir) + spaam_report(run)
+
+
+def calibration_name(calib: Path) -> str:
+    """The set's ``calibration``: folder/file, plus the calibration run when the JSON names one (T6.13). The device
+    keys its eye-tap store by it, so taps measured under another camera model are not pooled."""
+    calib = Path(calib)
+    name = f"{calib.parent.name}/{calib.name}"
+    try:
+        run = json.loads(calib.read_text(encoding="utf-8")).get("run")
+    except (OSError, ValueError):
+        run = None
+    return f"{name} {run}" if run else name
+
+
+def update_set(out: Path = DEFAULT_SET, calib: Path = DEFAULT_CALIB) -> dict:
+    """Puts a new camera calibration (and the current targets) into an existing set: K, dist and ``calibration`` are
+    replaced, the synthetic plate frames re-rendered with the new model from their truth (so the bench's truth holds),
+    and the real Eye frames kept. Push the whole folder to ``files/b3a/`` afterwards."""
+    out = Path(out)
+    s = json.loads((out / "set.json").read_text(encoding="utf-8"))
+    truth = json.loads((out / "truth.json").read_text(encoding="utf-8"))
+    K, dist = eye_calibration(calib)
+    ids, corners = s["ids"], np.asarray(s["corners"], dtype=np.float64).reshape(-1, 4, 3)
+    for i, (name, t) in enumerate(sorted(truth.items())):
+        seed = int(Path(name).stem.split("_")[-1]) if Path(name).stem.split("_")[-1].isdigit() else i
+        write_pgm(out / name, render(K, dist, ids, corners, np.asarray(t["rvec"]), np.asarray(t["tvec"]), seed=seed))
+    s.update({"calibration": calibration_name(calib), "K": K.reshape(-1).tolist(), "dist": dist.tolist(),
+              "targets": targets(), "pose_lock": pose_lock_settings()})
+    (out / "set.json").write_text(json.dumps(s, indent=1), encoding="utf-8")
+    return s

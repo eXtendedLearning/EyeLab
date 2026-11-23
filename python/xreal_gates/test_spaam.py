@@ -91,3 +91,27 @@ class SpaamModel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TapPointSourcesTest(unittest.TestCase):
+    """T6.13: the tap point follows what the run logged, and fills in what T6.11 run 1 did not log."""
+
+    def test_board_centre_from_meta_or_nominal(self):
+        from xreal_gates.spaam import BOARD_CENTRE, board_centre
+        np.testing.assert_allclose(board_centre({}), BOARD_CENTRE)
+        np.testing.assert_allclose(board_centre({"board_centre_m": "0.0649 0.0909 0"}), [0.0649, 0.0909, 0.0])
+
+    def test_rgb_from_head_filled_in_only_when_missing(self):
+        from xreal_gates import b3a
+        from xreal_gates.spaam import rgb_meta
+        R, t, ok = b3a.rgb_from_head(rgb_meta({}))
+        self.assertTrue(ok)
+        self.assertAlmostEqual(float(t[2]), 0.0281137042, places=9)
+        logged = {"rgb_from_head": "ok; p 0 0 0; q 0 0 0 1"}
+        self.assertIs(rgb_meta(logged), logged)
+
+    def test_camera_key_from_the_set_line(self):
+        from xreal_gates.spaam import run_camera
+        meta = {"set": "eyelab-b3a/1; board plate_A; calibration cameras/beampro_eye.json 20261124_camcal; frames 32; markers 9"}
+        self.assertEqual(run_camera(meta), "cameras/beampro_eye.json 20261124_camcal")
+        self.assertEqual(run_camera({}), "?")

@@ -66,9 +66,9 @@ def latest_calib_run(root: Path) -> Optional[Path]:
 
 def _board():
     from calibrate import BOARD_COLS, BOARD_ROWS, make_charuco_board
-    from gui_common import CHARUCO_MARKER_M, CHARUCO_SQUARE_M
-    board = make_charuco_board(BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_M, CHARUCO_MARKER_M)
-    return board, (BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_M, CHARUCO_MARKER_M)
+    from gui_common import CHARUCO_MARKER_PRINTED_M, CHARUCO_SQUARE_PRINTED_M
+    board = make_charuco_board(BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_PRINTED_M, CHARUCO_MARKER_PRINTED_M)
+    return board, (BOARD_COLS, BOARD_ROWS, CHARUCO_SQUARE_PRINTED_M, CHARUCO_MARKER_PRINTED_M)
 
 
 def find_views(run_dir: Path, board) -> Tuple[List[View], int]:
@@ -190,3 +190,149 @@ def describe(r: CalibResult) -> List[str]:
         f"written {r.yaml_path}",
     ]
     return lines + [f"NOTE: {n}" for n in r.notes]
+
+
+# ---------------------------------------------------------------- T6.13: the Eye on the Beam Pro
+
+#: Tape distances of the T6.13 check steps (camera lens to the board's surface), millimetres.
+TAPE_STEPS = {"t50": 500.0, "t100": 1000.0}
+#: Accept a Beam Pro calibration only if the tape check's scale (tape change over pose distance change) is this close to 1.
+MAX_TAPE_SCALE_ERROR = 0.03
+#: Where the accepted Beam Pro Eye calibration goes: a camera profile like the GUI's, plus the JSON the frame set reads.
+BEAMPRO_PROFILE = Path(__file__).resolve().parents[1] / "config" / "cameras" / "beampro_eye.yaml"
+
+
+def _frame_steps(run_dir: Path) -> dict:
+    from .beampro import load_csv
+    return {int(r["seq"]): r["step"] for r in load_csv(Path(run_dir) / "live.csv")}
+
+
+def _views_in(paths: List[Path], board) -> List[View]:
+    det = cv2.aruco.CharucoDetector(board)
+    views = []
+    for path in paths:
+        gray = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if gray is None or (gray.shape[1], gray.shape[0]) != EYE_SIZE:
+            continue
+        cc, ci, _, _ = det.detectBoard(gray)
+        if ci is None or len(ci) < MIN_CORNERS:
+            continue
+        pts = cc.reshape(-1, 2)
+        views.append(View(path, cc, ci, pts.mean(axis=0),
+                          float(cv2.contourArea(cv2.convexHull(pts.astype(np.float32))))))
+    return views
+
+
+def plane_distance_mm(views: List[View], board, K: np.ndarray, dist: np.ndarray) -> Optional[float]:
+    """Median distance from the camera centre to the board's plane over ``views``, millimetres."""
+    out = []
+    for v in views:
+        obj, img = board.matchImagePoints(v.corners, v.ids)
+        ok, rv, tv = cv2.solvePnP(obj, img, K, dist)
+        if ok:
+            R = cv2.Rodrigues(rv)[0]
+            out.append(abs(float(R[:, 2] @ tv.ravel())) * 1000)
+    return float(np.median(out)) if out else None
+
+
+def tape_check(steps: dict, board, K: np.ndarray, dist: np.ndarray) -> dict:
+    """Distances of the tape steps under (K, dist) and the scale they imply: (1000 - 500) / (d100 - d50). The scale does
+    not depend on where the lens sits against the camera centre; the offset (tape - pose) is that distance."""
+    d = {name: plane_distance_mm(steps.get(name, []), board, K, dist) for name in TAPE_STEPS}
+    out = {"distances_mm": d}
+    if all(v is not None for v in d.values()):
+        a, b = d["t50"], d["t100"]
+        out["scale"] = (TAPE_STEPS["t100"] - TAPE_STEPS["t50"]) / (b - a) if b != a else None
+        out["lens_offset_mm"] = {n: TAPE_STEPS[n] - d[n] for n in TAPE_STEPS}
+    return out
+
+
+def calibrate_beampro(run_dir: Path, set_K: Optional[np.ndarray] = None, set_dist: Optional[np.ndarray] = None,
+                      max_views: int = MAX_VIEWS) -> dict:
+    """T6.13: the Eye's intrinsics on the Beam Pro from a ``camcal`` run's saved frames (move steps ``m_*``), checked
+    against the tape steps (t50, t100). Returns the report; ``accepted`` says whether the checks passed.
+
+    The vendor's intrinsics are not a reference here: T6.12's tape check found them (and the Surface calibration) 25-28 %
+    short in focal length for the Beam Pro's stream, so the usual vendor deviation check would refuse the right answer."""
+    from calibrate import MIN_FRAMES
+    run_dir = Path(run_dir)
+    board, (cols, rows, square, marker) = _board()
+    steps_of = _frame_steps(run_dir)
+    by_step: dict = {}
+    for path in sorted((run_dir / "frames").glob("*.pgm")):
+        try:
+            seq = int(path.stem.split("_")[-1])
+        except ValueError:
+            continue
+        by_step.setdefault(steps_of.get(seq, "?"), []).append(path)
+    move = [p for s, ps in by_step.items() if s.startswith("m_") for p in ps]
+    views = _views_in(move, board)
+    tape = {name: _views_in(by_step.get(name, []), board) for name in TAPE_STEPS}
+    if len(views) < MIN_FRAMES:
+        raise ValueError(f"{run_dir.name}: board found in {len(views)} of {len(move)} move frames; need {MIN_FRAMES}")
+    chosen = select_views(views, max_views)
+    cov = coverage(chosen)
+    std = _calibrate(chosen, board, 0)
+    rat = _calibrate(chosen, board, cv2.CALIB_RATIONAL_MODEL)
+    use_rational = rat[0] < RATIONAL_GAIN * std[0]
+    rms, K, dist, _ = rat if use_rational else std
+    check = tape_check(tape, board, K, dist)
+    report = {
+        "run": run_dir.name, "frames": {s: len(p) for s, p in sorted(by_step.items())},
+        "views_found": len(views), "views_used": len(chosen), "coverage": round(cov, 3),
+        "model": "rational (k1-k6, p1, p2)" if use_rational else "standard (k1, k2, p1, p2, k3)",
+        "rms_px": {"used": rms, "standard": std[0], "rational": rat[0]},
+        "K": K.tolist(), "dist": dist.tolist(), "size": list(EYE_SIZE),
+        "board": {"cols": cols, "rows": rows, "square_m": square, "marker_m": marker},
+        "tape_views": {n: len(v) for n, v in tape.items()}, "tape": check,
+        "vendor": vendor_camera().K.tolist(),
+    }
+    if set_K is not None:
+        report["tape_with_set"] = tape_check(tape, board, np.asarray(set_K, float).reshape(3, 3),
+                                             np.zeros(5) if set_dist is None else np.asarray(set_dist, float))
+    notes = []
+    if cov < MIN_COVERAGE:
+        notes.append(f"only {cov:.0%} of the image covered (need {MIN_COVERAGE:.0%})")
+    sc = check.get("scale")
+    if sc is None:
+        notes.append("no tape check (the board was not seen in t50 and t100)")
+    elif abs(sc - 1) > MAX_TAPE_SCALE_ERROR:
+        notes.append(f"tape scale {sc:.3f}: off by more than {MAX_TAPE_SCALE_ERROR:.0%}")
+    report["notes"] = notes
+    report["accepted"] = not notes
+    return report
+
+
+def write_beampro(report: dict, out_yaml: Path = BEAMPRO_PROFILE) -> Tuple[Path, Path]:
+    """The calibration as a camera profile (``calibrate.save_calibration`` YAML) and its JSON report beside it; the
+    JSON's ``K`` and ``dist`` are what ``b3a.eye_calibration`` and ``b3a-set`` read."""
+    from calibrate import save_calibration
+    out_yaml = Path(out_yaml)
+    out_yaml.parent.mkdir(parents=True, exist_ok=True)
+    b = report["board"]
+    save_calibration(str(out_yaml), np.asarray(report["K"]), np.asarray(report["dist"]).reshape(1, -1), EYE_SIZE,
+                     report["rms_px"]["used"], b["cols"], b["rows"], b["square_m"], b["marker_m"])
+    js = out_yaml.with_suffix(".json")
+    js.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return out_yaml, js
+
+
+def _tape_line(name: str, chk: dict) -> str:
+    d = chk["distances_mm"]
+    if chk.get("scale") is None:
+        return f"   tape check, {name}: distances {d}"
+    off = chk["lens_offset_mm"]
+    return (f"   tape check, {name}: t50 {d['t50']:.1f} mm, t100 {d['t100']:.1f} mm; scale {chk['scale']:.3f}; "
+            f"lens to camera centre {off['t50']:.1f} / {off['t100']:.1f} mm")
+
+
+def describe_beampro(r: dict) -> List[str]:
+    K = np.asarray(r["K"])
+    out = [f"{r['run']}: {r['views_used']} of {r['views_found']} views, coverage {r['coverage']:.0%}, {r['model']}, "
+           f"RMS {r['rms_px']['used']:.3f} px",
+           f"   fx {K[0, 0]:.1f} fy {K[1, 1]:.1f} cx {K[0, 2]:.1f} cy {K[1, 2]:.1f}; dist {np.round(r['dist'][:5], 4).tolist()}",
+           _tape_line("new calibration", r["tape"])]
+    if r.get("tape_with_set"):
+        out.append(_tape_line("the set's calibration", r["tape_with_set"]))
+    out.append("   ACCEPTED" if r["accepted"] else "   NOT ACCEPTED: " + "; ".join(r["notes"]))
+    return out

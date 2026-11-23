@@ -119,7 +119,7 @@ class B3aTest(unittest.TestCase):
         self.assertEqual(ts["plate_L"]["ids"], [40, 41, 42, 43])
         self.assertEqual(ts["board25"]["ids"], list(range(17)))           # 5 x 7 ChArUco: 17 markers
         c = np.asarray(ts["board25"]["corners"]).reshape(-1, 4, 3)
-        self.assertAlmostEqual(float(np.linalg.norm(c[0][1] - c[0][0])), 0.019, places=6)   # gui_common marker side
+        self.assertAlmostEqual(float(np.linalg.norm(c[0][1] - c[0][0])), 0.019 * 25.97 / 25.0, places=6)   # gui_common printed marker side
         self.assertEqual(b3a.pose_lock_settings(), {"min_ambiguity_ratio": 3.0, "ambiguity_min_separation_deg": 10.0,
                                                     "max_acquire_reproj_rms_px": 15.0})
         s = {"ids": [30], "corners": [0.0] * 12}
@@ -275,3 +275,33 @@ class B3aTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UpdateSetTest(unittest.TestCase):
+    """T6.13: a new camera calibration replaces the set's model and re-renders the synthetic frames."""
+
+    def test_update_set_swaps_the_camera_model(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from xreal_gates import b3a
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            old = tmp / "old" / "eye_calibration.json"
+            old.parent.mkdir()
+            old.write_text(json.dumps({"K": [[624, 0, 646], [0, 626, 357], [0, 0, 1]], "dist": [0, 0, 0, 0, 0]}))
+            new = tmp / "cameras" / "beampro_eye.json"
+            new.parent.mkdir()
+            new.write_text(json.dumps({"K": [[790, 0, 640], [0, 790, 360], [0, 0, 1]], "dist": [0, 0, 0, 0, 0],
+                                       "run": "20261124_100000_camcal"}))
+            out = tmp / "set"
+            b3a.make_set(out, old, empty=0)
+            before = (out / "frames" / "plate_00.pgm").read_bytes()
+            s = b3a.update_set(out, new)
+            self.assertEqual(s["K"][0], 790)
+            self.assertEqual(s["calibration"], "cameras/beampro_eye.json 20261124_100000_camcal")
+            self.assertNotEqual((out / "frames" / "plate_00.pgm").read_bytes(), before)
+            self.assertEqual(json.loads((out / "set.json").read_text())["K"][0], 790)
+            board25 = [t for t in s["targets"] if t["name"] == "board25"][0]
+            c = np.asarray(board25["corners"]).reshape(-1, 4, 3)[board25["ids"].index(8)].mean(axis=0)
+            np.testing.assert_allclose(c[:2], [2.5 * 0.02597, 3.5 * 0.02597], atol=1e-9)   # the printed board

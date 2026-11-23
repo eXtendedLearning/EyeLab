@@ -113,6 +113,7 @@ namespace EyeLab.Probes
         const string HeadFile = "head.csv";
         const string HeadHeader = "seq,cam_ts,ok,m0,m1,m2,m3,m4,m5,m6,m7,m8,m9,m10,m11,m12,m13,m14,m15";
         const int SaveEvery = 10;
+        const int SaveEveryCalib = 4;   // T6.13: about 5 frames a second for the calibration
         const int BenchReps = 3;
         const double CapHz = 15.0;
         const double RoiMaxAgeNs = 0.5e9;     // a box or prior older than this (by cam_ts) is not used
@@ -296,6 +297,39 @@ namespace EyeLab.Probes
             return c;
         }
 
+        // ------------------------------------------------------------------ T6.13 (camcal)
+        /// <summary>T6.13: the Eye's intrinsics on the Beam Pro. The glasses lie on the table facing the wearer, who moves
+        /// the board through the camera's view (every part of the picture, tilted each way, near and far); then the tape
+        /// check: the camera lens at 50.0 and 100.0 cm from the board, set with a tape, NEXT on the screen when set.</summary>
+        public static List<CueStep> CamcalCues()
+        {
+            var c = new List<CueStep>
+            {
+                new CueStep("s_ready", "Camera calibration. Put the glasses on the table, lenses facing you, and keep them still. Hold the ChArUco board " +
+                                       "in both hands about forty centimetres in front of them.", 14f, "Glasses on the table, board in your hands", ticks: true),
+                new CueStep("m_centre", "Board in the middle of the camera's view, facing it. Move it slowly.", 8f, "Board in the MIDDLE, facing the camera"),
+            };
+            (string id, string say, string show)[] moves =
+            {
+                ("m_tl", "Move it to the top corner on your right, and tilt it a little.", "Top corner on YOUR RIGHT"),
+                ("m_tr", "Now the top corner on your left.", "Top corner on YOUR LEFT"),
+                ("m_bl", "Bottom corner on your left.", "Bottom corner on YOUR LEFT"),
+                ("m_br", "Bottom corner on your right.", "Bottom corner on YOUR RIGHT"),
+                ("m_edges", "Slowly along all four edges of the view.", "Along all four EDGES"),
+                ("m_tilt_v", "Back to the middle. Tilt the top towards the camera, then away, about forty five degrees.", "TILT top towards, then away (45 deg)"),
+                ("m_tilt_h", "Now turn it left and right, about forty five degrees.", "TURN left, then right (45 deg)"),
+                ("m_near", "Closer, about twenty five centimetres, moving it around.", "CLOSER (25 cm), move around"),
+                ("m_far", "Farther, about seventy centimetres, tilted, moving around.", "FARTHER (70 cm), tilted, move around"),
+            };
+            foreach (var m in moves) c.Add(new CueStep(m.id, m.say, 10f, m.show, ticks: true));
+            c.Add(new CueStep("t50_place", "Distance check. Stand the board upright on the table. With a tape, put the glasses so the camera lens " +
+                                           "is exactly fifty centimetres from the board, facing it. Then tap NEXT.", 90f, "Lens EXACTLY 50.0 cm from the board, then NEXT"));
+            c.Add(new CueStep("t50", "Keep still.", 10f, "Keep still (50 cm)"));
+            c.Add(new CueStep("t100_place", "Now exactly one metre, the same way. Then tap NEXT.", 90f, "Lens EXACTLY 100.0 cm from the board, then NEXT"));
+            c.Add(new CueStep("t100", "Keep still.", 10f, "Keep still (100 cm)"));
+            return c;
+        }
+
         // ------------------------------------------------------------------ T6.12 (eyecal, eyecheck)
         public const string FitStep = "fit";
         public static readonly string[] EyeModes = { "sdk", "round", "all" };
@@ -354,6 +388,7 @@ namespace EyeLab.Probes
         {
             stepId = stepId ?? "";
             if (variant == "spaam") return new Plan("roi", 1, NiceRoi, "board25");
+            if (variant == "camcal") return new Plan("full", 2, 0, "board25");   // full frames: the board goes to the edges, tilted
             if (variant == "eyecal" || variant == "eyecheck")
                 return new Plan("roi", 1, NiceRoi, stepId.StartsWith("l_") ? "plate_L" : "board25");
             if (variant == "align")
@@ -509,11 +544,20 @@ namespace EyeLab.Probes
         EyeWarp m_Warp;
         string m_Mode = "";
         bool m_OverlayOn = true;
-        static readonly Vector3 BoardCentreUnity = new Vector3(0.0625f, -0.0875f, 0f);   // F applied to (62.5, 87.5, 0) mm
+        Vector3 m_BoardCentreCv = new Vector3(0.0625f, 0.0875f, 0f);   // marker 8's centre, board frame (OpenCV), from the set
+        Vector3 BoardCentreUnity => new Vector3(m_BoardCentreCv.x, -m_BoardCentreCv.y, m_BoardCentreCv.z);   // F applied
 
         /// <summary>The fit's result for the Beam Pro screen.</summary>
         public static string CalText { get; private set; } = "";
         public static string ActiveMode => s_Active != null ? s_Active.m_Mode : "";
+
+        /// <summary>Whether <paramref name="mode"/> has a model in the running probe (the screen marks the others).</summary>
+        public static bool ModeAvailable(string mode)
+        {
+            DetectProbe p = s_Active;
+            if (p?.m_Warp == null) return false;
+            return mode == "sdk" || (mode == "round" ? p.m_RoundL != null && p.m_RoundR != null : p.m_AllL != null && p.m_AllR != null);
+        }
 
         /// <summary>T6.12: which eye model the overlay is drawn with: "sdk", "round" (this run's taps) or "all" (every round).</summary>
         public static void SetMode(string mode)
@@ -560,7 +604,7 @@ namespace EyeLab.Probes
             if (m_RoundTaps.Count > 0)
             {
                 try { EyeModel.AppendTaps(m_RoundTaps); }
-                catch (Exception e) { m_Run.Meta("spaam_taps_save_error", e.Message); }
+                catch (Exception e) { m_Run.Meta("eye_taps_save_error", e.Message); }
             }
             foreach (string eye in new[] { "L", "R" })
             {
@@ -584,7 +628,7 @@ namespace EyeLab.Probes
                     right_cx_mm = (float)(m_AllR[0] * 1000), right_cy_mm = (float)(m_AllR[1] * 1000), right_cz_mm = (float)(m_AllR[2] * 1000),
                     left_taps = Sel(all, "L").Count, right_taps = Sel(all, "R").Count, wearings = wearings.Count,
                     left_loo_mm = (float)EyeModel.LeaveOneOutMm(Sel(all, "L")), right_loo_mm = (float)EyeModel.LeaveOneOutMm(Sel(all, "R")),
-                    source = $"T6.12 {m_Run.Dir}: all rounds in spaam_taps.csv",
+                    source = $"T6.12 {m_Run.Dir}: all rounds in eye_taps.csv", camera = CameraName,
                 };
                 try { EyeModel.Save(s); m_Run.Meta("eye_model_saved", EyeModel.ModelPath); }
                 catch (Exception e) { m_Run.Meta("eye_model_save_error", e.Message); }
@@ -602,6 +646,14 @@ namespace EyeLab.Probes
         public static void Tap()
         {
             DetectProbe p = s_Active;
+            if (p != null && p.m_Variant == "camcal")
+            {
+                // T6.13: NEXT ends a placement step (the glasses are set at the tape distance)
+                if (!p.m_Step.EndsWith("_place") || Time.realtimeSinceStartup - p.m_StepStart < 0.4f) return;
+                CuePlayer.Log(p.m_Run, "next", p.m_Step);
+                CuePlayer.Ensure().SkipStep();
+                return;
+            }
             if (p == null || p.m_Cross == null || !p.m_Cross.Visible || p.m_Step == "chk_L") return;
             if (Time.realtimeSinceStartup - p.m_StepStart < 0.4f) return;   // a double tap would land on the next step
             var ci = CultureInfo.InvariantCulture;
@@ -614,7 +666,7 @@ namespace EyeLab.Probes
             if (ok && p.m_Variant == "eyecal")
                 p.m_RoundTaps.Add(new EyeModel.Tap
                 {
-                    Wearing = Path.GetFileName(p.m_Run.Dir), Eye = p.m_Cross.Eye, Step = p.m_Step, Px = pe.x, Py = pe.y, Pz = pe.z,
+                    Wearing = Path.GetFileName(p.m_Run.Dir), Camera = p.CameraName, Eye = p.m_Cross.Eye, Step = p.m_Step, Px = pe.x, Py = pe.y, Pz = pe.z,
                     U = Math.Tan(p.m_Cross.Deg.x * Math.PI / 180), V = Math.Tan(p.m_Cross.Deg.y * Math.PI / 180),
                 });
             p.m_Run.Row(SpaamFile, SpaamHeader, string.Join(",", p.m_Taps.ToString(ci), p.m_Step, p.m_Cross.Eye, f(p.m_Cross.Deg.x), f(p.m_Cross.Deg.y),
@@ -676,7 +728,7 @@ namespace EyeLab.Probes
             var go = new GameObject("EyeLab DetectProbe");
             var p = go.AddComponent<DetectProbe>();
             p.m_Run = run;
-            p.m_Variant = Array.IndexOf(new[] { "budget", "lean", "overlay", "align", "spaam", "eyecal", "eyecheck" }, variant) >= 0 ? variant : "detect";
+            p.m_Variant = Array.IndexOf(new[] { "budget", "lean", "overlay", "align", "spaam", "eyecal", "eyecheck", "camcal" }, variant) >= 0 ? variant : "detect";
             run.Meta("variant", p.m_Variant);
             string info;
             try { info = ArucoNative.Info(); }
@@ -697,6 +749,8 @@ namespace EyeLab.Probes
                                    $"{RoiMaxAgeNs / 1e6} ms; roi nice {NiceRoi}; trusted: non-planar, or ratio >= " +
                                    $"{p.LockCfg.min_ambiguity_ratio}, or <= {p.LockCfg.ambiguity_min_separation_deg} deg apart (no prior); and rms <= {p.LockCfg.max_acquire_reproj_rms_px} px; next region = projected board joined with detected target markers" +
                                    (p.Drawn ? $"; or planar on >= {TrustBoardMarkers} markers" : ""));
+            p.LogDeviceGeometry();
+            p.FindBoardCentre();
             if (p.Drawn) p.StartOverlay();
 
             // Part 1: bench on the pushed frames, on a worker thread so the glasses keep drawing.
@@ -726,10 +780,10 @@ namespace EyeLab.Probes
                 p.m_Cross = SpaamCrosshair.Create(run);
                 run.Meta("spaam", $"crosshair at {SpaamCrosshair.DistanceM} m along (tan x, tan y, 1) in the SDK eye's frame; positions (deg) " +
                                   string.Join(" ", Array.ConvertAll(SpaamCrosshair.Positions, v => $"({v.x:F0},{v.y:F0})")) +
-                                  "; real point: board25 centre of the middle square (0.0625, 0.0875, 0) m in the board frame; head pose = Unity camera at the tap");
+                                  $"; real point: board25 centre of the middle square ({p.BoardCentreText}) m in the board frame; head pose = Unity camera at the tap");
             }
             float nextStatus = 0f;
-            List<CueStep> cues = p.m_Variant == "eyecal" ? EyecalCues() : p.m_Variant == "eyecheck" ? EyecheckCues() : p.m_Variant == "spaam" ? SpaamCues() : p.m_Variant == "align" ? AlignCues() : p.m_Variant == "overlay" ? OverlayCues() : p.m_Variant == "lean" ? LeanCues()
+            List<CueStep> cues = p.m_Variant == "camcal" ? CamcalCues() : p.m_Variant == "eyecal" ? EyecalCues() : p.m_Variant == "eyecheck" ? EyecheckCues() : p.m_Variant == "spaam" ? SpaamCues() : p.m_Variant == "align" ? AlignCues() : p.m_Variant == "overlay" ? OverlayCues() : p.m_Variant == "lean" ? LeanCues()
                                : p.m_Variant == "budget" ? BudgetCues() : DetectCues();
             s_Active = p;
             yield return CuePlayer.Ensure().Play(run, cues, (text, left, frac, counter) =>
@@ -744,7 +798,7 @@ namespace EyeLab.Probes
                 p.m_Step = step.Id;
                 p.m_ThreadsWanted = PlanFor(p.m_Variant, step.Id).Threads;
                 if (p.m_Variant == "align" && p.m_Overlay != null) p.m_Overlay.SetStyle(step.Id.Contains("_solid"));
-                if (p.m_Variant == "spaam" || p.m_Variant == "eyecal" || p.m_Variant == "eyecheck") p.SpaamOnStep(step.Id);
+                if (p.m_Variant == "spaam" || p.m_Variant == "eyecal" || p.m_Variant == "eyecheck" || p.m_Variant == "camcal") p.SpaamOnStep(step.Id);
             });
             p.StopLive();
             s_Active = null;
@@ -1022,12 +1076,15 @@ namespace EyeLab.Probes
         bool Drawn => m_Variant == "overlay" || m_Variant == "align" || m_Variant == "eyecal" || m_Variant == "eyecheck";
 
         /// <summary>The board rule (12+ markers trusted) applies to every variant from T6.9 on; T6.11 run 1 lacked it.</summary>
-        bool BoardRule => Drawn || m_Variant == "spaam";
+        bool BoardRule => Drawn || m_Variant == "spaam" || m_Variant == "camcal";
+
+        /// <summary>The camera calibration this run poses with (the set's name), the key of the eye-tap store.</summary>
+        string CameraName => string.IsNullOrEmpty(m_Set?.calibration) ? "?" : m_Set.calibration;
 
         /// <summary>T6.12: the earlier rounds' taps, their model, and the per-eye correction for the overlay.</summary>
         void StartEyeModel()
         {
-            m_Earlier = EyeModel.LoadTaps();
+            m_Earlier = EyeModel.LoadTaps(CameraName);
             var wearings = new HashSet<string>();
             int nl = 0, nr = 0;
             var l = new List<EyeModel.Tap>();
@@ -1035,7 +1092,7 @@ namespace EyeLab.Probes
             foreach (var t in m_Earlier) { wearings.Add(t.Wearing); if (t.Eye == "L") { nl++; l.Add(t); } else { nr++; r.Add(t); } }
             m_AllL = EyeModel.Fit(l);
             m_AllR = EyeModel.Fit(r);
-            m_Run.Meta("eye_taps_earlier", $"{m_Earlier.Count} taps (L {nl}, R {nr}) from {wearings.Count} wearing(s) in {EyeModel.TapsPath}");
+            m_Run.Meta("eye_taps_earlier", $"{m_Earlier.Count} taps (L {nl}, R {nr}) from {wearings.Count} wearing(s) in {EyeModel.TapsPath}, camera '{CameraName}'");
             m_Run.Meta("eye_all_at_start", $"L {EyeModel.Mm(m_AllL)}, R {EyeModel.Mm(m_AllR)}");
             m_Warp = EyeWarp.Create();
             if (m_Overlay != null) { m_Overlay.SetStyle(true); m_Overlay.SetEyeWarp(true); }
@@ -1055,6 +1112,16 @@ namespace EyeLab.Probes
                 m_Run.Meta("view_offset_model", "in_head' = R_off * (rgb_from_head * cam) + t_off, head frame (Unity: x right, y up, z forward); " +
                                                 "turn = about the head origin (R_off' = dq R_off, t_off' = dq t_off), move = t_off += d");
             }
+            m_Run.Meta("overlay_chain", "world = head(cam_ts) native with z flipped (S R S, S = diag(1,1,-1)) * rgb_from_head * " +
+                                        "F R F, t (x,-y,z); latest trusted pose, no filter");
+            m_Overlay = PoseOverlay.Create(m_Set);
+            m_Run.Meta("overlay_solid_shader", m_Overlay.SolidShader);
+        }
+
+        /// <summary>The Eye camera's pose in the head and the vendor's intrinsics, logged by every variant: T6.11 run 1
+        /// (spaam) logged neither, and its offline tap points fell back to identity (2026-11-23).</summary>
+        void LogDeviceGeometry()
+        {
             try
             {
                 Pose pose = default;
@@ -1071,8 +1138,6 @@ namespace EyeLab.Probes
             m_Run.Meta("rgb_from_head", (m_HasRgbFromHead ? "ok" : "unavailable, identity") +
                        $"; p {rp.x.ToString("R", ci)} {rp.y.ToString("R", ci)} {rp.z.ToString("R", ci)}" +
                        $"; q {rq.x.ToString("R", ci)} {rq.y.ToString("R", ci)} {rq.z.ToString("R", ci)} {rq.w.ToString("R", ci)}");
-            m_Run.Meta("overlay_chain", "world = head(cam_ts) native with z flipped (S R S, S = diag(1,1,-1)) * rgb_from_head * " +
-                                        "F R F, t (x,-y,z); latest trusted pose, no filter");
             try
             {
                 // the vendor's Eye intrinsics on this host, against the set's calibration (Surface, 1280x720: vendor fx 2.7 % short)
@@ -1087,9 +1152,28 @@ namespace EyeLab.Probes
             {
                 m_Run.Meta("eye_vendor_intrinsics", "error " + e.GetType().Name + ": " + e.Message);
             }
-            m_Overlay = PoseOverlay.Create(m_Set);
-            m_Run.Meta("overlay_solid_shader", m_Overlay.SolidShader);
         }
+
+        /// <summary>The tap point: the centre of board25's middle square (marker 8) from the set's own corners, so it
+        /// follows the board size the set poses with (the print is 3.9 % over nominal, T6.13). Logged as board_centre_m.</summary>
+        void FindBoardCentre()
+        {
+            var ci = CultureInfo.InvariantCulture;
+            if (m_Set?.targets != null)
+                foreach (Target t in m_Set.targets)
+                {
+                    if (t.name != "board25" || t.ids == null || t.corners == null) continue;
+                    int k = Array.IndexOf(t.ids, 8);
+                    if (k < 0 || t.corners.Length < (k + 1) * 12) break;
+                    double x = 0, y = 0, z = 0;
+                    for (int c = 0; c < 4; c++) { x += t.corners[k * 12 + c * 3]; y += t.corners[k * 12 + c * 3 + 1]; z += t.corners[k * 12 + c * 3 + 2]; }
+                    m_BoardCentreCv = new Vector3((float)(x / 4), (float)(y / 4), (float)(z / 4));
+                    break;
+                }
+            m_Run.Meta("board_centre_m", $"{m_BoardCentreCv.x.ToString("R", ci)} {m_BoardCentreCv.y.ToString("R", ci)} {m_BoardCentreCv.z.ToString("R", ci)}");
+        }
+
+        string BoardCentreText => string.Format(CultureInfo.InvariantCulture, "{0:F5}, {1:F5}, {2:F5}", m_BoardCentreCv.x, m_BoardCentreCv.y, m_BoardCentreCv.z);
 
         /// <summary>Main thread: a trusted pose with its head pose moves the drawing; the shown pose goes to overlay.csv.</summary>
         void Apply(in Done d)
@@ -1267,7 +1351,7 @@ namespace EyeLab.Probes
                     }
                     d.Ids = ids.ToString();
                     d.Corners = corners.ToString();
-                    if (m_Processed % SaveEvery == 0) d.SaveCopy = (byte[])m_Work.Clone();
+                    if (m_Processed % (m_Variant == "camcal" ? SaveEveryCalib : SaveEvery) == 0) d.SaveCopy = (byte[])m_Work.Clone();
                     m_LastTotal = d.R.TotalMs;
                     m_LastMode = plan.Mode;
                     Interlocked.Increment(ref m_Processed);
