@@ -980,4 +980,5 @@ def detect_report(run: Path, set_dir: Path = DEFAULT_SET) -> List[str]:
              f"   glasses seen: {meta.get('glasses_seen', '?')}; Eye frames {meta.get('eye_frames', '?')}, processed "
              f"{meta.get('processed', '?')}, skipped {meta.get('skipped', '?')}"
              + (f"; WORKER ERROR {meta['worker_error']}" if meta.get("worker_error") else "")]
-    return lines + bench_report(run, set_dir) + live_report(run, set_dir) + overlay_report(run, set_dir)
+    from .spaam import spaam_report
+    return lines + bench_report(run, set_dir) + live_report(run, set_dir) + overlay_report(run, set_dir) + spaam_report(run)

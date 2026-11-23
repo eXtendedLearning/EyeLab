@@ -33,6 +33,9 @@ namespace EyeLab.Probes
     /// <item><b>align</b> (T6.10): the overlay with the wearer's view offset (<see cref="ViewOffset"/>) between the head and
     /// the camera, set by eye with buttons on the Beam Pro and saved for the next run; a one-eye check before it, checks
     /// at two distances after it, and the flat drawing against the solid one.</item>
+    /// <item><b>spaam</b> (T6.11): no drawing; a crosshair fixed in one eye's display (<see cref="SpaamCrosshair"/>) that
+    /// the wearer lines up with the centre of the board's middle square and taps, at three distances, four display
+    /// positions per eye. The taps go to <c>spaam.csv</c>; the per-eye model is fitted offline.</item>
     /// </list>
     /// Each run has two parts:
     /// <list type="number">
@@ -242,10 +245,66 @@ namespace EyeLab.Probes
             new CueStep("l_style", "Which shows better where the plate is in space? Answer on the screen.", 8f, "Flat or solid? Answer on the screen"),
         };
 
-        /// <summary>The plan of a step: T6.6 steps by their thread count; T6.7 to T6.10 steps by their prefix and mode.</summary>
+        // ------------------------------------------------------------------ T6.11 (spaam)
+        // T6.10 run 1: a rigid offset cannot align at arm's length; the error grows as the target comes nearer, and each
+        // eye's drawing is off the opposite way (right eye: left of the marker; left eye: right of it). That is the eye
+        // position against the SDK's, which SPAAM measures one eye at a time. The real point is the centre of the board's
+        // middle square (marker 8, 62.5 / 87.5 mm), the board's pose being the most reliable one.
+        public static readonly string[] EyeCheckAnswers = { "left eye only", "right eye only", "both eyes", "not shown" };
+        public static readonly int[] SpaamDepthsCm = { 60, 35, 100 };
+        public const int SpaamPerEye = 4;
+        const float SpaamTapTimeout = 40f;
+
+        public static List<CueStep> SpaamCues()
+        {
+            var c = new List<CueStep>
+            {
+                new CueStep("s_ready", "Calibration. The ChArUco board upright on the table, about sixty centimetres away. You will put a " +
+                                       "green crosshair on the centre of the board's middle square, one eye at a time, and tap the screen.", 14f,
+                            "ChArUco board upright, about 60 cm", ticks: true),
+                new CueStep("chk_L", "A green crosshair should be in your left eye only. Close each eye in turn, then answer on the screen.", 12f,
+                            "Which eye sees the crosshair? Answer on the screen"),
+            };
+            foreach (int cm in SpaamDepthsCm)
+            {
+                string words = cm == 60 ? "sixty centimetres" : cm == 35 ? "thirty five centimetres" : "one metre";
+                c.Add(new CueStep($"d{cm}_place", $"Stand so the board is about {words} from your eyes.", 10f, $"Board at about {cm} cm", ticks: true));
+                foreach (string eye in new[] { "L", "R" })
+                {
+                    string name = eye == "L" ? "Left" : "Right", other = eye == "L" ? "right" : "left";
+                    for (int k = 1; k <= SpaamPerEye; k++)
+                    {
+                        string say = k == 1
+                            ? $"{name} eye. Close your {other} eye. Move your head until the crosshair centre is on the centre of the middle square, then tap."
+                            : "Next.";
+                        c.Add(new CueStep($"d{cm}_{eye}_{k}", say, SpaamTapTimeout,
+                                          $"{name.ToUpperInvariant()} eye: crosshair on the middle square, TAP ({k}/{SpaamPerEye})"));
+                    }
+                }
+            }
+            c.Add(new CueStep("s_done", "Calibration taps done.", 3f, "Done"));
+            return c;
+        }
+
+        /// <summary>A tap step's eye and crosshair position: "d60_L_3" gives ("L", position 3); chk_L the left eye's centre.</summary>
+        public static bool SpaamStep(string stepId, out string eye, out Vector2 deg)
+        {
+            eye = "";
+            deg = Vector2.zero;
+            if (stepId == "chk_L") { eye = "L"; return true; }
+            string[] parts = (stepId ?? "").Split('_');
+            if (parts.Length != 3 || parts[0].Length < 2 || parts[0][0] != 'd' || (parts[1] != "L" && parts[1] != "R")) return false;
+            if (!int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int k) || k < 1 || k > SpaamCrosshair.Positions.Length) return false;
+            eye = parts[1];
+            deg = SpaamCrosshair.Positions[k - 1];
+            return true;
+        }
+
+        /// <summary>The plan of a step: T6.6 steps by their thread count; T6.7 to T6.11 steps by their prefix and mode.</summary>
         public static Plan PlanFor(string variant, string stepId)
         {
             stepId = stepId ?? "";
+            if (variant == "spaam") return new Plan("roi", 1, NiceRoi, "board25");
             if (variant == "align")
                 return new Plan("roi", 1, NiceRoi, stepId.StartsWith("l_") ? "plate_L" : "board25");
             if (variant == "overlay")
@@ -383,6 +442,52 @@ namespace EyeLab.Probes
             }
         }
 
+        // T6.11 spaam
+        SpaamCrosshair m_Cross;
+        int m_Taps;
+        float m_StepStart;
+        long m_LastTrustedNs;
+        const string SpaamFile = "spaam.csv";
+        const string SpaamHeader = "tap,step,eye,deg_x,deg_y,mono_ns,unity_frame,head_px,head_py,head_pz,head_qx,head_qy,head_qz,head_qw,board_age_ms";
+
+        /// <summary>The age of the latest trusted board pose (ms), for the Beam Pro screen; -1 when none.</summary>
+        public static double BoardAgeMs => s_Active == null || s_Active.m_LastTrustedNs == 0 ? -1 : (ProbeClocks.MonoNs - s_Active.m_LastTrustedNs) / 1e6;
+
+        /// <summary>T6.11: the crosshair is on the point. Logs the head pose now and goes to the next step.</summary>
+        public static void Tap()
+        {
+            DetectProbe p = s_Active;
+            if (p == null || p.m_Cross == null || !p.m_Cross.Visible || p.m_Step == "chk_L") return;
+            if (Time.realtimeSinceStartup - p.m_StepStart < 0.4f) return;   // a double tap would land on the next step
+            var ci = CultureInfo.InvariantCulture;
+            Camera cam = Camera.main;
+            Vector3 hp = cam != null ? cam.transform.localPosition : Vector3.zero;
+            Quaternion hq = cam != null ? cam.transform.localRotation : Quaternion.identity;
+            string f(float v) => v.ToString("R", ci);
+            p.m_Taps++;
+            p.m_Run.Row(SpaamFile, SpaamHeader, string.Join(",", p.m_Taps.ToString(ci), p.m_Step, p.m_Cross.Eye, f(p.m_Cross.Deg.x), f(p.m_Cross.Deg.y),
+                ProbeClocks.MonoNs.ToString(ci), Time.frameCount.ToString(ci), f(hp.x), f(hp.y), f(hp.z), f(hq.x), f(hq.y), f(hq.z), f(hq.w),
+                BoardAgeMs.ToString("F0", ci)));
+            CuePlayer.Log(p.m_Run, "tap", p.m_Step + ":" + p.m_Taps.ToString(ci));
+            CuePlayer.Ensure().SkipStep();
+        }
+
+        /// <summary>T6.11: the last tap was not aligned; the fit drops it.</summary>
+        public static void BadTap()
+        {
+            DetectProbe p = s_Active;
+            if (p == null || p.m_Taps == 0) return;
+            CuePlayer.Log(p.m_Run, "tap_bad", p.m_Step + ":" + p.m_Taps.ToString(CultureInfo.InvariantCulture));
+        }
+
+        void SpaamOnStep(string stepId)
+        {
+            m_StepStart = Time.realtimeSinceStartup;
+            if (m_Cross == null) return;
+            if (SpaamStep(stepId, out string eye, out Vector2 deg)) m_Cross.Show(eye, deg);
+            else m_Cross.Hide();
+        }
+
         /// <summary>T6.10: "done" ends the alignment step early.</summary>
         public static void AlignDone()
         {
@@ -412,7 +517,7 @@ namespace EyeLab.Probes
             var go = new GameObject("EyeLab DetectProbe");
             var p = go.AddComponent<DetectProbe>();
             p.m_Run = run;
-            p.m_Variant = variant == "budget" || variant == "lean" || variant == "overlay" || variant == "align" ? variant : "detect";
+            p.m_Variant = variant == "budget" || variant == "lean" || variant == "overlay" || variant == "align" || variant == "spaam" ? variant : "detect";
             run.Meta("variant", p.m_Variant);
             string info;
             try { info = ArucoNative.Info(); }
@@ -456,8 +561,15 @@ namespace EyeLab.Probes
 
             // Part 2: live on the Eye.
             p.StartLive();
+            if (p.m_Variant == "spaam")
+            {
+                p.m_Cross = SpaamCrosshair.Create(run);
+                run.Meta("spaam", $"crosshair at {SpaamCrosshair.DistanceM} m along (tan x, tan y, 1) in the SDK eye's frame; positions (deg) " +
+                                  string.Join(" ", Array.ConvertAll(SpaamCrosshair.Positions, v => $"({v.x:F0},{v.y:F0})")) +
+                                  "; real point: board25 centre of the middle square (0.0625, 0.0875, 0) m in the board frame; head pose = Unity camera at the tap");
+            }
             float nextStatus = 0f;
-            List<CueStep> cues = p.m_Variant == "align" ? AlignCues() : p.m_Variant == "overlay" ? OverlayCues() : p.m_Variant == "lean" ? LeanCues()
+            List<CueStep> cues = p.m_Variant == "spaam" ? SpaamCues() : p.m_Variant == "align" ? AlignCues() : p.m_Variant == "overlay" ? OverlayCues() : p.m_Variant == "lean" ? LeanCues()
                                : p.m_Variant == "budget" ? BudgetCues() : DetectCues();
             s_Active = p;
             yield return CuePlayer.Ensure().Play(run, cues, (text, left, frac, counter) =>
@@ -472,11 +584,14 @@ namespace EyeLab.Probes
                 p.m_Step = step.Id;
                 p.m_ThreadsWanted = PlanFor(p.m_Variant, step.Id).Threads;
                 if (p.m_Variant == "align" && p.m_Overlay != null) p.m_Overlay.SetStyle(step.Id.Contains("_solid"));
+                if (p.m_Variant == "spaam") p.SpaamOnStep(step.Id);
             });
             p.StopLive();
             s_Active = null;
             while (p.m_Done.TryDequeue(out Done d)) p.Write(d);
             if (p.m_Overlay != null) Destroy(p.m_Overlay.gameObject);
+            if (p.m_Cross != null) Destroy(p.m_Cross.gameObject);
+            run.Meta("spaam_taps", p.m_Taps.ToString(CultureInfo.InvariantCulture));
             if (p.m_Offset != null)
                 run.Meta("view_offset_end", p.m_Offset.Csv() + "; " + p.m_Offset.Describe() + (p.m_OffsetSaved ? "; saved" : "; not saved"));
             run.Meta("off_skipped", p.m_OffSkipped.ToString(CultureInfo.InvariantCulture));
@@ -792,6 +907,7 @@ namespace EyeLab.Probes
         /// <summary>Main thread: a trusted pose with its head pose moves the drawing; the shown pose goes to overlay.csv.</summary>
         void Apply(in Done d)
         {
+            if (d.Accepted) m_LastTrustedNs = d.End;
             if (m_Overlay == null || !d.Accepted || !d.HeadOk || d.Mode == "off") return;
             PoseOverlay.CvToUnity(d.R.R0, d.R.R1, d.R.R2, d.R.T0, d.R.T1, d.R.T2, out Vector3 camP, out Quaternion camQ);
             PoseOverlay.NativeHeadToUnity(d.Head, out Vector3 headP, out Quaternion headQ);

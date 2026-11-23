@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.013<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.014<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -16,6 +16,23 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 ## [Unreleased]
 
 ### Added
+
+- (0.4.014) T6.10 run 1 analysed (`docs/tasks/T6.10-align-by-eye.md`).
+  - The drawing stays room-fixed (1.5 mm still), but a rigid head-frame view offset cannot align it at arm's length:
+    38 cm *clearly off*, 96 cm *a few mm off*.
+  - Each eye's drawing is off the opposite way (left eye right of the marker, right eye left of it), so it floats in
+    front of the target.
+  - Reading: the eye's centre of projection is not the SDK's, plus focal rivalry (the display focuses far away) and
+    the board's periodic grid.
+  - The solid style was preferred.
+- (0.4.014) T6.11 built (`docs/tasks/T6.11-spaam-taps.md`), not run yet: per-eye SPAAM calibration taps.
+  - **Crosshair:** fixed in one eye's display (`SpaamCrosshair.cs`, eye mask in `EyeLabVertexColor.shader`), lined up
+    with the centre of the board's middle square at 60, 35 and 100 cm, 4 display positions per eye. One tap per step
+    on a big button, with "last tap was bad".
+  - **SDK eye model logged:** display poses and projections per eye, XR eye positions.
+  - **Fit** (`python/xreal_gates/spaam.py`): the off-axis pinhole eye-display model per eye (eye centre, display
+    distance, scale, centre), the SDK model's signed error by depth, a DLT centre of projection, and the eye spacing.
+  - The main page shows only T6.11.
 
 - (0.4.013) T6.9 run 1 analysed (`docs/tasks/T6.9-overlay-b3b.md`). The drawing is room-fixed to a few millimetres:
   - plate L still 1.4-6.0 mm std (1.0 mm high-pass), mostly 6DoF drift along the line of sight; 3.6 mm while moving;

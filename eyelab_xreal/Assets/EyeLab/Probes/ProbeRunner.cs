@@ -15,7 +15,7 @@ namespace EyeLab.Probes
     [Serializable]
     public sealed class ProbeConfig
     {
-        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | loop | sync | pan | render | detect | budget | lean | overlay | align | all
+        public string probe = "";          // inventory | chain | timecode | head | head_eye | head_eye_3dof | stereo | loop | sync | pan | render | detect | budget | lean | overlay | align | spaam | all
         public float seconds = 0f;         // 0 = the probe's default
         public float imu_seconds = 20f;
         public int save_every = 0;         // chain: 0; timecode: 1
@@ -48,6 +48,10 @@ namespace EyeLab.Probes
         GameObject m_AlignPage, m_AlignRate, m_AlignControls, m_AlignStyle;
         Text m_AlignOffset, m_AlignMode, m_AlignStepSize, m_AlignMinus, m_AlignPlus;
         bool m_AlignRun, m_AlignTurn = true, m_AlignFine;
+        // T6.11 spaam run: one big tap button, "last tap bad", and the eye-check answers in chk_L
+        GameObject m_SpaamPage, m_SpaamTap, m_SpaamCheck;
+        Text m_SpaamInfo;
+        bool m_SpaamRun;
 
         // ------------------------------------------------------------------ T6.3 cue scripts (Jack, 2026-11-18)
         static readonly CueStep[] LoopCues =
@@ -144,10 +148,20 @@ namespace EyeLab.Probes
             if (m_RatePanel != null) m_RatePanel.SetActive(page == m_RatePanel);
             if (m_OverlayRatePanel != null) m_OverlayRatePanel.SetActive(page == m_OverlayRatePanel);
             if (m_AlignPage != null) m_AlignPage.SetActive(page == m_AlignPage);
+            if (m_SpaamPage != null) m_SpaamPage.SetActive(page == m_SpaamPage);
         }
 
         void Update()
         {
+            if (m_SpaamRun && m_SpaamPage != null)
+            {
+                string s = DetectProbe.ActiveStep;
+                bool check = s == "chk_L";
+                if (m_SpaamCheck.activeSelf != check) m_SpaamCheck.SetActive(check);
+                if (m_SpaamTap.activeSelf == check) m_SpaamTap.SetActive(!check);
+                double age = DetectProbe.BoardAgeMs;
+                m_SpaamInfo.text = (age < 0 ? "Board not seen yet" : age < 500 ? "Board seen" : $"Board last seen {age / 1000:F1} s ago") + "   |   " + s;
+            }
             if (!m_AlignRun || m_AlignPage == null) return;
             string step = DetectProbe.ActiveStep;
             bool align = step == DetectProbe.AlignStep, style = step == "l_style";
@@ -203,6 +217,7 @@ namespace EyeLab.Probes
             if (p == "lean") yield return Detect(cfg, "lean");
             if (p == "overlay") yield return Detect(cfg, "overlay");
             if (p == "align") yield return Detect(cfg, "align");
+            if (p == "spaam") yield return Detect(cfg, "spaam");
             m_Glasses?.ClearCue();
             ShowPage(m_Panel);
             m_Busy = false;
@@ -261,12 +276,14 @@ namespace EyeLab.Probes
             {
                 run.Meta("config", JsonUtility.ToJson(cfg));
                 GlassesMeta(run);
-                bool overlay = variant == "overlay" || variant == "align";
+                bool overlay = variant == "overlay" || variant == "align" || variant == "spaam";
                 if (variant == "overlay") ShowPage(m_OverlayRatePanel);
                 if (variant == "align") { m_AlignRun = true; ShowPage(m_AlignPage); }
+                if (variant == "spaam") { m_SpaamRun = true; ShowPage(m_SpaamPage); }
                 if (overlay) m_Glasses?.SetOverlayLayout(true);
                 yield return DetectProbe.Run(run, SetStatus, ShowCue, variant);
                 m_AlignRun = false;
+                m_SpaamRun = false;
                 if (overlay) m_Glasses?.SetOverlayLayout(false);
                 SetStatus(variant + " done: " + Path.GetFileName(run.Dir));
             }
@@ -495,7 +512,7 @@ namespace EyeLab.Probes
             m_Glasses = GlassesView.Create(font);
 
             m_Panel = Column(canvas.transform);
-            AddButton(font, "T6.10  Align the overlay by eye: board, plate L  (5 min)", new ProbeConfig { probe = "align" });
+            AddButton(font, "T6.11  Eye calibration taps (SPAAM): board  (4 min)", new ProbeConfig { probe = "spaam" });
             AddAction(font, "Other runs", () => ShowPage(m_Panel2), new Color(0.22f, 0.22f, 0.25f, 0.9f));
             AddAction(font, "Quit EyeLab", () => { Debug.Log("[EyeLab probe] quit button"); Application.Quit(); });
 
@@ -507,6 +524,7 @@ namespace EyeLab.Probes
             AddAction(font, "Text only", () => AnswerGlasses("text only"), new Color(0.35f, 0.3f, 0.1f, 0.9f), row);
             AddAction(font, "Nothing", () => AnswerGlasses("nothing"), new Color(0.45f, 0.1f, 0.1f, 0.9f), row);
             AddAction(font, "Place square ahead", () => m_Glasses?.PlaceReference(), new Color(0.1f, 0.25f, 0.45f, 0.9f), m_Panel2);
+            AddButton(font, "T6.10  Align the overlay by eye: board, plate L  (5 min)", new ProbeConfig { probe = "align" }, m_Panel2);
             AddButton(font, "T6.9  Overlay in the glasses: plate L, board  (2 min)", new ProbeConfig { probe = "overlay" }, m_Panel2);
             AddButton(font, "T6.8  Lean detection: board, plate L tilted  (2 min)", new ProbeConfig { probe = "lean" }, m_Panel2);
             AddButton(font, "T6.7  Detection budget: plate A, plate L, board  (2.5 min)", new ProbeConfig { probe = "budget" }, m_Panel2);
@@ -549,6 +567,7 @@ namespace EyeLab.Probes
                 AddAction(font, char.ToUpperInvariant(answer[0]) + answer.Substring(1), () => DetectProbe.Rate(answer), overlayColors[i], m_OverlayRatePanel);
             }
             BuildAlignPage(canvas.transform, font, overlayColors);
+            BuildSpaamPage(canvas.transform, font, overlayColors);
             ShowPage(m_Panel);
             Debug.Log("[EyeLab probe] buttons built on " + (canvas.gameObject.name));
         }
@@ -596,6 +615,31 @@ namespace EyeLab.Probes
             SetAlignLabels();
             m_AlignStyle.SetActive(false);
             m_AlignControls.SetActive(false);
+        }
+
+        /// <summary>
+        /// T6.11: the SPAAM run's page. A tap anywhere on the big button records the alignment and goes to the next
+        /// crosshair; "last tap was bad" marks the previous one for the fit to drop; in chk_L, which eye sees the crosshair.
+        /// </summary>
+        void BuildSpaamPage(Transform canvas, Font font, Color[] colors)
+        {
+            m_SpaamPage = Column(canvas);
+            m_SpaamInfo = MakeText(m_SpaamPage.transform, font, Vector2.zero, Vector2.one, 26);
+            m_SpaamInfo.alignment = TextAnchor.MiddleCenter;
+            m_SpaamInfo.gameObject.AddComponent<LayoutElement>().preferredHeight = 60;
+            m_SpaamTap = Sub(m_SpaamPage.transform);
+            m_SpaamTap.GetComponent<LayoutElement>().flexibleHeight = 6;
+            AddAction(font, "ALIGNED: tap anywhere here", DetectProbe.Tap, new Color(0.12f, 0.3f, 0.15f, 0.9f), m_SpaamTap);
+            m_SpaamCheck = Sub(m_SpaamPage.transform);
+            m_SpaamCheck.GetComponent<LayoutElement>().flexibleHeight = 6;
+            for (int i = 0; i < DetectProbe.EyeCheckAnswers.Length; i++)
+            {
+                string answer = DetectProbe.EyeCheckAnswers[i];
+                AddAction(font, char.ToUpperInvariant(answer[0]) + answer.Substring(1), () => DetectProbe.Rate(answer), colors[i + 1], m_SpaamCheck);
+            }
+            Transform bad = Sub(m_SpaamPage.transform).transform;
+            AddAction(font, "Last tap was bad", DetectProbe.BadTap, new Color(0.45f, 0.1f, 0.1f, 0.9f), bad);
+            m_SpaamCheck.SetActive(false);
         }
 
         static GameObject Sub(Transform parent)
