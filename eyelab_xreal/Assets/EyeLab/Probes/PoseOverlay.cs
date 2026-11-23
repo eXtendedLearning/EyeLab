@@ -157,6 +157,12 @@ namespace EyeLab.Probes
             return img;
         }
 
+        /// <summary>T6.12: the solid style drawn per eye with the eye model (<see cref="EyeWarp"/>); the flat canvas is not.</summary>
+        public void SetEyeWarp(bool on)
+        {
+            foreach (Drawn d in m_Drawn.Values) d.Mat.SetFloat("_EyeWarp", on ? 1f : 0f);
+        }
+
         /// <summary>Flat strips (T6.9) or solid bars and posts (T6.10).</summary>
         public void SetStyle(bool solid)
         {

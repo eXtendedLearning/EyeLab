@@ -860,7 +860,7 @@ def overlay_report(run: Path, set_dir: Path = DEFAULT_SET, refresh_hz: float = 6
     from .beampro import load_json
     run = Path(run)
     meta = load_json(run)
-    if meta.get("variant") not in ("overlay", "align"):
+    if meta.get("variant") not in ("overlay", "align", "eyecal", "eyecheck"):
         return []
     Rr, tr, rgb_ok = rgb_from_head(meta)
     rgb = (Rr, tr)

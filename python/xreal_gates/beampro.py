@@ -434,7 +434,7 @@ def report(run: Path) -> List[str]:
     probe = load_json(run).get("probe", "")
     if probe == "inventory":
         return inventory_report(run)
-    if probe in ("detect", "budget", "lean", "overlay", "align", "spaam"):
+    if probe in ("detect", "budget", "lean", "overlay", "align", "spaam", "eyecal", "eyecheck"):
         from . import b3a
         return b3a.detect_report(run)
     if probe == "render":

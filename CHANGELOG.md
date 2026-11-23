@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.014<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.015<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -17,6 +17,26 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.4.015) T6.11 run 1 analysed (`docs/tasks/T6.11-spaam-taps.md`). 24 taps, all usable once the board rule applies to
+  SPAAM runs.
+  - **SDK model error:** the board's centre is drawn 8-10 mm right and 6-8 mm low in the left eye, and 11 mm left and
+    7-11 mm low in the right eye. That is nearly constant in mm from 35 to 73 cm: an eye-position error, not an angle.
+  - **Eye-position fit** (display at 4 m): it predicts a fresh tap to 1.9 / 2.9 mm (leave-one-out median, left/right),
+    against 11.9 / 14.3 mm for the SDK's model.
+  - The effective eye spacing is 42 mm, not anatomical. The display distance is not identifiable from arm's-length taps.
+- (0.4.015) T6.12 built (`docs/tasks/T6.12-eye-calibration.md`): eye calibration on the device.
+  - **Fit on the device:** after the taps, the Beam Pro fits each eye's centre (`EyeModel.cs`) and shows the fresh-tap
+    error against the SDK's.
+  - **Pooling:** taps are pooled across wearings in `calibration/spaam_taps.csv`, fitted on this round and on all
+    rounds, and saved to `eye_model.json`.
+  - **Per-eye drawing:** the overlay is drawn per eye with the model, as a vertex warp in `EyeLabVertexColor.shader`
+    with matrices from `EyeWarp.cs`. It switches live between SDK, this round and all rounds, with ratings at 60, 35
+    and 100 cm and on plate L.
+  - **"Check only" run:** checks the saved calibration after re-wearing.
+  - **Board rule:** it now applies to SPAAM runs on the device.
+  - **Python:** `spaam-pool` (per-run and pooled fits) and `spaam-export` (taps in the device's format, used to seed
+    the store with T6.11 run 1).
+  - The main page shows only T6.12.
 - (0.4.014) T6.10 run 1 analysed (`docs/tasks/T6.10-align-by-eye.md`).
   - The drawing stays room-fixed (1.5 mm still), but a rigid head-frame view offset cannot align it at arm's length:
     38 cm *clearly off*, 96 cm *a few mm off*.

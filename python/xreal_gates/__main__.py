@@ -70,6 +70,11 @@ def main(argv=None) -> int:
     p_b3.add_argument("--snapshots", type=Path, help="folder of full-resolution Eye snapshots to add (no plate)")
     p_b3.add_argument("--eye-plate", type=Path, help="folder of full-resolution Eye frames with plate A (e.g. <detect run>/frames)")
     p_b3.add_argument("--bottom-up", action="store_true", help="the --eye-plate frames are stored bottom-up (0.4.006 runs)")
+    p_sp = sub.add_parser("spaam-pool", help="T6.11: SPAAM taps of several Beam Pro runs, per run and pooled per eye")
+    p_sp.add_argument("runs", nargs="+", type=Path)
+    p_se = sub.add_parser("spaam-export", help="T6.12: SPAAM taps of runs as the device's calibration/spaam_taps.csv")
+    p_se.add_argument("runs", nargs="+", type=Path)
+    p_se.add_argument("--out", type=Path, required=True)
     p_bp = sub.add_parser("bp", help="Beam Pro probe runs (T6.0, T6.1)")
     p_bp.add_argument("runs", nargs="+", type=Path)
     args = parser.parse_args(argv)
@@ -143,6 +148,17 @@ def main(argv=None) -> int:
                          snapshots=args.snapshots, eye_plate=args.eye_plate, bottom_up=args.bottom_up)
         print(f"{len(s['frames'])} frames, board {s['board_name']} ids {s['ids']}, calibration {s['calibration']} "
               f"-> {args.out or b3a.DEFAULT_SET}")
+        return 0
+    if args.cmd == "spaam-export":
+        from .spaam import export_taps
+        lines = export_taps(args.runs)
+        args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"{len(lines) - 1} taps -> {args.out}")
+        return 0
+    if args.cmd == "spaam-pool":
+        from .spaam import pooled_report
+        for line in pooled_report(args.runs):
+            print(line)
         return 0
     if args.cmd == "bp":
         from .beampro import report as bp_report

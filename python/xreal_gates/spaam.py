@@ -59,25 +59,60 @@ def predict(params: np.ndarray, P: np.ndarray) -> np.ndarray:
     return (xd - p) / s
 
 
-def _unpack(x: np.ndarray, fixed_w: Optional[float]) -> np.ndarray:
-    if fixed_w is None:
-        return x
-    return np.concatenate([x[:3], [fixed_w], x[3:]])
+SDK = np.array([0, 0, 0, 0.25, 1, 0, 0], float)
+# which parameters a model frees: "eye" = the eye centre only (the SDK's display kept), "full" = eye, scale and centre,
+# "free_d" = all seven (the display distance too; needs more depth range than T6.11 run 1 had)
+MODELS = {"eye": [0, 1, 2], "full": [0, 1, 2, 4, 5, 6], "free_d": [0, 1, 2, 3, 4, 5, 6]}
 
 
-def fit_model(P: np.ndarray, uv: np.ndarray, fixed_w: Optional[float] = None) -> Tuple[np.ndarray, float]:
-    """Least squares on the display coordinates. Returns (params, rms of the angular residual in degrees)."""
+def fit_model(P: np.ndarray, uv: np.ndarray, fixed_w: Optional[float] = None, model: str = "") -> Tuple[np.ndarray, float]:
+    """Least squares on the display coordinates. Returns (params, rms of the angular residual in degrees).
+    ``model`` picks the free parameters (``MODELS``); by default "full" with ``fixed_w`` and "free_d" without."""
     from scipy.optimize import least_squares
-    x0 = np.array([0, 0, 0, 0.25, 1, 0, 0], float)
+    model = model or ("full" if fixed_w is not None else "free_d")
+    free = MODELS[model]
+    base = SDK.copy()
     if fixed_w is not None:
-        x0 = np.delete(x0, 3)
+        base[3] = fixed_w
+
+    def unpack(x):
+        q = base.copy()
+        q[free] = x
+        return q
 
     def res(x):
-        return (predict(_unpack(x, fixed_w), P) - uv).ravel()
-    sol = least_squares(res, x0, x_scale="jac")
-    params = _unpack(sol.x, fixed_w)
+        return (predict(unpack(x), P) - uv).ravel()
+    sol = least_squares(res, base[free], x_scale="jac")
+    params = unpack(sol.x)
     r = (predict(params, P) - uv)
     return params, float(np.degrees(np.sqrt(np.mean(np.sum(r * r, axis=1)))))
+
+
+def leave_one_out(P: np.ndarray, uv: np.ndarray, model: str, fixed_w: float = 0.25) -> Optional[np.ndarray]:
+    """Each tap predicted by the model fitted on the others: the error (mm at the target, x and y) a fresh tap would
+    have. This is the calibration's quality on data it has not seen, which an in-sample rms overstates."""
+    k = len(MODELS[model])
+    if len(P) * 2 - 2 < k + 2:
+        return None
+    out = []
+    for i in range(len(P)):
+        m = np.arange(len(P)) != i
+        params, _ = fit_model(P[m], uv[m], fixed_w=fixed_w, model=model)
+        out.append((predict(params, P[i:i + 1])[0] - uv[i]) * P[i, 2] * 1000)
+    return np.array(out)
+
+
+def trusted_board(r: dict) -> bool:
+    """The device's trust, or the overlay variants' board rule (12+ markers, rms <= 15 px, in front of the camera),
+    which T6.11 run 1 did not apply on the device: its 60 cm taps had 16-marker poses marked untrusted."""
+    if r.get("pose_ok") != "1" or r.get("target") != "board25":
+        return False
+    if r.get("accepted") == "1":
+        return True
+    try:
+        return int(r["board_markers"]) >= 12 and float(r["rms_px"]) <= 15 and float(r["t2"]) > 0
+    except (KeyError, ValueError):
+        return False
 
 
 def dlt_centre(P: np.ndarray, uv: np.ndarray) -> Optional[np.ndarray]:
@@ -105,8 +140,7 @@ def tap_points(run: Path, set_dir: Optional[Path] = None) -> Tuple[List[dict], D
     events = load_csv(run / "events.csv")
     bad = {e["detail"].split(":")[-1] for e in events if e.get("event") == "tap_bad"}
     heads = {h["seq"]: h for h in load_csv(run / "head.csv") if h.get("ok") == "1"}
-    live = [r for r in load_csv(run / "live.csv")
-            if r.get("accepted") == "1" and r["pose_ok"] == "1" and r.get("target") == "board25" and r["seq"] in heads]
+    live = [r for r in load_csv(run / "live.csv") if trusted_board(r) and r["seq"] in heads]
     cu = b3a.F_CV @ BOARD_CENTRE
     room = []
     for r in live:
@@ -130,7 +164,7 @@ def tap_points(run: Path, set_dir: Optional[Path] = None) -> Tuple[List[dict], D
         RE, tE, _ = eyes[row["eye"]]
         Pe = RE.T @ (Ph - tE)
         uv = np.array([math.tan(math.radians(float(row["deg_x"]))), math.tan(math.radians(float(row["deg_y"])))])
-        taps.append({"tap": row["tap"], "step": row["step"], "eye": row["eye"], "ok": True, "n": len(near),
+        taps.append({"tap": row["tap"], "step": row["step"], "eye": row["eye"], "ok": True, "n": len(near), "run": run.name,
                      "spread_mm": float(np.linalg.norm(pts.std(axis=0)) * 1000), "P": Pe, "uv": uv,
                      "dist_mm": float(np.linalg.norm(Pe) * 1000)})
     notes = {"eye_L": meta.get("display_left_from_head", "?"), "eye_R": meta.get("display_right_from_head", "?"),
@@ -145,57 +179,121 @@ def _fmt(params: np.ndarray) -> str:
             f"{params[4]:.3f}, centre ({math.degrees(params[5]):+.2f}, {math.degrees(params[6]):+.2f}) deg")
 
 
+def eye_lines(sel: List[dict], eye: str) -> Tuple[List[str], Optional[np.ndarray]]:
+    """One eye's taps: the SDK model's error by depth, each model's fit with its leave-one-out error (the quality of
+    the calibration on a tap it has not seen), and the DLT centre. Returns (lines, the chosen model's params)."""
+    out: List[str] = []
+    if len(sel) < 3:
+        return [f"   {eye}: {len(sel)} taps, too few"], None
+    P = np.array([t["P"] for t in sel])
+    uv = np.array([t["uv"] for t in sel])
+    sdk = P[:, :2] / P[:, 2:3]
+    e = sdk - uv   # the SDK draws P at sdk; the wearer sees P at uv: + = the drawing right of / above the real point
+    out.append(f"   {eye} eye, {len(sel)} taps: where the SDK draws the point against where it is (mm at the target; "
+               f"+x = drawing right of it, +y = above)")
+    for cm in sorted({t['step'].split('_')[0] for t in sel}, key=lambda s: int(s[1:]) if s[1:].isdigit() else 0):
+        idx = [i for i, t in enumerate(sel) if t["step"].startswith(cm + "_")]
+        mm = np.array([e[i] * P[i, 2] * 1000 for i in idx])
+        out.append(f"      {cm:5s} {len(idx):2d} taps at {np.median([sel[i]['dist_mm'] for i in idx]):4.0f} mm: "
+                   f"mean ({mm[:, 0].mean():+6.1f}, {mm[:, 1].mean():+6.1f}) mm, spread {np.linalg.norm(mm.std(axis=0)):5.1f} mm; "
+                   f"board point spread {np.median([sel[i]['spread_mm'] for i in idx]):.1f} mm")
+    sdk_mm = np.linalg.norm(e * P[:, 2:3] * 1000, axis=1)
+    out.append(f"      SDK model: rms {math.degrees(float(np.sqrt(np.mean(np.sum(e * e, axis=1))))):.2f} deg, "
+               f"median {np.median(sdk_mm):.1f} mm at the target")
+    chosen = None
+    for model, label in (("eye", "eye position only"), ("full", "eye, scale, centre")):
+        if len(sel) * 2 < len(MODELS[model]) + 2:
+            continue
+        params, rms = fit_model(P, uv, fixed_w=0.25, model=model)
+        loo = leave_one_out(P, uv, model)
+        loo_s = (f"; leave-one-out median {np.median(np.linalg.norm(loo, axis=1)):.1f} mm, "
+                 f"max {np.max(np.linalg.norm(loo, axis=1)):.1f} mm") if loo is not None else ""
+        out.append(f"      fit {label} (display at 4 m): {_fmt(params)}; rms {rms:.2f} deg{loo_s}")
+        if model == "eye" or chosen is None:
+            chosen = params
+    c = dlt_centre(P, uv)
+    if c is not None:
+        out.append(f"      DLT centre of projection: ({c[0] * 1000:+.1f}, {c[1] * 1000:+.1f}, {c[2] * 1000:+.1f}) mm from the SDK eye")
+    return out, chosen
+
+
+def spacing_line(meta: dict, fits: Dict[str, np.ndarray]) -> List[str]:
+    if len(fits) != 2:
+        return []
+    RL, tL, _ = pose_from_meta(meta.get("display_left_from_head", ""))
+    RR, tR, _ = pose_from_meta(meta.get("display_right_from_head", ""))
+    cl, cr = tL + RL @ fits["L"][:3], tR + RR @ fits["R"][:3]
+    return [f"   eye spacing: SDK {np.linalg.norm(tL - tR) * 1000:.1f} mm; fitted (eye position only) {np.linalg.norm(cl - cr) * 1000:.1f} mm"]
+
+
 def spaam_report(run: Path) -> List[str]:
     from .beampro import load_json
     run = Path(run)
     meta = load_json(run)
-    if meta.get("variant") != "spaam":
+    if meta.get("variant") not in ("spaam", "eyecal", "eyecheck"):
         return []
     out = [f"   spaam: {meta.get('spaam', '?')}",
            f"   SDK eyes: left {meta.get('display_left_from_head', '?')}; right {meta.get('display_right_from_head', '?')}",
            f"   XR eye positions: {meta.get('xr_eye_positions', '?')}; stereo separation {meta.get('camera_stereo_separation', '?')}",
            f"   projections: left {meta.get('display_left_projection', '?')[:80]}...",
            "   eye check: " + "; ".join(e["detail"] for e in load_csv(run / "events.csv") if e.get("event") == "rating")]
+    for k in ("eye_taps_earlier", "eye_all_at_start", "eye_L_round", "eye_R_round", "eye_L_all", "eye_R_all", "eye_fit", "eye_model_saved"):
+        if meta.get(k):
+            out.append(f"   device {k}: {meta[k]}")
+    modes = [e["detail"] for e in load_csv(run / "events.csv") if e.get("event") in ("eyemode", "eyemode_unavailable")]
+    if modes:
+        out.append("   model switches: " + ", ".join(modes))
     if not (run / "spaam.csv").exists():
         return out + ["   no taps"]
     taps, notes = tap_points(run)
+    dev = {r["tap"]: r for r in load_csv(run / "spaam.csv") if r.get("pe_z")}
+    diffs = [float(np.linalg.norm(t["P"] - np.array([float(dev[t["tap"]][k]) for k in ("pe_x", "pe_y", "pe_z")])) * 1000)
+             for t in taps if t["ok"] and t["tap"] in dev]
+    if diffs:
+        out.append(f"   device tap points against Python: {len(diffs)} taps, median {np.median(diffs):.2f} mm, max {max(diffs):.2f} mm")
     good = [t for t in taps if t["ok"]]
     out.append(f"   taps: {len(taps)} (bad, dropped: {notes['bad']}); with the board seen in the 2 s before: {len(good)}")
-    eyes_fit = {}
+    fits = {}
     for eye in ("L", "R"):
-        sel = [t for t in good if t["eye"] == eye]
-        if len(sel) < 3:
-            out.append(f"   {eye}: {len(sel)} taps, too few")
-            continue
-        P = np.array([t["P"] for t in sel])
-        uv = np.array([t["uv"] for t in sel])
-        sdk = P[:, :2] / P[:, 2:3]
-        e = sdk - uv   # the SDK draws P at sdk; the wearer sees P at uv: + = the drawing right of / above the real point
-        out.append(f"   {eye} eye, {len(sel)} taps: where the SDK would draw the point against where it is (mm at the target; "
-                   f"+x = drawing right of it, +y = above)")
-        for cm in sorted({t['step'].split('_')[0] for t in sel}):
-            idx = [i for i, t in enumerate(sel) if t["step"].startswith(cm + "_")]
-            mm = np.array([e[i] * P[i, 2] * 1000 for i in idx])
-            out.append(f"      {cm}: {len(idx)} taps at {np.median([sel[i]['dist_mm'] for i in idx]):4.0f} mm: "
-                       f"mean ({mm[:, 0].mean():+6.1f}, {mm[:, 1].mean():+6.1f}) mm, spread {np.linalg.norm(mm.std(axis=0)):5.1f} mm; "
-                       f"board point spread {np.median([sel[i]['spread_mm'] for i in idx]):.1f} mm")
-        out.append(f"      SDK model rms {math.degrees(float(np.sqrt(np.mean(np.sum(e * e, axis=1))))):.2f} deg")
-        fits = []
-        if len(sel) >= 7:
-            fits.append(("free display distance", fit_model(P, uv)))
-        if len(sel) >= 6:
-            fits.append(("display at 4 m", fit_model(P, uv, fixed_w=0.25)))
-        for name, (params, rms) in fits:
-            out.append(f"      fit, {name}: {_fmt(params)}; rms {rms:.2f} deg")
-        if fits:
-            eyes_fit[eye] = fits[-1][0]
-        c = dlt_centre(P, uv)
-        if c is not None:
-            out.append(f"      DLT centre of projection: ({c[0] * 1000:+.1f}, {c[1] * 1000:+.1f}, {c[2] * 1000:+.1f}) mm from the SDK eye")
-    if len(eyes_fit) == 2:
-        RL, tL, _ = pose_from_meta(meta.get("display_left_from_head", ""))
-        RR, tR, _ = pose_from_meta(meta.get("display_right_from_head", ""))
-        cl, cr = tL + RL @ eyes_fit["L"][:3], tR + RR @ eyes_fit["R"][:3]
-        out.append(f"   eye spacing: SDK {np.linalg.norm(tL - tR) * 1000:.1f} mm; fitted (display at 4 m) "
-                   f"{np.linalg.norm(cl - cr) * 1000:.1f} mm")
-    return out
+        lines, params = eye_lines([t for t in good if t["eye"] == eye], eye)
+        out += lines
+        if params is not None:
+            fits[eye] = params
+    return out + spacing_line(meta, fits)
+
+
+def export_taps(runs: List[Path]) -> List[str]:
+    """The good taps of ``runs`` as the device's ``calibration/spaam_taps.csv`` (EyeModel.cs): one wearing per run."""
+    lines = ["wearing,eye,step,px,py,pz,u,v"]
+    for run in runs:
+        for t in tap_points(Path(run))[0]:
+            if t["ok"]:
+                lines.append(",".join([Path(run).name, t["eye"], t["step"]] + [repr(float(x)) for x in (*t["P"], *t["uv"])]))
+    return lines
+
+
+def pooled_report(runs: List[Path]) -> List[str]:
+    """Several SPAAM sessions: each one's eye-position fit (does it repeat?), then all taps pooled per eye."""
+    from .beampro import load_json
+    out = [f"== SPAAM pooled over {len(runs)} runs"]
+    every: List[dict] = []
+    meta = {}
+    for run in runs:
+        meta = load_json(Path(run))
+        taps = [t for t in tap_points(Path(run))[0] if t["ok"]]
+        every += taps
+        per = []
+        for eye in ("L", "R"):
+            sel = [t for t in taps if t["eye"] == eye]
+            if len(sel) >= 3:
+                params, _ = fit_model(np.array([t["P"] for t in sel]), np.array([t["uv"] for t in sel]), fixed_w=0.25, model="eye")
+                c = params[:3] * 1000
+                per.append(f"{eye} ({c[0]:+.1f}, {c[1]:+.1f}, {c[2]:+.1f}) mm from {len(sel)} taps")
+        out.append(f"   {Path(run).name}: " + "; ".join(per))
+    fits = {}
+    for eye in ("L", "R"):
+        lines, params = eye_lines([t for t in every if t["eye"] == eye], eye)
+        out += lines
+        if params is not None:
+            fits[eye] = params
+    return out + spacing_line(meta, fits)

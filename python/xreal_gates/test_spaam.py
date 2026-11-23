@@ -56,6 +56,33 @@ class SpaamModel(unittest.TestCase):
         self.assertTrue(np.allclose(spaam.dlt_centre(P, uv), self.TRUE[:3], atol=1e-6))
         self.assertIsNone(spaam.dlt_centre(P[:5], uv[:5]))
 
+    def test_leave_one_out(self):
+        """Exact taps: a fresh tap is predicted exactly; noisy taps: about the noise, and None when too few."""
+        P, uv = _taps(self.TRUE)
+        self.assertLess(np.abs(spaam.leave_one_out(P, uv, "full")).max(), 1e-4)
+        eye_only = np.array([-0.003, 0.0005, 0.004, 0.25, 1, 0, 0.0])
+        P, uv = _taps(eye_only)
+        rng = np.random.default_rng(2)
+        loo = spaam.leave_one_out(P, uv + rng.normal(0, np.radians(0.2), uv.shape), "eye")
+        self.assertLess(np.median(np.linalg.norm(loo, axis=1)), 4.0)   # 0.2 deg at 35-100 cm
+        self.assertIsNone(spaam.leave_one_out(P[:2], uv[:2], "full"))
+
+    def test_trusted_board(self):
+        row = {"pose_ok": "1", "target": "board25", "accepted": "0", "board_markers": "16", "rms_px": "1.0", "t2": "0.5"}
+        self.assertTrue(spaam.trusted_board(row))
+        self.assertFalse(spaam.trusted_board(dict(row, board_markers="8")))
+        self.assertFalse(spaam.trusted_board(dict(row, t2="-0.5")))
+        self.assertTrue(spaam.trusted_board(dict(row, board_markers="8", accepted="1")))
+
+    def test_device_formula(self):
+        """EyeModel.cs's Predict (eye centre only, display at 4 m) is the Python model "eye"."""
+        c = np.array([0.0094, -0.0074, -0.0148])
+        P = np.array([[0.02, -0.03, 0.4], [-0.1, 0.05, 0.9]])
+        w = 0.25
+        u = w * c[0] + (1 - w * c[2]) * (P[:, 0] - c[0]) / (P[:, 2] - c[2])
+        v = w * c[1] + (1 - w * c[2]) * (P[:, 1] - c[1]) / (P[:, 2] - c[2])
+        self.assertTrue(np.allclose(spaam.predict(np.array([*c, w, 1, 0, 0]), P), np.stack([u, v], 1)))
+
     def test_pose_from_meta(self):
         R, t, ok = spaam.pose_from_meta("ok; p -0.0315 0.001 0.02; q 0 0 0 1")
         self.assertTrue(ok and np.allclose(t, [-0.0315, 0.001, 0.02]) and np.allclose(R, np.eye(3)))

@@ -128,6 +128,9 @@ namespace EyeLab.Probes
             go.SetActive(false);
         }
 
+        /// <summary>The SDK eye's pose in the head ("L" or "R"): the frame the taps and the eye model live in.</summary>
+        public Pose EyePose(string eye) => eye == "L" ? m_Left : m_Right;
+
         /// <summary>Shows the crosshair to <paramref name="eye"/> ("L" or "R") at <paramref name="deg"/> in that eye's display.</summary>
         public void Show(string eye, Vector2 deg)
         {
