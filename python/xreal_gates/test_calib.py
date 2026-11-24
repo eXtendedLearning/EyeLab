@@ -31,14 +31,15 @@ def _render_board(board, K, rvec, tvec, ppm=8.0):
 class CalibTest(unittest.TestCase):
     def test_recovers_known_intrinsics(self):
         from xreal_gates.calib import _board
-        board, _ = _board()
+        board, (_, _, square, _) = _board()
+        g = square / 0.02597   # the frames' geometry was laid out for 25.97 mm squares
         K = vendor_camera().K
         rng = np.random.default_rng(1)
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / "20261016_150000_Calib_calib"
             (run / "snapshots").mkdir(parents=True)
             n = 0
-            for z in (0.3, 0.45):
+            for z in (0.3 * g, 0.45 * g):
                 for x in (-0.25, -0.1, 0.05):
                     for y in (-0.12, 0.0, 0.1):
                         rvec = rng.normal(0, 0.25, 3)
@@ -54,7 +55,8 @@ class CalibTest(unittest.TestCase):
 
     def test_refuses_board_seen_in_one_place(self):
         from xreal_gates.calib import _board
-        board, _ = _board()
+        board, (_, _, square, _) = _board()
+        g = square / 0.02597   # the frames' geometry was laid out for 25.97 mm squares
         K = vendor_camera().K
         rng = np.random.default_rng(2)
         with tempfile.TemporaryDirectory() as tmp:
@@ -86,17 +88,18 @@ class BeamProCalibTest(unittest.TestCase):
 
     def test_calibrates_and_checks_the_tape(self):
         from xreal_gates.calib import _board, calibrate_beampro, describe_beampro
-        board, _ = _board()
+        board, (_, _, square, _) = _board()
+        g = square / 0.02597   # the frames' geometry was laid out for 25.97 mm squares
         K = vendor_camera().K.copy()
         K[0, 0] *= 1.3
-        K[1, 1] *= 1.3          # the Beam Pro stream's focal length, about 1.27x the model the device used
+        K[1, 1] *= 1.3          # a camera 1.3x longer in focal length than the set's model
         rng = np.random.default_rng(2)
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / "20261124_100000_camcal"
             (run / "frames").mkdir(parents=True)
             rows = ["seq,step"]
             seq = 0
-            for z in (0.3, 0.45):
+            for z in (0.3 * g, 0.45 * g):
                 for x in (-0.2, -0.05, 0.1):
                     for y in (-0.1, 0.0, 0.08):
                         img = _render_board(board, K, rng.normal(0, 0.3, 3), (x * z / 0.45, y * z / 0.45, z))
@@ -106,7 +109,7 @@ class BeamProCalibTest(unittest.TestCase):
             for step, z in (("t50", 0.5), ("t100", 1.0)):
                 for k in range(2):
                     # facing the camera, the board's centre on the optical axis
-                    t = np.array([-0.065 + 0.003 * k, -0.09, z])
+                    t = np.array([-2.5 * square + 0.003 * k, -3.5 * square, z])
                     img = _render_board(board, K, np.zeros(3), t)
                     cv2.imwrite(str(run / "frames" / f"y_{seq:06d}.pgm"), img)
                     rows.append(f"{seq},{step}")

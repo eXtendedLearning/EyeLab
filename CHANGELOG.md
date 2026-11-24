@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.016<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.017<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -17,6 +17,29 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.4.017) T6.13 run 1 analysed (`docs/tasks/T6.13-beampro-eye-calibration.md`): **the camera was right; the board was
+  the wrong size.**
+  - **Calibration on the Beam Pro:** fx 627.1, fy 625.7, RMS 0.435 px, 77 % coverage. That is the Surface's fx 624, not
+    the 790 px that 0.4.016 inferred.
+  - **The ChArUco print has 34.17 mm squares, not 25 mm.** The caliper's 25.97 mm (2026-11-23) was a black marker, and a
+    marker is 19/25 of a square. A ruler agrees: 5 squares 170 mm, 7 squares about 240 mm.
+  - **Tape check at the true size:** the board at 491 / 1003 mm with the lens at 500 / 1000 mm, scale 0.977 (0.982 with
+    the old fx 624). Accepted, written to `config/cameras/beampro_eye.*`; the frame set now carries it.
+  - Every board25 pose up to 0.4.016 was 1.37x too near the camera (1.32x in 0.4.016). That caused T6.9's offset,
+    T6.10's opposite-eye error, T6.11's 42 mm eye spacing and the swim.
+- (0.4.017) T6.12 runs 2 (`20261124_173002_eyecal`, `20261124_173521_eyecheck`) analysed, with taps re-posed at the true
+  board size.
+  - **The SDK's eye positions are right** (fitted spacing 59 mm). What is left is a fixed angle per eye: left
+    (−0.49°, +0.81°), right (−0.79°, +0.65°), and a 2.5 % display scale. It is the same in three wearings on two days.
+  - **A display model** (scale and centre per eye, eye kept) predicts a fresh tap to 2.6-2.7 mm, and another wearing's
+    taps to 3 mm. The SDK gives 13 mm and the eye-centre model 4-5 mm.
+  - Jack's plate L ("left eye clearly off, right less") is the eye-centre model fitted at the wrong scale. It pushed the
+    left eye about 5 mm the wrong way sideways.
+- (0.4.017) The device fits and draws the display model.
+  - `EyeModel.cs`: parameters `[C, s, p]` with s and p free; the shader takes `_EyeDisplay*`.
+  - `spaam.tap_points` re-poses board25 at the printed size from the logged board centre (`board_scale`).
+  - `spaam-export --camera` keys re-posed taps to the current calibration. The 72 taps of the three wearings seed the
+    device's store.
 - (0.4.016) T6.12 run 1 analysed (`docs/tasks/T6.12-eye-calibration.md`).
   - **Within a wearing:** "This round" was *on the markers* at 35 and 60 cm, but it swam at 1 m and on plate L.
   - **Three defects:**
@@ -26,7 +49,8 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
     - **The Eye camera model is 25-28 % short in focal length on the Beam Pro.** A tape check with the glasses on the
       table put the board at 399 and 786 mm with the lens at 500 and 1000 mm, so fx is about 790 px, not 624. This
       explains T6.9's offset, T6.10's opposite-eye error, T6.11's 42 mm "eye spacing" and the swim.
-  - The ChArUco print measures 25.97 mm per square (3.9 % over nominal).
+      *(Wrong, corrected in 0.4.017: the camera was right, and the board's squares are 34.17 mm.)*
+  - The ChArUco print measures 25.97 mm per square (3.9 % over nominal). *(Wrong: 25.97 mm is a marker; see 0.4.017.)*
 - (0.4.016) T6.13 built (`docs/tasks/T6.13-beampro-eye-calibration.md`): the Eye camera calibrated on the Beam Pro.
   - **Run:** a `camcal` run with the glasses on the table. The board is moved through the view, then held at 50 and
     100 cm, set with a tape and ended by NEXT.
@@ -255,6 +279,9 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Fixed
 
+- (0.4.017) `gui_common`: the caliper value 25.97 mm is a marker (`CHARUCO_MARKER_PRINTED_M`), and the square is derived
+  from it (34.17 mm). The 0.4.016 entries above that say "fx about 790 px" and "25.97 mm per square" are wrong; the
+  T6.13 run corrected them.
 - (0.4.008) Native ArUco plugin: the IPPE ambiguity ratio read OpenCV's float errors as double, so `amb_ratio` held garbage. The
   errors are now converted first, as in `pose_estimator`. Plugin ABI 2 (`kAbi`, `ArucoNative.Abi`).
 - (0.4.004) Nothing in the glasses with 0.4.003: MSAA 4x and render scale 1.0 reverted to the 0.4.002 values

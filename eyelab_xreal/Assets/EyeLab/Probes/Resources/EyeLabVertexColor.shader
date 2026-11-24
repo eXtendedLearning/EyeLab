@@ -4,7 +4,8 @@
 // Unity's eye index 0 is the left eye), for the per-eye SPAAM crosshair. T6.12: _EyeWarp draws each vertex where the
 // wearer's eye sees it (EyeModel.cs): in the SDK eye's frame (_EyeW2E*, set every frame by EyeWarp.cs), with the eye
 // centre C and w = 1/D in _EyeModel*, the point P is drawn at Q = (uv * P_z, P_z),
-// uv = w C_xy + (1 - w C_z) (P_xy - C_xy) / (P_z - C_z).
+// uv = w C_xy + (1 - w C_z) (P_xy - C_xy) / (P_z - C_z). T6.13: then uv = (uv - p) / s with the display's centre p and
+// scale s in _EyeDisplay* (p_x, p_y, s, 0); (0, 0, 1, 0) is the SDK's.
 Shader "EyeLab/VertexColorUnlit"
 {
     Properties
@@ -31,6 +32,7 @@ Shader "EyeLab/VertexColorUnlit"
             float _EyeWarp;
             float4x4 _EyeW2E0, _EyeW2E1, _EyeE2W0, _EyeE2W1;
             float4 _EyeModel0, _EyeModel1;
+            float4 _EyeDisplay0, _EyeDisplay1;
 
             struct appdata
             {
@@ -59,12 +61,14 @@ Shader "EyeLab/VertexColorUnlit"
                     float4x4 w2e = _EyeW2E1;
                     float4x4 e2w = _EyeE2W1;
                     float4 m = _EyeModel1;
-                    if (unity_StereoEyeIndex == 0) { w2e = _EyeW2E0; e2w = _EyeE2W0; m = _EyeModel0; }
+                    float4 d = _EyeDisplay1;
+                    if (unity_StereoEyeIndex == 0) { w2e = _EyeW2E0; e2w = _EyeE2W0; m = _EyeModel0; d = _EyeDisplay0; }
                     float3 P = mul(w2e, wpos).xyz;
                     float dz = P.z - m.z;
                     if (dz > 0.01)
                     {
                         float2 uv = m.w * m.xy + (1.0 - m.w * m.z) * (P.xy - m.xy) / dz;
+                        uv = (uv - d.xy) / (d.z > 0.1 ? d.z : 1.0);
                         wpos = mul(e2w, float4(uv * P.z, P.z, 1.0));
                     }
                 }

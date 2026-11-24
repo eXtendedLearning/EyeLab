@@ -613,8 +613,7 @@ namespace EyeLab.Probes
                 double lr = EyeModel.LeaveOneOutMm(round), la = EyeModel.LeaveOneOutMm(pooled);
                 double sdk = EyeModel.SdkMm(pooled);
                 if (eye == "L") { m_RoundL = cr; m_AllL = ca; } else { m_RoundR = cr; m_AllR = ca; }
-                string diff = cr != null && ca != null
-                    ? $"{Math.Sqrt(Math.Pow(cr[0] - ca[0], 2) + Math.Pow(cr[1] - ca[1], 2) + Math.Pow(cr[2] - ca[2], 2)) * 1000:F1} mm" : "-";
+                string diff = cr != null && ca != null ? $"{EyeModel.DiffMm(cr, ca):F1} mm at 60 cm" : "-";
                 sb.Append($"{(eye == "L" ? "Left" : "Right")}: this round {round.Count} taps, fresh-tap error {lr:F1} mm; " +
                           $"all rounds {pooled.Count} taps, {la:F1} mm (SDK {sdk:F1} mm); round vs all {diff}\n");
                 m_Run.Meta($"eye_{eye}_round", $"{EyeModel.Mm(cr)}; {round.Count} taps; leave-one-out median {lr.ToString("F2", ci)} mm");
@@ -624,12 +623,11 @@ namespace EyeLab.Probes
             {
                 var s = new EyeModel.Saved
                 {
-                    left_cx_mm = (float)(m_AllL[0] * 1000), left_cy_mm = (float)(m_AllL[1] * 1000), left_cz_mm = (float)(m_AllL[2] * 1000),
-                    right_cx_mm = (float)(m_AllR[0] * 1000), right_cy_mm = (float)(m_AllR[1] * 1000), right_cz_mm = (float)(m_AllR[2] * 1000),
                     left_taps = Sel(all, "L").Count, right_taps = Sel(all, "R").Count, wearings = wearings.Count,
                     left_loo_mm = (float)EyeModel.LeaveOneOutMm(Sel(all, "L")), right_loo_mm = (float)EyeModel.LeaveOneOutMm(Sel(all, "R")),
                     source = $"T6.12 {m_Run.Dir}: all rounds in eye_taps.csv", camera = CameraName,
                 };
+                EyeModel.Fill(s, m_AllL, m_AllR);
                 try { EyeModel.Save(s); m_Run.Meta("eye_model_saved", EyeModel.ModelPath); }
                 catch (Exception e) { m_Run.Meta("eye_model_save_error", e.Message); }
             }

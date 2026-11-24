@@ -75,13 +75,22 @@ class SpaamModel(unittest.TestCase):
         self.assertTrue(spaam.trusted_board(dict(row, board_markers="8", accepted="1")))
 
     def test_device_formula(self):
-        """EyeModel.cs's Predict (eye centre only, display at 4 m) is the Python model "eye"."""
+        """EyeModel.cs's Predict ([C, s, p], display at 4 m) is the Python model with w = 0.25."""
         c = np.array([0.0094, -0.0074, -0.0148])
+        s, px, py = 0.975, -0.0138, 0.0113
         P = np.array([[0.02, -0.03, 0.4], [-0.1, 0.05, 0.9]])
         w = 0.25
-        u = w * c[0] + (1 - w * c[2]) * (P[:, 0] - c[0]) / (P[:, 2] - c[2])
-        v = w * c[1] + (1 - w * c[2]) * (P[:, 1] - c[1]) / (P[:, 2] - c[2])
-        self.assertTrue(np.allclose(spaam.predict(np.array([*c, w, 1, 0, 0]), P), np.stack([u, v], 1)))
+        u = (w * c[0] + (1 - w * c[2]) * (P[:, 0] - c[0]) / (P[:, 2] - c[2]) - px) / s
+        v = (w * c[1] + (1 - w * c[2]) * (P[:, 1] - c[1]) / (P[:, 2] - c[2]) - py) / s
+        self.assertTrue(np.allclose(spaam.predict(np.array([*c, w, s, px, py]), P), np.stack([u, v], 1)))
+
+    def test_device_model_recovers_an_angle_and_scale(self):
+        """T6.13: the device's model ("display") recovers a fixed angle and scale with the SDK's eye kept."""
+        true = np.array([0, 0, 0, 0.25, 0.975, np.tan(np.radians(-0.5)), np.tan(np.radians(0.8))])
+        P, uv = _taps(true)
+        params, rms = spaam.fit_model(P, uv, fixed_w=0.25, model=spaam.DEVICE_MODEL)
+        self.assertLess(rms, 1e-6)
+        self.assertTrue(np.allclose(params, true, atol=1e-7))
 
     def test_pose_from_meta(self):
         R, t, ok = spaam.pose_from_meta("ok; p -0.0315 0.001 0.02; q 0 0 0 1")
@@ -115,3 +124,13 @@ class TapPointSourcesTest(unittest.TestCase):
         meta = {"set": "eyelab-b3a/1; board plate_A; calibration cameras/beampro_eye.json 20261124_camcal; frames 32; markers 9"}
         self.assertEqual(run_camera(meta), "cameras/beampro_eye.json 20261124_camcal")
         self.assertEqual(run_camera({}), "?")
+
+    def test_board_scale_re_poses_at_the_printed_size(self):
+        """T6.13: a run that posed board25 at 25 mm (no centre logged) or 25.97 mm squares is scaled to the print."""
+        from gui_common import CHARUCO_SQUARE_PRINTED_M
+        from xreal_gates.spaam import board_scale
+        self.assertAlmostEqual(board_scale({}), CHARUCO_SQUARE_PRINTED_M / 0.025, places=9)
+        self.assertAlmostEqual(board_scale({"board_centre_m": f"{2.5 * 0.02597} {3.5 * 0.02597} 0"}),
+                               CHARUCO_SQUARE_PRINTED_M / 0.02597, places=9)
+        printed = CHARUCO_SQUARE_PRINTED_M
+        self.assertAlmostEqual(board_scale({"board_centre_m": f"{2.5 * printed} {3.5 * printed} 0"}), 1.0, places=9)

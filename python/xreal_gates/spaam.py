@@ -50,6 +50,16 @@ def board_centre(meta: dict) -> np.ndarray:
         return BOARD_CENTRE.copy()
 
 
+def board_scale(meta: dict) -> float:
+    """The factor that re-poses a run's board25 at the board's true printed size. A run's set posed it at some square
+    size, which the logged tap point shows (marker 8's centre is 2.5 squares across); poses scale with the square. Runs
+    before 0.4.017 posed it at 25 mm (nominal, to 0.4.015) or 25.97 mm (0.4.016), against 34.17 mm printed (2026-11-24),
+    so their real points sat 1.37x or 1.32x too near the camera."""
+    from gui_common import CHARUCO_SQUARE_PRINTED_M
+    used = float(board_centre(meta)[0]) / 2.5
+    return CHARUCO_SQUARE_PRINTED_M / used if used > 0 else 1.0
+
+
 def rgb_meta(meta: dict) -> dict:
     """``meta`` with the device's ``rgb_from_head`` filled in when the run did not log it (T6.11 run 1)."""
     return meta if "rgb_from_head" in meta else dict(meta, rgb_from_head=BEAMPRO_RGB_FROM_HEAD.replace("ok;", "ok (filled in);", 1))
@@ -78,9 +88,14 @@ def predict(params: np.ndarray, P: np.ndarray) -> np.ndarray:
 
 
 SDK = np.array([0, 0, 0, 0.25, 1, 0, 0], float)
-# which parameters a model frees: "eye" = the eye centre only (the SDK's display kept), "full" = eye, scale and centre,
-# "free_d" = all seven (the display distance too; needs more depth range than T6.11 run 1 had)
-MODELS = {"eye": [0, 1, 2], "full": [0, 1, 2, 4, 5, 6], "free_d": [0, 1, 2, 3, 4, 5, 6]}
+# which parameters a model frees: "eye" = the eye centre only (the SDK's display kept), "display" = the display's scale
+# and centre only (the SDK's eye kept; the device's model from 0.4.017), "full" = eye, scale and centre, "free_d" = all
+# seven (the display distance too; needs more depth range than T6.11 run 1 had)
+MODELS = {"eye": [0, 1, 2], "display": [4, 5, 6], "full": [0, 1, 2, 4, 5, 6], "free_d": [0, 1, 2, 3, 4, 5, 6]}
+#: The model the device fits and draws (EyeModel.Free). T6.13 (2026-11-24): with the board at its true size the SDK's eye
+#: positions are right and a fixed angle and scale per eye is left; this predicts a fresh tap, in the same wearing or
+#: another, to about 3 mm (the eye centre alone 5 mm, the SDK 13 mm).
+DEVICE_MODEL = "display"
 
 
 def fit_model(P: np.ndarray, uv: np.ndarray, fixed_w: Optional[float] = None, model: str = "") -> Tuple[np.ndarray, float]:
@@ -147,7 +162,8 @@ def dlt_centre(P: np.ndarray, uv: np.ndarray) -> Optional[np.ndarray]:
 
 
 def tap_points(run: Path, set_dir: Optional[Path] = None) -> Tuple[List[dict], Dict[str, str]]:
-    """Each good tap with the real point in the SDK eye's frame. Returns (taps, notes)."""
+    """Each good tap with the real point in the SDK eye's frame, the board re-posed at its true printed size
+    (``board_scale``). Returns (taps, notes)."""
     from . import b3a
     from .beampro import load_json
     run = Path(run)
@@ -159,10 +175,12 @@ def tap_points(run: Path, set_dir: Optional[Path] = None) -> Tuple[List[dict], D
     bad = {e["detail"].split(":")[-1] for e in events if e.get("event") == "tap_bad"}
     heads = {h["seq"]: h for h in load_csv(run / "head.csv") if h.get("ok") == "1"}
     live = [r for r in load_csv(run / "live.csv") if trusted_board(r) and r["seq"] in heads]
-    cu = b3a.F_CV @ board_centre(meta)
+    k = board_scale(meta)
+    cu = b3a.F_CV @ (board_centre(meta) * k)
     room = []
     for r in live:
         rv, tv = b3a._pose(r)
+        tv = np.asarray(tv, float) * k
         R, t = b3a.target_in_room(rv, tv, b3a.head_unity(heads[r["seq"]]), rgb)
         room.append((int(r["cam_ts"]), t + R @ cu, float(np.linalg.norm(np.asarray(tv, float)))))
     taps = []
@@ -188,7 +206,8 @@ def tap_points(run: Path, set_dir: Optional[Path] = None) -> Tuple[List[dict], D
     notes = {"eye_L": meta.get("display_left_from_head", "?"), "eye_R": meta.get("display_right_from_head", "?"),
              "bad": ", ".join(sorted(bad, key=int)) if bad else "none",
              "rgb": "logged" if "rgb_from_head" in meta else "not logged: the device's value from later runs",
-             "centre": "logged by the device" if "board_centre_m" in meta else "nominal 25 mm board"}
+             "centre": ("logged by the device" if "board_centre_m" in meta else "nominal 25 mm board")
+             + (f"; re-posed at the printed size (x{k:.3f})" if abs(k - 1) > 1e-6 else "")}
     return taps, notes
 
 
@@ -199,12 +218,12 @@ def _fmt(params: np.ndarray) -> str:
             f"{params[4]:.3f}, centre ({math.degrees(params[5]):+.2f}, {math.degrees(params[6]):+.2f}) deg")
 
 
-def eye_lines(sel: List[dict], eye: str) -> Tuple[List[str], Optional[np.ndarray]]:
+def eye_lines(sel: List[dict], eye: str) -> Tuple[List[str], Dict[str, np.ndarray]]:
     """One eye's taps: the SDK model's error by depth, each model's fit with its leave-one-out error (the quality of
-    the calibration on a tap it has not seen), and the DLT centre. Returns (lines, the chosen model's params)."""
+    the calibration on a tap it has not seen), and the DLT centre. Returns (lines, each model's params)."""
     out: List[str] = []
     if len(sel) < 3:
-        return [f"   {eye}: {len(sel)} taps, too few"], None
+        return [f"   {eye}: {len(sel)} taps, too few"], {}
     P = np.array([t["P"] for t in sel])
     uv = np.array([t["uv"] for t in sel])
     sdk = P[:, :2] / P[:, 2:3]
@@ -220,8 +239,9 @@ def eye_lines(sel: List[dict], eye: str) -> Tuple[List[str], Optional[np.ndarray
     sdk_mm = np.linalg.norm(e * P[:, 2:3] * 1000, axis=1)
     out.append(f"      SDK model: rms {math.degrees(float(np.sqrt(np.mean(np.sum(e * e, axis=1))))):.2f} deg, "
                f"median {np.median(sdk_mm):.1f} mm at the target")
-    chosen = None
-    for model, label in (("eye", "eye position only"), ("full", "eye, scale, centre")):
+    fits: Dict[str, np.ndarray] = {}
+    for model, label in (("display", "display scale and centre (the device's)"), ("eye", "eye position only"),
+                         ("full", "eye, scale, centre")):
         if len(sel) * 2 < len(MODELS[model]) + 2:
             continue
         params, rms = fit_model(P, uv, fixed_w=0.25, model=model)
@@ -229,12 +249,11 @@ def eye_lines(sel: List[dict], eye: str) -> Tuple[List[str], Optional[np.ndarray
         loo_s = (f"; leave-one-out median {np.median(np.linalg.norm(loo, axis=1)):.1f} mm, "
                  f"max {np.max(np.linalg.norm(loo, axis=1)):.1f} mm") if loo is not None else ""
         out.append(f"      fit {label} (display at 4 m): {_fmt(params)}; rms {rms:.2f} deg{loo_s}")
-        if model == "eye" or chosen is None:
-            chosen = params
+        fits[model] = params
     c = dlt_centre(P, uv)
     if c is not None:
         out.append(f"      DLT centre of projection: ({c[0] * 1000:+.1f}, {c[1] * 1000:+.1f}, {c[2] * 1000:+.1f}) mm from the SDK eye")
-    return out, chosen
+    return out, fits
 
 
 def spacing_line(meta: dict, fits: Dict[str, np.ndarray]) -> List[str]:
@@ -242,7 +261,9 @@ def spacing_line(meta: dict, fits: Dict[str, np.ndarray]) -> List[str]:
         return []
     RL, tL, _ = pose_from_meta(meta.get("display_left_from_head", ""))
     RR, tR, _ = pose_from_meta(meta.get("display_right_from_head", ""))
-    cl, cr = tL + RL @ fits["L"][:3], tR + RR @ fits["R"][:3]
+    if any("eye" not in fits[e] for e in fits):
+        return []
+    cl, cr = tL + RL @ fits["L"]["eye"][:3], tR + RR @ fits["R"]["eye"][:3]
     return [f"   eye spacing: SDK {np.linalg.norm(tL - tR) * 1000:.1f} mm; fitted (eye position only) {np.linalg.norm(cl - cr) * 1000:.1f} mm"]
 
 
@@ -270,7 +291,9 @@ def spaam_report(run: Path) -> List[str]:
     diffs = [float(np.linalg.norm(t["P"] - np.array([float(dev[t["tap"]][k]) for k in ("pe_x", "pe_y", "pe_z")])) * 1000)
              for t in taps if t["ok"] and t["tap"] in dev]
     if diffs:
-        out.append(f"   device tap points against Python: {len(diffs)} taps, median {np.median(diffs):.2f} mm, max {max(diffs):.2f} mm")
+        k = board_scale(meta)
+        why = f" (Python re-posed the board x{k:.3f}, the device did not)" if abs(k - 1) > 1e-6 else ""
+        out.append(f"   device tap points against Python: {len(diffs)} taps, median {np.median(diffs):.2f} mm, max {max(diffs):.2f} mm{why}")
     good = [t for t in taps if t["ok"]]
     out.append(f"   taps: {len(taps)} (bad, dropped: {notes['bad']}); with the board seen in the 2 s before: {len(good)}")
     out.append(f"   tap point: rgb_from_head {notes['rgb']}; board centre {notes['centre']}")
@@ -278,7 +301,7 @@ def spaam_report(run: Path) -> List[str]:
     for eye in ("L", "R"):
         lines, params = eye_lines([t for t in good if t["eye"] == eye], eye)
         out += lines
-        if params is not None:
+        if params:
             fits[eye] = params
     return out + spacing_line(meta, fits)
 
@@ -293,13 +316,15 @@ def run_camera(meta: dict) -> str:
     return m.group(1).strip() if m else "?"
 
 
-def export_taps(runs: List[Path]) -> List[str]:
+def export_taps(runs: List[Path], camera: Optional[str] = None) -> List[str]:
     """The good taps of ``runs`` as the device's ``calibration/eye_taps.csv`` (EyeModel.cs): one wearing per run, each
-    tap with the camera calibration its point was measured with (the device fits only taps of its current one)."""
+    tap with the camera calibration its point was measured with (the device fits only taps of its current one).
+    ``camera`` keys them all with another calibration instead: for taps re-posed at the board's true size, whose points
+    hold under the current calibration (T6.13: the old and new Eye models agree on the tape to 0.5 %)."""
     from .beampro import load_json
     lines = [TAPS_HEADER]
     for run in runs:
-        cam = run_camera(load_json(Path(run)))
+        cam = camera or run_camera(load_json(Path(run)))
         for t in tap_points(Path(run))[0]:
             if t["ok"]:
                 lines.append(",".join([Path(run).name, cam, t["eye"], t["step"]] + [repr(float(x)) for x in (*t["P"], *t["uv"])]))
@@ -307,7 +332,7 @@ def export_taps(runs: List[Path]) -> List[str]:
 
 
 def pooled_report(runs: List[Path]) -> List[str]:
-    """Several SPAAM sessions: each one's eye-position fit (does it repeat?), then all taps pooled per eye."""
+    """Several SPAAM sessions: each one's fit of the device's model (does it repeat?), then all taps pooled per eye."""
     from .beampro import load_json
     out = [f"== SPAAM pooled over {len(runs)} runs"]
     every: List[dict] = []
@@ -320,14 +345,15 @@ def pooled_report(runs: List[Path]) -> List[str]:
         for eye in ("L", "R"):
             sel = [t for t in taps if t["eye"] == eye]
             if len(sel) >= 3:
-                params, _ = fit_model(np.array([t["P"] for t in sel]), np.array([t["uv"] for t in sel]), fixed_w=0.25, model="eye")
-                c = params[:3] * 1000
-                per.append(f"{eye} ({c[0]:+.1f}, {c[1]:+.1f}, {c[2]:+.1f}) mm from {len(sel)} taps")
+                params, _ = fit_model(np.array([t["P"] for t in sel]), np.array([t["uv"] for t in sel]), fixed_w=0.25,
+                                      model=DEVICE_MODEL)
+                per.append(f"{eye} centre ({math.degrees(params[5]):+.2f}, {math.degrees(params[6]):+.2f}) deg, "
+                           f"scale {params[4]:.3f} from {len(sel)} taps")
         out.append(f"   {Path(run).name}: " + "; ".join(per))
     fits = {}
     for eye in ("L", "R"):
         lines, params = eye_lines([t for t in every if t["eye"] == eye], eye)
         out += lines
-        if params is not None:
+        if params:
             fits[eye] = params
     return out + spacing_line(meta, fits)

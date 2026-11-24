@@ -77,6 +77,7 @@ def main(argv=None) -> int:
     p_se = sub.add_parser("spaam-export", help="T6.12: SPAAM taps of runs as the device's calibration/eye_taps.csv")
     p_se.add_argument("runs", nargs="+", type=Path)
     p_se.add_argument("--out", type=Path, required=True)
+    p_se.add_argument("--camera", help="key every tap with this camera calibration (default: each run's own)")
     p_bc = sub.add_parser("bp-calib", help="T6.13: Eye intrinsics on the Beam Pro from a camcal run, tape-checked")
     p_bc.add_argument("run", type=Path)
     p_bc.add_argument("--write", action="store_true", help="save config/cameras/beampro_eye.* and update the frame set")
@@ -157,7 +158,7 @@ def main(argv=None) -> int:
         return 0
     if args.cmd == "spaam-export":
         from .spaam import export_taps
-        lines = export_taps(args.runs)
+        lines = export_taps(args.runs, args.camera)
         args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
         print(f"{len(lines) - 1} taps -> {args.out}")
         return 0

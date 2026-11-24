@@ -15,6 +15,7 @@ namespace EyeLab.Probes
         static readonly int W2E0 = Shader.PropertyToID("_EyeW2E0"), W2E1 = Shader.PropertyToID("_EyeW2E1");
         static readonly int E2W0 = Shader.PropertyToID("_EyeE2W0"), E2W1 = Shader.PropertyToID("_EyeE2W1");
         static readonly int M0 = Shader.PropertyToID("_EyeModel0"), M1 = Shader.PropertyToID("_EyeModel1");
+        static readonly int D0 = Shader.PropertyToID("_EyeDisplay0"), D1 = Shader.PropertyToID("_EyeDisplay1");
 
         Pose m_Left = new Pose(new Vector3(-0.0315f, 0f, 0f), Quaternion.identity);
         Pose m_Right = new Pose(new Vector3(0.0315f, 0f, 0f), Quaternion.identity);
@@ -69,9 +70,14 @@ namespace EyeLab.Probes
             Shader.SetGlobalMatrix(W2E1, e2w1.inverse);
             Shader.SetGlobalVector(M0, V(Left));
             Shader.SetGlobalVector(M1, V(Right));
+            Shader.SetGlobalVector(D0, Display(Left));
+            Shader.SetGlobalVector(D1, Display(Right));
         }
 
         static Vector4 V(double[] c) => c == null ? new Vector4(0f, 0f, 0f, (float)EyeModel.W)
                                                   : new Vector4((float)c[0], (float)c[1], (float)c[2], (float)EyeModel.W);
+
+        /// <summary>The display's centre p (tan units) and scale s, as (p_x, p_y, s, 0); the SDK's is (0, 0, 1, 0).</summary>
+        static Vector4 Display(double[] c) => c == null ? new Vector4(0f, 0f, 1f, 0f) : new Vector4((float)c[4], (float)c[5], (float)c[3], 0f);
     }
 }

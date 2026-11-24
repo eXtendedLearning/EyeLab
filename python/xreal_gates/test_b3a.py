@@ -119,7 +119,7 @@ class B3aTest(unittest.TestCase):
         self.assertEqual(ts["plate_L"]["ids"], [40, 41, 42, 43])
         self.assertEqual(ts["board25"]["ids"], list(range(17)))           # 5 x 7 ChArUco: 17 markers
         c = np.asarray(ts["board25"]["corners"]).reshape(-1, 4, 3)
-        self.assertAlmostEqual(float(np.linalg.norm(c[0][1] - c[0][0])), 0.019 * 25.97 / 25.0, places=6)   # gui_common printed marker side
+        self.assertAlmostEqual(float(np.linalg.norm(c[0][1] - c[0][0])), 0.02597, places=6)   # gui_common printed marker side (caliper)
         self.assertEqual(b3a.pose_lock_settings(), {"min_ambiguity_ratio": 3.0, "ambiguity_min_separation_deg": 10.0,
                                                     "max_acquire_reproj_rms_px": 15.0})
         s = {"ids": [30], "corners": [0.0] * 12}
@@ -304,4 +304,4 @@ class UpdateSetTest(unittest.TestCase):
             self.assertEqual(json.loads((out / "set.json").read_text())["K"][0], 790)
             board25 = [t for t in s["targets"] if t["name"] == "board25"][0]
             c = np.asarray(board25["corners"]).reshape(-1, 4, 3)[board25["ids"].index(8)].mean(axis=0)
-            np.testing.assert_allclose(c[:2], [2.5 * 0.02597, 3.5 * 0.02597], atol=1e-9)   # the printed board
+            np.testing.assert_allclose(c[:2], [2.5 * 0.02597 * 25 / 19, 3.5 * 0.02597 * 25 / 19], atol=1e-9)   # the printed board
