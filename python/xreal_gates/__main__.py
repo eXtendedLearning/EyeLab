@@ -74,10 +74,14 @@ def main(argv=None) -> int:
     p_b3.add_argument("--bottom-up", action="store_true", help="the --eye-plate frames are stored bottom-up (0.4.006 runs)")
     p_sp = sub.add_parser("spaam-pool", help="T6.11: SPAAM taps of several Beam Pro runs, per run and pooled per eye")
     p_sp.add_argument("runs", nargs="+", type=Path)
+    p_sp.add_argument("--repose", type=Path, nargs="?", const=Path("-"),
+                      help="re-solve every run's board poses with a frame set's camera (default set if no path)")
     p_se = sub.add_parser("spaam-export", help="T6.12: SPAAM taps of runs as the device's calibration/eye_taps.csv")
     p_se.add_argument("runs", nargs="+", type=Path)
     p_se.add_argument("--out", type=Path, required=True)
     p_se.add_argument("--camera", help="key every tap with this camera calibration (default: each run's own)")
+    p_se.add_argument("--repose", type=Path, nargs="?", const=Path("-"),
+                      help="re-solve every run's board poses with a frame set's camera and key the taps with it")
     p_bc = sub.add_parser("bp-calib", help="T6.13: Eye intrinsics on the Beam Pro from a camcal run, tape-checked")
     p_bc.add_argument("run", type=Path)
     p_bc.add_argument("--write", action="store_true", help="save config/cameras/beampro_eye.* and update the frame set")
@@ -157,14 +161,16 @@ def main(argv=None) -> int:
               f"-> {args.out or b3a.DEFAULT_SET}")
         return 0
     if args.cmd == "spaam-export":
-        from .spaam import export_taps
-        lines = export_taps(args.runs, args.camera)
+        from .spaam import export_taps, repose_set
+        rs = repose_set(None if str(args.repose) == "-" else args.repose) if args.repose else None
+        lines = export_taps(args.runs, args.camera, rs)
         args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
         print(f"{len(lines) - 1} taps -> {args.out}")
         return 0
     if args.cmd == "spaam-pool":
-        from .spaam import pooled_report
-        for line in pooled_report(args.runs):
+        from .spaam import pooled_report, repose_set
+        rs = repose_set(None if str(args.repose) == "-" else args.repose) if args.repose else None
+        for line in pooled_report(args.runs, rs):
             print(line)
         return 0
     if args.cmd == "bp-calib":

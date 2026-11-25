@@ -161,9 +161,47 @@ def dlt_centre(P: np.ndarray, uv: np.ndarray) -> Optional[np.ndarray]:
     return c[:3] / c[3] if abs(c[3]) > 1e-12 else None
 
 
-def tap_points(run: Path, set_dir: Optional[Path] = None) -> Tuple[List[dict], Dict[str, str]]:
+def repose_set(set_dir: Optional[Path] = None) -> dict:
+    """The camera and board a run's board poses are re-solved with (``tap_points``): a frame set's K, dist, board25 (at
+    the printed size since 0.4.017) and calibration name, the key of the device's tap store."""
+    from . import b3a
+    s = b3a.load_set(set_dir or b3a.DEFAULT_SET)
+    if s is None:
+        raise FileNotFoundError(f"no set.json in {set_dir or b3a.DEFAULT_SET}")
+    t = b3a.target_of(s, "board25")
+    return {"K": np.asarray(s["K"], float).reshape(3, 3), "dist": np.asarray(s["dist"], float),
+            "board": dict(zip(t["ids"], np.asarray(t["corners"], float).reshape(len(t["ids"]), 4, 3))),
+            "camera": str(s.get("calibration", "?"))}
+
+
+def _resolve(rows: List[dict], run: Path, rs: dict, k: float) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+    """Each row's board pose re-solved from its logged corners with ``rs``'s camera and board, starting from the logged
+    pose scaled to the printed size so the same planar solution is kept."""
+    import cv2
+    from . import b3a
+    want = {r["seq"] for r in rows}
+    corners = b3a._corners_by_frame([c for c in load_csv(run / "live_corners.csv") if c["seq"] in want], "seq")
+    out: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+    for r in rows:
+        cs = corners.get(r["seq"], {})
+        ids = [i for i in cs if i in rs["board"]]
+        if len(ids) < 2:
+            continue
+        rv, tv = b3a._pose(r)
+        ok, rv2, tv2 = cv2.solvePnP(np.concatenate([rs["board"][i] for i in ids]), np.concatenate([cs[i] for i in ids]),
+                                    rs["K"], rs["dist"], np.asarray(rv, float).reshape(3, 1).copy(),
+                                    (np.asarray(tv, float) * k).reshape(3, 1).copy(), useExtrinsicGuess=True,
+                                    flags=cv2.SOLVEPNP_ITERATIVE)
+        if ok:
+            out[r["seq"]] = (rv2.reshape(3), tv2.reshape(3))
+    return out
+
+
+def tap_points(run: Path, set_dir: Optional[Path] = None, repose: Optional[dict] = None) -> Tuple[List[dict], Dict[str, str]]:
     """Each good tap with the real point in the SDK eye's frame, the board re-posed at its true printed size
-    (``board_scale``). Returns (taps, notes)."""
+    (``board_scale``). With ``repose`` (``repose_set``), each board pose is re-solved from the run's logged corners
+    with that camera model instead: T6.12 run 3 (2026-11-25) found that taps posed under two camera models differ by
+    the models' principal points, about 0.5 deg. Returns (taps, notes)."""
     from . import b3a
     from .beampro import load_json
     run = Path(run)
@@ -177,10 +215,16 @@ def tap_points(run: Path, set_dir: Optional[Path] = None) -> Tuple[List[dict], D
     live = [r for r in load_csv(run / "live.csv") if trusted_board(r) and r["seq"] in heads]
     k = board_scale(meta)
     cu = b3a.F_CV @ (board_centre(meta) * k)
+    solved = _resolve(live, run, repose, k) if repose is not None else None
     room = []
     for r in live:
-        rv, tv = b3a._pose(r)
-        tv = np.asarray(tv, float) * k
+        if solved is not None:
+            if r["seq"] not in solved:
+                continue
+            rv, tv = solved[r["seq"]]
+        else:
+            rv, tv = b3a._pose(r)
+            tv = np.asarray(tv, float) * k
         R, t = b3a.target_in_room(rv, tv, b3a.head_unity(heads[r["seq"]]), rgb)
         room.append((int(r["cam_ts"]), t + R @ cu, float(np.linalg.norm(np.asarray(tv, float)))))
     taps = []
@@ -207,7 +251,8 @@ def tap_points(run: Path, set_dir: Optional[Path] = None) -> Tuple[List[dict], D
              "bad": ", ".join(sorted(bad, key=int)) if bad else "none",
              "rgb": "logged" if "rgb_from_head" in meta else "not logged: the device's value from later runs",
              "centre": ("logged by the device" if "board_centre_m" in meta else "nominal 25 mm board")
-             + (f"; re-posed at the printed size (x{k:.3f})" if abs(k - 1) > 1e-6 else "")}
+             + (f"; re-posed at the printed size (x{k:.3f})" if abs(k - 1) > 1e-6 and repose is None else "")
+             + (f"; poses re-solved from the corners with {repose['camera']}" if repose is not None else "")}
     return taps, notes
 
 
@@ -316,30 +361,33 @@ def run_camera(meta: dict) -> str:
     return m.group(1).strip() if m else "?"
 
 
-def export_taps(runs: List[Path], camera: Optional[str] = None) -> List[str]:
+def export_taps(runs: List[Path], camera: Optional[str] = None, repose: Optional[dict] = None) -> List[str]:
     """The good taps of ``runs`` as the device's ``calibration/eye_taps.csv`` (EyeModel.cs): one wearing per run, each
     tap with the camera calibration its point was measured with (the device fits only taps of its current one).
-    ``camera`` keys them all with another calibration instead: for taps re-posed at the board's true size, whose points
-    hold under the current calibration (T6.13: the old and new Eye models agree on the tape to 0.5 %)."""
+    ``repose`` (``repose_set``) re-solves every run's poses with that set's camera and keys the taps with it; that is
+    the way to carry taps over to a new calibration. ``camera`` only relabels the key. 0.4.017 relabelled taps posed
+    under the Surface calibration as the Beam Pro's, on the tape check's 0.5 % agreement; but a tape checks the scale,
+    not the principal point, and the two differ by 5 px, about 0.5 deg (T6.12 run 3)."""
     from .beampro import load_json
     lines = [TAPS_HEADER]
     for run in runs:
-        cam = camera or run_camera(load_json(Path(run)))
-        for t in tap_points(Path(run))[0]:
+        cam = repose["camera"] if repose is not None else camera or run_camera(load_json(Path(run)))
+        for t in tap_points(Path(run), repose=repose)[0]:
             if t["ok"]:
                 lines.append(",".join([Path(run).name, cam, t["eye"], t["step"]] + [repr(float(x)) for x in (*t["P"], *t["uv"])]))
     return lines
 
 
-def pooled_report(runs: List[Path]) -> List[str]:
-    """Several SPAAM sessions: each one's fit of the device's model (does it repeat?), then all taps pooled per eye."""
+def pooled_report(runs: List[Path], repose: Optional[dict] = None) -> List[str]:
+    """Several SPAAM sessions: each one's fit of the device's model (does it repeat?), then all taps pooled per eye.
+    ``repose`` re-solves every run's poses with one camera model (``tap_points``)."""
     from .beampro import load_json
-    out = [f"== SPAAM pooled over {len(runs)} runs"]
+    out = [f"== SPAAM pooled over {len(runs)} runs" + (f", poses re-solved with {repose['camera']}" if repose else "")]
     every: List[dict] = []
     meta = {}
     for run in runs:
         meta = load_json(Path(run))
-        taps = [t for t in tap_points(Path(run))[0] if t["ok"]]
+        taps = [t for t in tap_points(Path(run), repose=repose)[0] if t["ok"]]
         every += taps
         per = []
         for eye in ("L", "R"):

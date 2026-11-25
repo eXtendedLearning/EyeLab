@@ -134,3 +134,34 @@ class TapPointSourcesTest(unittest.TestCase):
                                CHARUCO_SQUARE_PRINTED_M / 0.02597, places=9)
         printed = CHARUCO_SQUARE_PRINTED_M
         self.assertAlmostEqual(board_scale({"board_centre_m": f"{2.5 * printed} {3.5 * printed} 0"}), 1.0, places=9)
+
+    def test_repose_resolves_with_another_camera(self):
+        """T6.12 run 3: a pose re-solved from the logged corners under the camera they came from is the true pose (from a
+        nominal-size start), and a principal point 5 px off turns it by about 5 / fx rad, which a tape cannot see."""
+        import math
+        import tempfile
+        from pathlib import Path
+        import cv2
+        from xreal_gates.spaam import _resolve
+        K = np.array([[627.0, 0, 641.3], [0, 625.7, 360.8], [0, 0, 1]])
+        sq = 0.03417
+        board = {i: np.array([[x, y, 0], [x + 0.026, y, 0], [x + 0.026, y + 0.026, 0], [x, y + 0.026, 0]])
+                 for i, (x, y) in enumerate([(0.004, 0.004), (0.072, 0.004), (0.004, 0.072), (0.072, 0.072), (0.14, 0.14)])}
+        rv, tv = np.array([0.1, -0.2, 0.05]), np.array([-0.08, -0.1, 0.6])
+        rows = ["seq,id,x0,y0,x1,y1,x2,y2,x3,y3"]
+        for i, c in board.items():
+            px = cv2.projectPoints(c, rv, tv, K, np.zeros(5))[0].reshape(-1)
+            rows.append("7," + str(i) + "," + ",".join(f"{v:.4f}" for v in px))
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / "live_corners.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+            k = sq / 0.025   # the run posed the board at 25 mm squares: its logged tvec is k times too near
+            row = {"seq": "7", "pose_ok": "1", **{f"r{j}": str(rv[j]) for j in range(3)},
+                   **{f"t{j}": str(tv[j] / k) for j in range(3)}}
+            got = _resolve([row], run, {"K": K, "dist": np.zeros(5), "board": board}, k)["7"]
+            np.testing.assert_allclose(got[1], tv, atol=2e-4)
+            K2 = K.copy()
+            K2[0, 2] -= 5.0
+            moved = _resolve([row], run, {"K": K2, "dist": np.zeros(5), "board": board}, k)["7"]
+            a = math.degrees(math.atan2(moved[1][0], moved[1][2]) - math.atan2(got[1][0], got[1][2]))
+            self.assertAlmostEqual(abs(a), math.degrees(5.0 / 627.0), delta=0.05)

@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.017<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.4.018<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -17,6 +17,26 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
 
 ### Added
 
+- (0.4.018) T6.12 run 3 analysed (`20261125_120406_eyecal`, the first under the Beam Pro camera and the true board size),
+  last 0.4 build.
+  - **"This round" on the markers everywhere:** at 35, 60 and 100 cm and on plate L. The SDK was clearly off at every
+    step. No step was rated as swimming. The board's room-stability scale fit is 0.96-1.07, against 1.24-1.39 before
+    T6.13.
+  - **"All rounds" was a few mm off: my seed was wrong, not the model.** The 72 taps re-posed in 0.4.017 kept the
+    Surface calibration's principal point (cx 646.4, cy 357.2) and were relabelled as the Beam Pro's (641.3, 360.8).
+    The 5 px and 3.6 px difference is 0.47° and 0.33°, which is the shift the new wearing showed in both eyes. A tape
+    check tests the scale, not the principal point.
+  - **Re-solved from their logged corners under the Beam Pro camera, the four wearings agree within 0.06° horizontally
+    and 0.11° vertically**, scale 0.965-0.976. Pooled, the fit is left (−0.03°, +1.14°), scale 0.973, and right
+    (−0.36°, +0.97°), scale 0.969. A fresh tap is predicted to 3.0 / 2.5 mm, against 15 / 13 mm for the SDK. The display
+    correction is a device constant.
+  - The device's store now holds the 96 re-solved taps, so the next run's "All rounds" uses them.
+  - "Check only" was not run. A restart loses "This round", since only the pooled model is refitted at start; the
+    round's taps are kept in the store.
+- (0.4.018) `spaam.tap_points(repose=...)` re-solves each board pose from the run's logged corners, using a frame set's
+  camera and its printed board. It starts from the logged pose, so the same planar solution is kept. `spaam-pool` and
+  `spaam-export` take `--repose [SET]`; `spaam-export --repose` keys the taps with that set's camera. Test:
+  `test_repose_resolves_with_another_camera`.
 - (0.4.017) T6.13 run 1 analysed (`docs/tasks/T6.13-beampro-eye-calibration.md`): **the camera was right; the board was
   the wrong size.**
   - **Calibration on the Beam Pro:** fx 627.1, fy 625.7, RMS 0.435 px, 77 % coverage. That is the Surface's fx 624, not
@@ -31,6 +51,8 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
   board size.
   - **The SDK's eye positions are right** (fitted spacing 59 mm). What is left is a fixed angle per eye: left
     (−0.49°, +0.81°), right (−0.79°, +0.65°), and a 2.5 % display scale. It is the same in three wearings on two days.
+    *(These centres are under the Surface calibration's principal point. Under the Beam Pro's they are left
+    (−0.03°, +1.14°) and right (−0.36°, +0.97°); see 0.4.018.)*
   - **A display model** (scale and centre per eye, eye kept) predicts a fresh tap to 2.6-2.7 mm, and another wearing's
     taps to 3 mm. The SDK gives 13 mm and the eye-centre model 4-5 mm.
   - Jack's plate L ("left eye clearly off, right less") is the eye-centre model fitted at the wrong scale. It pushed the
@@ -39,7 +61,8 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
   - `EyeModel.cs`: parameters `[C, s, p]` with s and p free; the shader takes `_EyeDisplay*`.
   - `spaam.tap_points` re-poses board25 at the printed size from the logged board centre (`board_scale`).
   - `spaam-export --camera` keys re-posed taps to the current calibration. The 72 taps of the three wearings seed the
-    device's store.
+    device's store. *(Wrong: relabelling does not re-pose them under the new camera, which left "All rounds" about
+    0.5° off. Replaced in 0.4.018 by `--repose`.)*
 - (0.4.016) T6.12 run 1 analysed (`docs/tasks/T6.12-eye-calibration.md`).
   - **Within a wearing:** "This round" was *on the markers* at 35 and 60 cm, but it swam at 1 m and on plate L.
   - **Three defects:**
