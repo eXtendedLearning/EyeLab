@@ -1,0 +1,712 @@
+{
+ "schema": "eyelab.campaign.sheets/1",
+ "sheets": [
+  {
+   "name": "A40",
+   "kind": "A40",
+   "number": 0,
+   "digest": "061aa7f1af82",
+   "targets": 0
+  },
+  {
+   "name": "T001",
+   "kind": "T",
+   "number": 1,
+   "digest": "36da25d0b6b2",
+   "targets": 6
+  },
+  {
+   "name": "T002",
+   "kind": "T",
+   "number": 2,
+   "digest": "dc8e5e1b03ba",
+   "targets": 6
+  },
+  {
+   "name": "T003",
+   "kind": "T",
+   "number": 3,
+   "digest": "a62fe9aea641",
+   "targets": 6
+  },
+  {
+   "name": "T004",
+   "kind": "T",
+   "number": 4,
+   "digest": "5b1951373366",
+   "targets": 6
+  },
+  {
+   "name": "T005",
+   "kind": "T",
+   "number": 5,
+   "digest": "c0bd32c1ad1d",
+   "targets": 6
+  },
+  {
+   "name": "T006",
+   "kind": "T",
+   "number": 6,
+   "digest": "263b79880723",
+   "targets": 6
+  },
+  {
+   "name": "T007",
+   "kind": "T",
+   "number": 7,
+   "digest": "9d55308fe569",
+   "targets": 6
+  },
+  {
+   "name": "T008",
+   "kind": "T",
+   "number": 8,
+   "digest": "569869d3abd5",
+   "targets": 6
+  },
+  {
+   "name": "T009",
+   "kind": "T",
+   "number": 9,
+   "digest": "606127e2047e",
+   "targets": 6
+  },
+  {
+   "name": "T010",
+   "kind": "T",
+   "number": 10,
+   "digest": "c0b3592656f6",
+   "targets": 6
+  },
+  {
+   "name": "P011",
+   "kind": "P",
+   "number": 11,
+   "digest": "6e3735e0aca2",
+   "targets": 12
+  },
+  {
+   "name": "P012",
+   "kind": "P",
+   "number": 12,
+   "digest": "8cd7bdb2ca90",
+   "targets": 12
+  },
+  {
+   "name": "P013",
+   "kind": "P",
+   "number": 13,
+   "digest": "2035ab2f5e4d",
+   "targets": 12
+  },
+  {
+   "name": "P014",
+   "kind": "P",
+   "number": 14,
+   "digest": "cdcfa3c44f2a",
+   "targets": 12
+  },
+  {
+   "name": "P015",
+   "kind": "P",
+   "number": 15,
+   "digest": "a33e502b74de",
+   "targets": 12
+  },
+  {
+   "name": "P016",
+   "kind": "P",
+   "number": 16,
+   "digest": "5c2e56535f77",
+   "targets": 12
+  },
+  {
+   "name": "P017",
+   "kind": "P",
+   "number": 17,
+   "digest": "5c2ce94ee067",
+   "targets": 12
+  },
+  {
+   "name": "P018",
+   "kind": "P",
+   "number": 18,
+   "digest": "87bc7d85d2c9",
+   "targets": 12
+  },
+  {
+   "name": "P019",
+   "kind": "P",
+   "number": 19,
+   "digest": "3f742bae0893",
+   "targets": 12
+  },
+  {
+   "name": "P020",
+   "kind": "P",
+   "number": 20,
+   "digest": "26e800d3493a",
+   "targets": 12
+  },
+  {
+   "name": "P021",
+   "kind": "P",
+   "number": 21,
+   "digest": "9797197e86a5",
+   "targets": 12
+  },
+  {
+   "name": "P022",
+   "kind": "P",
+   "number": 22,
+   "digest": "0f6531a897ff",
+   "targets": 12
+  },
+  {
+   "name": "P023",
+   "kind": "P",
+   "number": 23,
+   "digest": "dfeaf548a933",
+   "targets": 12
+  },
+  {
+   "name": "P024",
+   "kind": "P",
+   "number": 24,
+   "digest": "59d3f3a1f110",
+   "targets": 12
+  },
+  {
+   "name": "P025",
+   "kind": "P",
+   "number": 25,
+   "digest": "4e0d9f09125a",
+   "targets": 12
+  },
+  {
+   "name": "P026",
+   "kind": "P",
+   "number": 26,
+   "digest": "922ff819ef88",
+   "targets": 12
+  },
+  {
+   "name": "P027",
+   "kind": "P",
+   "number": 27,
+   "digest": "703265c93e8f",
+   "targets": 12
+  },
+  {
+   "name": "P028",
+   "kind": "P",
+   "number": 28,
+   "digest": "e89b9cf40fa2",
+   "targets": 12
+  },
+  {
+   "name": "P029",
+   "kind": "P",
+   "number": 29,
+   "digest": "361c9fc6f65d",
+   "targets": 12
+  },
+  {
+   "name": "P030",
+   "kind": "P",
+   "number": 30,
+   "digest": "22cf314f7089",
+   "targets": 12
+  },
+  {
+   "name": "P031",
+   "kind": "P",
+   "number": 31,
+   "digest": "3d221a6d2aef",
+   "targets": 12
+  },
+  {
+   "name": "P032",
+   "kind": "P",
+   "number": 32,
+   "digest": "94528388541e",
+   "targets": 12
+  },
+  {
+   "name": "P033",
+   "kind": "P",
+   "number": 33,
+   "digest": "d69b3acd464a",
+   "targets": 12
+  },
+  {
+   "name": "P034",
+   "kind": "P",
+   "number": 34,
+   "digest": "7a0a474a0871",
+   "targets": 12
+  },
+  {
+   "name": "P035",
+   "kind": "P",
+   "number": 35,
+   "digest": "c04d5382c8f1",
+   "targets": 12
+  },
+  {
+   "name": "P036",
+   "kind": "P",
+   "number": 36,
+   "digest": "a2264498f6be",
+   "targets": 12
+  },
+  {
+   "name": "P037",
+   "kind": "P",
+   "number": 37,
+   "digest": "7982a76ba6eb",
+   "targets": 12
+  },
+  {
+   "name": "P038",
+   "kind": "P",
+   "number": 38,
+   "digest": "e091c419f73c",
+   "targets": 12
+  },
+  {
+   "name": "P039",
+   "kind": "P",
+   "number": 39,
+   "digest": "9d97ee1332d9",
+   "targets": 12
+  },
+  {
+   "name": "P040",
+   "kind": "P",
+   "number": 40,
+   "digest": "2fbad9c35c67",
+   "targets": 12
+  },
+  {
+   "name": "M041",
+   "kind": "M",
+   "number": 41,
+   "digest": "3ee716100b1d",
+   "targets": 12
+  },
+  {
+   "name": "M042",
+   "kind": "M",
+   "number": 42,
+   "digest": "a2392de2b5af",
+   "targets": 12
+  },
+  {
+   "name": "M043",
+   "kind": "M",
+   "number": 43,
+   "digest": "2b970f64de72",
+   "targets": 12
+  },
+  {
+   "name": "M044",
+   "kind": "M",
+   "number": 44,
+   "digest": "afc5f62fae1c",
+   "targets": 12
+  },
+  {
+   "name": "M045",
+   "kind": "M",
+   "number": 45,
+   "digest": "5f2b74463593",
+   "targets": 12
+  },
+  {
+   "name": "M046",
+   "kind": "M",
+   "number": 46,
+   "digest": "e26c0eef722b",
+   "targets": 12
+  },
+  {
+   "name": "M047",
+   "kind": "M",
+   "number": 47,
+   "digest": "ec802ba2f0cc",
+   "targets": 12
+  },
+  {
+   "name": "M048",
+   "kind": "M",
+   "number": 48,
+   "digest": "2d354e0c2637",
+   "targets": 12
+  },
+  {
+   "name": "M049",
+   "kind": "M",
+   "number": 49,
+   "digest": "8c4d3a4c7a5c",
+   "targets": 12
+  },
+  {
+   "name": "M050",
+   "kind": "M",
+   "number": 50,
+   "digest": "90f322c23d93",
+   "targets": 12
+  },
+  {
+   "name": "M051",
+   "kind": "M",
+   "number": 51,
+   "digest": "f99638475d63",
+   "targets": 12
+  },
+  {
+   "name": "M052",
+   "kind": "M",
+   "number": 52,
+   "digest": "201c32a36959",
+   "targets": 12
+  },
+  {
+   "name": "M053",
+   "kind": "M",
+   "number": 53,
+   "digest": "b00038591b88",
+   "targets": 12
+  },
+  {
+   "name": "M054",
+   "kind": "M",
+   "number": 54,
+   "digest": "799e2df6de92",
+   "targets": 12
+  },
+  {
+   "name": "M055",
+   "kind": "M",
+   "number": 55,
+   "digest": "b2f82b0433b5",
+   "targets": 12
+  },
+  {
+   "name": "M056",
+   "kind": "M",
+   "number": 56,
+   "digest": "7b54922f4f55",
+   "targets": 12
+  },
+  {
+   "name": "M057",
+   "kind": "M",
+   "number": 57,
+   "digest": "a306e878aee5",
+   "targets": 12
+  },
+  {
+   "name": "M058",
+   "kind": "M",
+   "number": 58,
+   "digest": "eb58448c5a1a",
+   "targets": 12
+  },
+  {
+   "name": "M059",
+   "kind": "M",
+   "number": 59,
+   "digest": "f0f322ab1be9",
+   "targets": 12
+  },
+  {
+   "name": "M060",
+   "kind": "M",
+   "number": 60,
+   "digest": "4a00a84b2af1",
+   "targets": 12
+  },
+  {
+   "name": "M061",
+   "kind": "M",
+   "number": 61,
+   "digest": "0ed28544280f",
+   "targets": 12
+  },
+  {
+   "name": "M062",
+   "kind": "M",
+   "number": 62,
+   "digest": "e95ec4d138cc",
+   "targets": 12
+  },
+  {
+   "name": "M063",
+   "kind": "M",
+   "number": 63,
+   "digest": "037193276e29",
+   "targets": 12
+  },
+  {
+   "name": "M064",
+   "kind": "M",
+   "number": 64,
+   "digest": "4a2824b85620",
+   "targets": 12
+  },
+  {
+   "name": "M065",
+   "kind": "M",
+   "number": 65,
+   "digest": "fee10e54a87c",
+   "targets": 12
+  },
+  {
+   "name": "M066",
+   "kind": "M",
+   "number": 66,
+   "digest": "e47c1097e15a",
+   "targets": 12
+  },
+  {
+   "name": "M067",
+   "kind": "M",
+   "number": 67,
+   "digest": "49700da78699",
+   "targets": 12
+  },
+  {
+   "name": "M068",
+   "kind": "M",
+   "number": 68,
+   "digest": "01a2ab59a240",
+   "targets": 12
+  },
+  {
+   "name": "M069",
+   "kind": "M",
+   "number": 69,
+   "digest": "58ab6f971b14",
+   "targets": 12
+  },
+  {
+   "name": "M070",
+   "kind": "M",
+   "number": 70,
+   "digest": "0eaccec04e22",
+   "targets": 12
+  },
+  {
+   "name": "M071",
+   "kind": "M",
+   "number": 71,
+   "digest": "4cdaec5e5e6e",
+   "targets": 12
+  },
+  {
+   "name": "M072",
+   "kind": "M",
+   "number": 72,
+   "digest": "fd88bca766d3",
+   "targets": 12
+  },
+  {
+   "name": "M073",
+   "kind": "M",
+   "number": 73,
+   "digest": "5c9234d7749e",
+   "targets": 12
+  },
+  {
+   "name": "M074",
+   "kind": "M",
+   "number": 74,
+   "digest": "555accece058",
+   "targets": 12
+  },
+  {
+   "name": "M075",
+   "kind": "M",
+   "number": 75,
+   "digest": "73cac2fc0d78",
+   "targets": 12
+  },
+  {
+   "name": "M076",
+   "kind": "M",
+   "number": 76,
+   "digest": "54619ecb4a96",
+   "targets": 12
+  },
+  {
+   "name": "M077",
+   "kind": "M",
+   "number": 77,
+   "digest": "e37d218c4287",
+   "targets": 12
+  },
+  {
+   "name": "M078",
+   "kind": "M",
+   "number": 78,
+   "digest": "80fc4f9f9dce",
+   "targets": 12
+  },
+  {
+   "name": "M079",
+   "kind": "M",
+   "number": 79,
+   "digest": "f97fc520bd4c",
+   "targets": 12
+  },
+  {
+   "name": "M080",
+   "kind": "M",
+   "number": 80,
+   "digest": "5d7cd3091efd",
+   "targets": 12
+  },
+  {
+   "name": "M081",
+   "kind": "M",
+   "number": 81,
+   "digest": "cc752239bb73",
+   "targets": 12
+  },
+  {
+   "name": "M082",
+   "kind": "M",
+   "number": 82,
+   "digest": "b6bd0e50a990",
+   "targets": 12
+  },
+  {
+   "name": "M083",
+   "kind": "M",
+   "number": 83,
+   "digest": "0716b3329c2d",
+   "targets": 12
+  },
+  {
+   "name": "M084",
+   "kind": "M",
+   "number": 84,
+   "digest": "c4244da98637",
+   "targets": 12
+  },
+  {
+   "name": "M085",
+   "kind": "M",
+   "number": 85,
+   "digest": "bca7a6581568",
+   "targets": 12
+  },
+  {
+   "name": "M086",
+   "kind": "M",
+   "number": 86,
+   "digest": "f48437003edb",
+   "targets": 12
+  },
+  {
+   "name": "M087",
+   "kind": "M",
+   "number": 87,
+   "digest": "a4819060e76f",
+   "targets": 12
+  },
+  {
+   "name": "M088",
+   "kind": "M",
+   "number": 88,
+   "digest": "d3798451def2",
+   "targets": 12
+  },
+  {
+   "name": "M089",
+   "kind": "M",
+   "number": 89,
+   "digest": "9c676e7751ec",
+   "targets": 12
+  },
+  {
+   "name": "M090",
+   "kind": "M",
+   "number": 90,
+   "digest": "fdc4b4394fa4",
+   "targets": 12
+  },
+  {
+   "name": "M091",
+   "kind": "M",
+   "number": 91,
+   "digest": "bbedc6d71ece",
+   "targets": 12
+  },
+  {
+   "name": "M092",
+   "kind": "M",
+   "number": 92,
+   "digest": "89821dff742d",
+   "targets": 12
+  },
+  {
+   "name": "M093",
+   "kind": "M",
+   "number": 93,
+   "digest": "cfe39624c664",
+   "targets": 12
+  },
+  {
+   "name": "M094",
+   "kind": "M",
+   "number": 94,
+   "digest": "28d986294cc3",
+   "targets": 12
+  },
+  {
+   "name": "M095",
+   "kind": "M",
+   "number": 95,
+   "digest": "d5839f884ee2",
+   "targets": 12
+  },
+  {
+   "name": "M096",
+   "kind": "M",
+   "number": 96,
+   "digest": "e3e3fa48e46d",
+   "targets": 12
+  },
+  {
+   "name": "M097",
+   "kind": "M",
+   "number": 97,
+   "digest": "506ebc818981",
+   "targets": 12
+  },
+  {
+   "name": "M098",
+   "kind": "M",
+   "number": 98,
+   "digest": "3d105d484cb0",
+   "targets": 12
+  },
+  {
+   "name": "M099",
+   "kind": "M",
+   "number": 99,
+   "digest": "835bc7d0902a",
+   "targets": 12
+  },
+  {
+   "name": "M100",
+   "kind": "M",
+   "number": 100,
+   "digest": "b7416a298b90",
+   "targets": 12
+  }
+ ]
+}

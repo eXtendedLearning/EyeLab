@@ -54,6 +54,11 @@ namespace EyeLab.Probes
         Text m_TapLabel;
         Text m_SpaamInfo;
         bool m_SpaamRun;
+        // Campaign 0.5 (T7.0): the trial set-up page and the page shown while a trial runs
+        GameObject m_CampaignPage, m_MarkPage;
+        Text m_CampaignInfo, m_MarkInfo;
+        Text[] m_ConditionLabels;
+        bool m_MarkRun;
 
         // ------------------------------------------------------------------ T6.3 cue scripts (Jack, 2026-11-18)
         static readonly CueStep[] LoopCues =
@@ -151,10 +156,14 @@ namespace EyeLab.Probes
             if (m_OverlayRatePanel != null) m_OverlayRatePanel.SetActive(page == m_OverlayRatePanel);
             if (m_AlignPage != null) m_AlignPage.SetActive(page == m_AlignPage);
             if (m_SpaamPage != null) m_SpaamPage.SetActive(page == m_SpaamPage);
+            if (m_CampaignPage != null) m_CampaignPage.SetActive(page == m_CampaignPage);
+            if (m_MarkPage != null) m_MarkPage.SetActive(page == m_MarkPage);
+            if (page == m_CampaignPage) RefreshCampaign();
         }
 
         void Update()
         {
+            if (m_MarkRun) UpdateMark();
             if (m_SpaamRun && m_SpaamPage != null)
             {
                 string s = DetectProbe.ActiveStep;
@@ -236,8 +245,9 @@ namespace EyeLab.Probes
             if (p == "eyecal") yield return Detect(cfg, "eyecal");
             if (p == "camcal") yield return Detect(cfg, "camcal");
             if (p == "eyecheck") yield return Detect(cfg, "eyecheck");
+            if (p == "mark") yield return Detect(cfg, "mark");
             m_Glasses?.ClearCue();
-            ShowPage(m_Panel);
+            ShowPage(p == "mark" ? m_CampaignPage : m_Panel);
             m_Busy = false;
         }
 
@@ -299,8 +309,17 @@ namespace EyeLab.Probes
                 if (variant == "overlay") ShowPage(m_OverlayRatePanel);
                 if (variant == "align") { m_AlignRun = true; ShowPage(m_AlignPage); }
                 if (spaam) { m_SpaamRun = true; ShowPage(m_SpaamPage); }
+                bool mark = variant == "mark";
+                if (mark && Campaign.ActiveSheet == null && !Campaign.Prepare(out string why))
+                {
+                    run.Meta("campaign_error", why);
+                    SetStatus("Cannot start: " + why);
+                    yield break;
+                }
+                if (mark) { Campaign.Begin(run); m_MarkRun = true; ShowPage(m_MarkPage); overlay = true; }
                 if (overlay) m_Glasses?.SetOverlayLayout(true);
                 yield return DetectProbe.Run(run, SetStatus, ShowCue, variant);
+                if (mark) { Campaign.End(run); m_MarkRun = false; }
                 m_AlignRun = false;
                 m_SpaamRun = false;
                 if (overlay) m_Glasses?.SetOverlayLayout(false);
@@ -531,6 +550,7 @@ namespace EyeLab.Probes
             m_Glasses = GlassesView.Create(font);
 
             m_Panel = Column(canvas.transform);
+            AddAction(font, "CAMPAIGN 0.5: hammering trials", () => ShowPage(m_CampaignPage), new Color(0.1f, 0.25f, 0.45f, 0.9f));
             AddButton(font, "T6.13  Camera calibration + tape check  (4 min)", new ProbeConfig { probe = "camcal" });
             AddButton(font, "T6.12  Eye calibration: taps, fit, check  (6 min)", new ProbeConfig { probe = "eyecal" });
             AddButton(font, "T6.12  Check only, saved calibration  (3 min)", new ProbeConfig { probe = "eyecheck" });
@@ -590,6 +610,7 @@ namespace EyeLab.Probes
             }
             BuildAlignPage(canvas.transform, font, overlayColors);
             BuildSpaamPage(canvas.transform, font, overlayColors);
+            BuildCampaignPages(canvas.transform, font);
             ShowPage(m_Panel);
             Debug.Log("[EyeLab probe] buttons built on " + (canvas.gameObject.name));
         }
@@ -680,6 +701,92 @@ namespace EyeLab.Probes
             AddAction(font, "Last tap was bad", DetectProbe.BadTap, new Color(0.45f, 0.1f, 0.1f, 0.9f), bad);
             m_SpaamCheck.SetActive(false);
             m_SpaamRate.SetActive(false);
+        }
+
+        // ------------------------------------------------------------------ campaign 0.5 (T7.0 C6)
+        /// <summary>
+        /// The trial set-up page (participant, condition, sheet, start) and the page during a trial (NEXT, bad mark,
+        /// abort). A Bluetooth presenter does the same as the buttons: PageDown / Right / Down / Space / Enter = NEXT,
+        /// PageUp / Left / Up / B / . = the last hit was bad.
+        /// </summary>
+        void BuildCampaignPages(Transform canvas, Font font)
+        {
+            Color grey = new Color(0.22f, 0.22f, 0.25f, 0.9f), blue = new Color(0.1f, 0.25f, 0.45f, 0.9f);
+            Color green = new Color(0.12f, 0.3f, 0.15f, 0.9f), red = new Color(0.45f, 0.1f, 0.1f, 0.9f);
+            m_CampaignPage = Column(canvas);
+            m_CampaignInfo = MakeText(m_CampaignPage.transform, font, Vector2.zero, Vector2.one, 30);
+            m_CampaignInfo.alignment = TextAnchor.MiddleCenter;
+            m_CampaignInfo.gameObject.AddComponent<LayoutElement>().preferredHeight = 170;
+            Transform r1 = Row(m_CampaignPage.transform);
+            AddAction(font, "Participant -", () => { Campaign.SetParticipant(-1); RefreshCampaign(); }, grey, r1);
+            AddAction(font, "Participant +", () => { Campaign.SetParticipant(+1); RefreshCampaign(); }, grey, r1);
+            Transform r2 = Row(m_CampaignPage.transform);
+            m_ConditionLabels = new Text[Campaign.Conditions.Length];
+            for (int i = 0; i < Campaign.Conditions.Length; i++)
+            {
+                string c = Campaign.Conditions[i];
+                m_ConditionLabels[i] = AddAction(font, Campaign.ConditionNames[i], () => { Campaign.SetCondition(c); RefreshCampaign(); }, blue, r2);
+            }
+            Transform r3 = Row(m_CampaignPage.transform);
+            AddAction(font, "Sheet -", () => { Campaign.StepSheet(-1); RefreshCampaign(); }, grey, r3);
+            AddAction(font, "Sheet +", () => { Campaign.StepSheet(+1); RefreshCampaign(); }, grey, r3);
+            AddAction(font, "START TRIAL", StartTrial, green, m_CampaignPage);
+            AddAction(font, "Back", () => ShowPage(m_Panel), grey, m_CampaignPage);
+
+            m_MarkPage = Column(canvas);
+            m_MarkInfo = MakeText(m_MarkPage.transform, font, Vector2.zero, Vector2.one, 30);
+            m_MarkInfo.alignment = TextAnchor.MiddleCenter;
+            m_MarkInfo.gameObject.AddComponent<LayoutElement>().preferredHeight = 170;
+            GameObject next = Sub(m_MarkPage.transform);
+            next.GetComponent<LayoutElement>().flexibleHeight = 5;
+            AddAction(font, "NEXT  (target hit / start)", () => Campaign.Next("button"), green, next);
+            Transform r4 = Row(m_MarkPage.transform);
+            AddAction(font, "Last hit was BAD", () => Campaign.Bad("button"), new Color(0.35f, 0.3f, 0.1f, 0.9f), r4);
+            AddAction(font, "Abort trial", Campaign.Abort, red, r4);
+        }
+
+        void StartTrial()
+        {
+            if (m_Busy) return;
+            if (!Campaign.Prepare(out string why)) { SetStatus("Cannot start: " + why); RefreshCampaign(); return; }
+            SetStatus($"Trial {Campaign.ParticipantId} {Campaign.ConditionName(Campaign.Current.condition)} {Campaign.CurrentSheetName}: {why}");
+            StartCoroutine(RunProbe(new ProbeConfig { probe = "mark" }));
+        }
+
+        void RefreshCampaign()
+        {
+            if (m_CampaignInfo == null) return;
+            Campaign.State st = Campaign.Current;
+            string sheet = Campaign.CurrentSheetName;
+            Campaign.Sheet sh = Campaign.LoadSheet(sheet);
+            string found = sh == null ? " (NOT FOUND)" : " (" + (sh.targets?.Length ?? 0) + " targets)";
+            string display = Campaign.ShowsCross(st.condition) ? Campaign.DisplayFor(st.condition) : "none: printed crosses";
+            m_CampaignInfo.text = "Participant " + Campaign.ParticipantId + "   |   " + Campaign.ConditionName(st.condition) + "   |   sheet " + sheet + found +
+                                  "\nDisplay: " + display + "   |   Put this sheet on the glass, then START";
+            for (int i = 0; i < m_ConditionLabels.Length; i++)
+                m_ConditionLabels[i].fontStyle = Campaign.Conditions[i] == st.condition ? FontStyle.Bold : FontStyle.Normal;
+        }
+
+        void UpdateMark()
+        {
+#if ENABLE_INPUT_SYSTEM
+            var kb = UnityEngine.InputSystem.Keyboard.current;
+            if (kb != null)
+            {
+                if (kb.pageDownKey.wasPressedThisFrame || kb.rightArrowKey.wasPressedThisFrame || kb.downArrowKey.wasPressedThisFrame ||
+                    kb.spaceKey.wasPressedThisFrame || kb.enterKey.wasPressedThisFrame || kb.numpadEnterKey.wasPressedThisFrame)
+                    Campaign.Next("key");
+                else if (kb.pageUpKey.wasPressedThisFrame || kb.leftArrowKey.wasPressedThisFrame || kb.upArrowKey.wasPressedThisFrame ||
+                         kb.bKey.wasPressedThisFrame || kb.periodKey.wasPressedThisFrame)
+                    Campaign.Bad("key");
+            }
+#endif
+            if (m_MarkInfo == null) return;
+            double age = DetectProbe.BoardAgeMs;
+            string seen = age < 0 ? "Sheet not seen yet" : age < 500 ? "Sheet tracked" : "Sheet last seen " + (age / 1000).ToString("F1", CultureInfo.InvariantCulture) + " s ago";
+            m_MarkInfo.text = Campaign.ParticipantId + "  " + Campaign.ConditionName(Campaign.Current.condition) + "  " + Campaign.ActiveSheet?.name +
+                              "   |   " + DetectProbe.ActiveStep + "\n" + seen + "   |   next " + Campaign.NextPresses + ", bad " + Campaign.BadMarks +
+                              (Campaign.Aborted ? "   |   ABORTING" : "");
         }
 
         static GameObject Sub(Transform parent)

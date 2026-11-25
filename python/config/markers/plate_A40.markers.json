@@ -1,0 +1,73 @@
+{
+  "defaultMarkerSizeMm": 40.0,
+  "markers": [
+    {
+      "markerId": 30,
+      "unvPosition": [
+        -0.1205,
+        0.077,
+        0.0
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 40.0,
+      "nodeId": null,
+      "description": "plate_A40 face F"
+    },
+    {
+      "markerId": 31,
+      "unvPosition": [
+        0.1205,
+        0.077,
+        0.0
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 40.0,
+      "nodeId": null,
+      "description": "plate_A40 face F"
+    },
+    {
+      "markerId": 32,
+      "unvPosition": [
+        -0.1205,
+        -0.077,
+        0.0
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 40.0,
+      "nodeId": null,
+      "description": "plate_A40 face F"
+    },
+    {
+      "markerId": 33,
+      "unvPosition": [
+        0.1205,
+        -0.077,
+        0.0
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rollDeg": 0.0,
+      "markerSizeMm": 40.0,
+      "nodeId": null,
+      "description": "plate_A40 face F"
+    }
+  ]
+}

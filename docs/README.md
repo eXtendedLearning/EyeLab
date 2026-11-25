@@ -6,9 +6,10 @@ This folder holds the **committed, public-safe** engineering documentation for E
 
 1. **`../CONTEXT.md`** — verified facts: the XREAL XR Plugin 3.1.0 surface, resolved decisions, Android settings and why, the open-issues board.
 2. **`HARDWARE.md`** and **`CAPABILITIES.md`** — what hardware is in hand and what is known to work on it (dated, with evidence).
-3. **`BEAMPRO-HANDOVER-2026-11-10.md`** — the Beam Pro plan and its gate table (B0, BS, B1, …); the `tasks/T6.*` files execute those gates.
-4. **`adr/`** — architecture decisions; ADR-0001 (bridging staircase) and ADR-0004 (pose on the Beam Pro) are accepted.
-5. **`tasks/T2.6-implementation-checklist.md`** — the XREAL application plan (bridge, `EwmaStructureAnchor`, calibration scene). Its class names are contracts; its code stubs are intent.
+3. **`tasks/T7.0-campaign-0.5.md`** — the current work: campaign 0.5 (objectives, literature, gates C0-C8, sheets, hit analysis, the 0.5.000 build, lab materials, hand-off to Claude Code §14).
+4. **`BEAMPRO-HANDOVER-2026-11-10.md`** — the Beam Pro plan and its gate table (B0, BS, B1, …); the `tasks/T6.*` files execute those gates.
+5. **`adr/`** — architecture decisions; ADR-0001 (bridging staircase) and ADR-0004 (pose on the Beam Pro) are accepted.
+6. **`tasks/T2.6-implementation-checklist.md`** — the XREAL application plan (bridge, `EwmaStructureAnchor`, calibration scene). Its class names are contracts; its code stubs are intent.
 
 Project wiki (EN/IT): **`wiki/index.html`**, a navigable summary of the system, the validation campaign, the XREAL work and the decision record. Sources in `wiki/src/`, rebuild with `python docs/wiki/build_wiki.py`. Where it disagrees with the documents here, the documents win.
 
@@ -26,6 +27,7 @@ docs/
 ├── validation.md                                # baseline validation protocol (python/validation/)
 ├── validation-campaign.md                       # step-by-step campaign guide (validation.bat)
 ├── validation_printables/                       # plate A/L PDFs
+├── campaign_printables/                         # campaign 0.5 sheets: A40, T, P, M PDFs (python -m campaign sheets)
 ├── aruco_marker_best_practices.pdf
 ├── wiki/                                        # EN/IT project wiki
 ├── adr/
@@ -35,7 +37,8 @@ docs/
 │   └── 0004-on-device-pose-beampro.md           # accepted 2026-11-19
 └── tasks/
     ├── T2.6-implementation-checklist.md         # XREAL application plan
-    └── T6.0 … T6.5                              # Beam Pro gates, one file per session, results inside
+    ├── T6.0 … T6.13                             # Beam Pro gates, one file per session, results inside
+    └── T7.0-campaign-0.5.md                     # campaign 0.5: plan, gates, build, hand-off (current)
 ```
 
 ADRs are numbered sequentially (`NNNN-kebab-case-title.md`), Nygard format, append-only: to reverse one, write a new ADR and mark the old one `Status: Superseded by ADR-NNNN`.

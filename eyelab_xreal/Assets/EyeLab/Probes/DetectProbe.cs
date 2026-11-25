@@ -388,6 +388,7 @@ namespace EyeLab.Probes
         {
             stepId = stepId ?? "";
             if (variant == "spaam") return new Plan("roi", 1, NiceRoi, "board25");
+            if (variant == "mark") return new Plan("roi", 1, NiceRoi, MarkTarget);   // campaign 0.5: the F40 frame of every sheet
             if (variant == "camcal") return new Plan("full", 2, 0, "board25");   // full frames: the board goes to the edges, tilted
             if (variant == "eyecal" || variant == "eyecheck")
                 return new Plan("roi", 1, NiceRoi, stepId.StartsWith("l_") ? "plate_L" : "board25");
@@ -726,7 +727,7 @@ namespace EyeLab.Probes
             var go = new GameObject("EyeLab DetectProbe");
             var p = go.AddComponent<DetectProbe>();
             p.m_Run = run;
-            p.m_Variant = Array.IndexOf(new[] { "budget", "lean", "overlay", "align", "spaam", "eyecal", "eyecheck", "camcal" }, variant) >= 0 ? variant : "detect";
+            p.m_Variant = Array.IndexOf(new[] { "budget", "lean", "overlay", "align", "spaam", "eyecal", "eyecheck", "camcal", "mark" }, variant) >= 0 ? variant : "detect";
             run.Meta("variant", p.m_Variant);
             string info;
             try { info = ArucoNative.Info(); }
@@ -772,7 +773,8 @@ namespace EyeLab.Probes
 
             // Part 2: live on the Eye.
             p.StartLive();
-            if (p.m_Variant == "eyecal" || p.m_Variant == "eyecheck") p.StartEyeModel();
+            if (p.m_Variant == "eyecal" || p.m_Variant == "eyecheck" || p.m_Variant == "mark") p.StartEyeModel();
+            if (p.m_Variant == "mark") p.StartMark();
             if (p.m_Variant == "spaam" || p.m_Variant == "eyecal")
             {
                 p.m_Cross = SpaamCrosshair.Create(run);
@@ -781,7 +783,7 @@ namespace EyeLab.Probes
                                   $"; real point: board25 centre of the middle square ({p.BoardCentreText}) m in the board frame; head pose = Unity camera at the tap");
             }
             float nextStatus = 0f;
-            List<CueStep> cues = p.m_Variant == "camcal" ? CamcalCues() : p.m_Variant == "eyecal" ? EyecalCues() : p.m_Variant == "eyecheck" ? EyecheckCues() : p.m_Variant == "spaam" ? SpaamCues() : p.m_Variant == "align" ? AlignCues() : p.m_Variant == "overlay" ? OverlayCues() : p.m_Variant == "lean" ? LeanCues()
+            List<CueStep> cues = p.m_Variant == "mark" ? Campaign.Cues() : p.m_Variant == "camcal" ? CamcalCues() : p.m_Variant == "eyecal" ? EyecalCues() : p.m_Variant == "eyecheck" ? EyecheckCues() : p.m_Variant == "spaam" ? SpaamCues() : p.m_Variant == "align" ? AlignCues() : p.m_Variant == "overlay" ? OverlayCues() : p.m_Variant == "lean" ? LeanCues()
                                : p.m_Variant == "budget" ? BudgetCues() : DetectCues();
             s_Active = p;
             yield return CuePlayer.Ensure().Play(run, cues, (text, left, frac, counter) =>
@@ -791,12 +793,13 @@ namespace EyeLab.Probes
                 nextStatus = Time.realtimeSinceStartup + 0.5f;
                 status($"{counter}: {text} | {left:F0} s | Eye {p.m_EyeFrames}, done {p.m_Processed}, skipped {p.m_Skipped} | " +
                        $"{p.m_LastMode} {p.m_LastTotal:F1} ms | fps {1f / Mathf.Max(Time.smoothDeltaTime, 1e-4f):F0}");
-            }, null, step =>
+            }, () => p.m_Variant == "mark" && Campaign.Aborted, step =>
             {
                 p.m_Step = step.Id;
                 p.m_ThreadsWanted = PlanFor(p.m_Variant, step.Id).Threads;
                 if (p.m_Variant == "align" && p.m_Overlay != null) p.m_Overlay.SetStyle(step.Id.Contains("_solid"));
                 if (p.m_Variant == "spaam" || p.m_Variant == "eyecal" || p.m_Variant == "eyecheck" || p.m_Variant == "camcal") p.SpaamOnStep(step.Id);
+                if (p.m_Variant == "mark") p.MarkOnStep(step.Id);
             });
             p.StopLive();
             s_Active = null;
@@ -804,6 +807,7 @@ namespace EyeLab.Probes
             if (p.m_Overlay != null) Destroy(p.m_Overlay.gameObject);
             if (p.m_Cross != null) Destroy(p.m_Cross.gameObject);
             if (p.m_Warp != null) Destroy(p.m_Warp.gameObject);
+            if (p.m_Mark != null) Destroy(p.m_Mark.gameObject);
             CalText = "";
             run.Meta("spaam_taps", p.m_Taps.ToString(CultureInfo.InvariantCulture));
             if (p.m_Offset != null)
@@ -1071,7 +1075,7 @@ namespace EyeLab.Probes
         // ---- overlay (T6.9, T6.10) ----------------------------------------------------------------------------------
 
         /// <summary>The variants that draw the pose in the glasses.</summary>
-        bool Drawn => m_Variant == "overlay" || m_Variant == "align" || m_Variant == "eyecal" || m_Variant == "eyecheck";
+        bool Drawn => m_Variant == "overlay" || m_Variant == "align" || m_Variant == "eyecal" || m_Variant == "eyecheck" || m_Variant == "mark";
 
         /// <summary>The board rule (12+ markers trusted) applies to every variant from T6.9 on; T6.11 run 1 lacked it.</summary>
         bool BoardRule => Drawn || m_Variant == "spaam" || m_Variant == "camcal";
@@ -1099,6 +1103,39 @@ namespace EyeLab.Probes
                 : "No earlier rounds";
             s_Active = this;
             SetMode(m_AllL != null && m_AllR != null ? "all" : "sdk");
+        }
+
+        // ---- campaign 0.5 (T7.0 C6): the hammering trial ------------------------------------------------------------
+
+        /// <summary>The set target every campaign sheet is tracked by: the F40 frame (markers 30-33, 40 mm).</summary>
+        public const string MarkTarget = "plate_A40";
+        MarkCross m_Mark;
+
+        void StartMark()
+        {
+            m_Mark = MarkCross.Create(Campaign.Proto);
+            string mode = Campaign.ShowsCross(Campaign.Current.condition) ? Campaign.DisplayFor(Campaign.Current.condition) : "sdk";
+            SetMode(mode);
+            m_Run.Meta("campaign_eye_mode", m_Mode + (m_Mode != mode ? " (wanted " + mode + ", not available)" : ""));
+            m_Run.Meta("campaign_cross", $"gap {Campaign.Proto.cross_gap_mm} mm, arm {Campaign.Proto.cross_arm_mm} mm, line {Campaign.Proto.cross_line_mm} mm, shader {m_Mark.ShaderName}");
+            bool hasTarget = false;
+            if (m_Set?.targets != null) foreach (Target t in m_Set.targets) if (t.name == MarkTarget) hasTarget = true;
+            m_Run.Meta("campaign_set_target", hasTarget ? MarkTarget : MarkTarget + " MISSING from files/b3a/set.json: push the campaign set");
+        }
+
+        void MarkOnStep(string stepId)
+        {
+            if (m_Mark == null) return;
+            if (Campaign.TargetOfStep(stepId, out int k, out Vector3 model))
+            {
+                bool show = Campaign.ShowsCross(Campaign.Current.condition);
+                m_Mark.SetTarget(show ? model : (Vector3?)null);
+                Campaign.TargetsShown++;
+                var ci = CultureInfo.InvariantCulture;
+                CuePlayer.Log(m_Run, "mark_target", k.ToString(ci) + ":" + model.x.ToString("R", ci) + " " + model.y.ToString("R", ci) +
+                                                    (show ? ":cross@" + m_Mode : ":printed") + ":seen " + BoardAgeMs.ToString("F0", ci) + " ms ago");
+            }
+            else m_Mark.SetTarget(null);
         }
 
         void StartOverlay()
@@ -1192,7 +1229,8 @@ namespace EyeLab.Probes
             PoseOverlay.InHead(m_RgbFromHead, camP, camQ, out Vector3 inP, out Quaternion inQ);
             PoseOverlay.Chain(headP, headQ, m_Offset, inP, inQ, out Vector3 p, out Quaternion q);
             if (PlanFor(m_Variant, m_Step).Mode == "off") return;   // the step changed to off while this frame ran
-            m_Overlay.Show(d.Target, p, q, headP);
+            if (m_Variant == "mark") m_Mark?.Place(p, q);
+            else m_Overlay.Show(d.Target, p, q, headP);
             m_HasLast = true;
             m_LastTarget = d.Target;
             m_LastHeadP = headP; m_LastHeadQ = headQ; m_LastInP = inP; m_LastInQ = inQ;
@@ -1349,7 +1387,8 @@ namespace EyeLab.Probes
                     }
                     d.Ids = ids.ToString();
                     d.Corners = corners.ToString();
-                    if (m_Processed % (m_Variant == "camcal" ? SaveEveryCalib : SaveEvery) == 0) d.SaveCopy = (byte[])m_Work.Clone();
+                    bool review = m_Variant == "mark" && d.Step != null && d.Step.StartsWith("review");   // campaign: Eye estimate of the dots
+                    if (review || m_Processed % (m_Variant == "camcal" ? SaveEveryCalib : SaveEvery) == 0) d.SaveCopy = (byte[])m_Work.Clone();
                     m_LastTotal = d.R.TotalMs;
                     m_LastMode = plan.Mode;
                     Interlocked.Increment(ref m_Processed);

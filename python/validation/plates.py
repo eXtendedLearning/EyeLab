@@ -157,7 +157,22 @@ def plate_l(marker_size_mm: float = 20.0, pitch_mm: float = 40.0, nx: int = 5,
                             "marker_ids": list(marker_ids)})
 
 
-LAYOUTS = {"A": plate_a, "L": plate_l}
+def plate_a40() -> PageLayout:
+    """Campaign 0.5 plate A40 (T7.0 §5): plate A's 5x4 saddle grid (12 mm squares) inside the F40 marker frame,
+    four 40 mm markers 30-33 in the corners. Its single definition lives in ``campaign.sheets``; rendered there."""
+    from campaign import sheets as cs
+    sh = cs.sheet_a40()
+    saddles = [PageSaddle(s.id, "F", s.x, s.y) for s in sh.saddles]
+    markers = [PageMarker(m.id, "F", m.x, m.y, m.size) for m in sh.markers]
+    bars = [ScaleBar(b.name, b.x, b.y, b.length) for b in sh.bars]
+    grid = [[1 + j * 5 + i for i in range(5)] for j in range(4)]
+    W, H = A4_LANDSCAPE_MM
+    return PageLayout("A40", "campaign plate A40", [PageFace("F", (0, 0, W, H), (W / 2, H / 2))],
+                      markers, saddles, bars, _grid_edges(grid), square_mm=cs.GRID_SQUARE,
+                      notes=["Tape flat on the glass against the corner stops."], args={})
+
+
+LAYOUTS = {"A": plate_a, "L": plate_l, "A40": plate_a40}
 
 
 def layout_from_provenance(prov: dict) -> PageLayout:

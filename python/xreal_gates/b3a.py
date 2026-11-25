@@ -36,7 +36,9 @@ DEFAULT_MARKERS = PYTHON / "config" / "markers" / "plate_A.markers.json"
 #: T6.7 targets: plate A, plate L (markers on two faces at 90 deg, so no planar ambiguity once both faces are seen),
 #: and the 5 x 7 ChArUco calibration board used as a marker board (its 17 ArUco markers, 19 mm; the chessboard
 #: corners are not used on the device yet).
-TARGET_MARKERS = {"plate_A": DEFAULT_MARKERS, "plate_L": PYTHON / "config" / "markers" / "plate_L.markers.json"}
+TARGET_MARKERS = {"plate_A": DEFAULT_MARKERS, "plate_L": PYTHON / "config" / "markers" / "plate_L.markers.json",
+                  # campaign 0.5 (T7.0): the F40 frame of every campaign sheet (A40, M, P, T), markers 30-33, 40 mm
+                  "plate_A40": PYTHON / "config" / "markers" / "plate_A40.markers.json"}
 BOARD25 = "board25"
 # The Eye calibration from the PC gates (2026-10-21, 1280x720, RMS 0.47 px; local, gitignored run folder). It was
 # taken on the PC stream; whether it holds on the Beam Pro's stream is checked in B3b, not here: parity and timing

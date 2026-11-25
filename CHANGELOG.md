@@ -8,15 +8,46 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.4.018<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.5.000<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
 
+## [0.5.000] — 2026-11-25
+
+Milestone: the campaign build. The Beam Pro tracks a sheet with the Eye, draws the overlay per eye with the display
+correction that T6.12 run 3 showed to be a device constant, and runs the hammering trials of the campaign (T7.0) from
+data pushed or shipped with the APK, so one APK serves the whole campaign. Everything below up to `[0.4.000]` ships in
+this cut.
+
 ### Added
 
+- (0.5.000) Campaign 0.5 (`docs/tasks/T7.0-campaign-0.5.md`):
+  - **Plan:** research questions, the measurement set from the literature (ISO 5725-1, ISO/IEC 18520, OST
+    user-in-the-loop registration, stability, latency, NASA-TLX/SUS/SSQ), an EMA placement tolerance from the
+    mode-shape slope, gates C0-C8, a 13 h two-day schedule, the error budget.
+  - **Sheets** (`python -m campaign sheets`, `python/campaign/sheets.py`): one marker frame F40 (ids 30-33, 40 mm,
+    DICT_4X4_50) on every page; A40 (5x4 saddles, validation layout `A40`), M (12 hidden targets), P (12 printed
+    crosses), T (6 hidden); 8 border saddles and a DICT_6X6_250 sheet-ID marker; seeded targets 30 mm apart and 15 mm
+    from any ink; keep-out check on every page; print PDFs in `docs/campaign_printables/`, sheet JSONs in
+    `python/config/campaign/sheets/`. The PDFs were rendered under OpenCV 5; do not regenerate them under 4.x (the
+    Hershey caption is wider and fails the keep-out check, which now says so).
+  - **Hit analysis** (`python -m campaign hits | summary`, `python/campaign/hits.py`): frame homography from the
+    markers and the refined saddles, rectified page, dots not on printed ink, Hungarian assignment to the targets,
+    error per hit (bias, SD, median, R95), checked image; synthetic tests: photo < 0.12 mm, Eye-like 0.5 mm/px < 0.6 mm.
+    Printed target numbers are masked by a font-independent box: with the exact render, a clean P011 printed under
+    OpenCV 5 gave 8 false hits under 4.13.
+  - **App** (`Campaign.cs`, `DetectProbe` variant `mark`, `ProbeRunner` campaign pages): participant / condition
+    (AR, AR-SDK, Printed, Practice) / sheet on the Beam Pro screen; the trial speaks each point, draws an open
+    crosshair at the hidden target on the sheet per eye (pooled display model, or the SDK's for AR-SDK); NEXT and
+    "bad" from the screen or a Bluetooth presenter; a review look that saves every Eye frame; `sheets_used.csv`.
+    Protocol and sheets read from `files/campaign/` when pushed, else from `Resources/campaign/`.
+  - **Frame set:** `plate_A40` added to the set's targets (`python -m campaign set`, then push `files/b3a`).
+  - **Docs:** T7.0 §13 (lab facts, materials and their status, lab checks, topics for the senior colleagues, what
+    was dropped and why) and §14 (hand-off to Claude Code: state, checks made, rules, next tasks); `docs/README.md`
+    points to T7.0 first.
 - (0.4.018) T6.12 run 3 analysed (`20261125_120406_eyecal`, the first under the Beam Pro camera and the true board size),
   last 0.4 build.
   - **"This round" on the markers everywhere:** at 35, 60 and 100 cm and on plate L. The SDK was clearly off at every
