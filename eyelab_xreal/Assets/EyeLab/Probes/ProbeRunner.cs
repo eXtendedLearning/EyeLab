@@ -61,7 +61,7 @@ namespace EyeLab.Probes
         bool m_MarkRun;
         // 0.5.002 (Jack, 2026-11-26): per-participant calibration pages, the T6 runs page, the square toggle, the warning
         GameObject m_PanelT6, m_CalPage, m_CalResultPage, m_ConfirmPage, m_WarnPage;
-        Text m_CalInfo, m_CalResultInfo, m_ConfirmInfo, m_WarnInfo, m_SquareLabel, m_SaveLabel, m_ChoiceLabel;
+        Text m_CalInfo, m_CalResultInfo, m_ConfirmInfo, m_WarnInfo, m_SquareLabel, m_SaveLabel, m_ChoiceLabel, m_CampChoiceLabel;
         int m_SaveAs = -1;   // participant the pcal result is saved as (chosen on the result page)
 
         // ------------------------------------------------------------------ T6.3 cue scripts (Jack, 2026-11-18)
@@ -753,6 +753,13 @@ namespace EyeLab.Probes
             Transform r3 = Row(m_CampaignPage.transform);
             AddAction(font, "Sheet -", () => { Campaign.StepSheet(-1); RefreshCampaign(); }, grey, r3);
             AddAction(font, "Sheet +", () => { Campaign.StepSheet(+1); RefreshCampaign(); }, grey, r3);
+            // 0.5.006 (Jack): the AR calibration is chosen here too, the same per-participant choice as the Calibration page
+            m_CampChoiceLabel = AddAction(font, "", () =>
+            {
+                int pt = Campaign.Current.participant;
+                PersonCal.SetPool(pt, !PersonCal.UsesPool(pt));
+                RefreshCampaign();
+            }, new Color(0.3f, 0.22f, 0.08f, 0.9f), m_CampaignPage);
             AddAction(font, "START TRIAL", StartTrial, green, m_CampaignPage);
             AddAction(font, "Back", () => ShowPage(m_Panel), grey, m_CampaignPage);
 
@@ -802,8 +809,14 @@ namespace EyeLab.Probes
             string eff = Campaign.EffectiveDisplay(st.condition);
             string display = !Campaign.ShowsCross(st.condition) ? "none: printed crosses"
                 : eff == "person" ? "personal calibration" : eff == "all" ? "device pool" : eff == "sdk" && Campaign.DisplayFor(st.condition) == "person" ? "SDK (NO CALIBRATION: calibrate first)" : eff;
-            string cal = (PersonCal.Exists(st.participant) ? PersonCal.Describe(st.participant) : Campaign.ParticipantId + ": no calibration") +
-                         (PersonCal.UsesPool(st.participant) ? "  |  AR set to the device pool (Calibration page)" : "");
+            bool pool = PersonCal.UsesPool(st.participant);
+            string cal = PersonCal.Exists(st.participant) ? PersonCal.Describe(st.participant) : Campaign.ParticipantId + ": no personal calibration";
+            if (m_CampChoiceLabel != null)
+            {
+                m_CampChoiceLabel.text = "AR calibration: " + (pool ? "DEVICE POOL  (tap for personal)"
+                    : PersonCal.Exists(st.participant) ? "PERSONAL  (tap for device pool)" : "PERSONAL, NONE SAVED: SDK  (tap for device pool)");
+                m_CampChoiceLabel.transform.parent.gameObject.SetActive(st.condition == "A");
+            }
             m_CampaignInfo.text = "Participant " + Campaign.ParticipantId + "   |   " + Campaign.ConditionName(st.condition) + "   |   sheet " + sheet + found +
                                   "\nDisplay: " + display + "   |   Put this sheet on the glass, then START\n" + cal;
             for (int i = 0; i < m_ConditionLabels.Length; i++)

@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.5.005<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.5.006<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -21,6 +21,10 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
   hung ("SyncClose Wait Timeout"). The Eye camera is now started once (`EyeCamera`) and never stopped (T7.0 §14.8).
 
 ### Changed
+
+- (0.5.006) Beam Pro app: the campaign page has the AR calibration toggle (personal or device pool), in the AR
+  condition only. First AR dry run (P13, T01 + T02, personal calibration): 12/12 hits, median 2.73 mm, R95 5.32 mm,
+  against 0.66 / 1.17 mm printed; rotation test planned (T7.0 §14.9).
 
 - (0.5.005) Beam Pro app:
   - **Per-participant AR display.** The Calibration page chooses between the personal calibration and the device
