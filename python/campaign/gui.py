@@ -267,7 +267,7 @@ class App:
         n_err = n_pend = 0
         for s in sources:
             r = by_key.get(s.key)
-            cur = r is not None and abs(r.get("source_mtime", -1) - s.mtime) < 1e-3
+            cur = r is not None and r.get("source_version") == s.version
             sheet = (r or {}).get("sheet") or s.sheet_hint or ""
             tr = self.trials.get(sheet, {})
             trial = f"{tr.get('participant', '')} {tr.get('condition', '')}".strip()
@@ -289,6 +289,8 @@ class App:
                     state.append(f"no dot: {r['missing']}")
                 if r.get("frames"):
                     state.append(f"{r['frames']} frames")
+                if r.get("too_far"):
+                    state.insert(0, "TOO FAR for dots")
                 if r.get("fit_rms_mm", 0) > 0.1 and s.kind != "eye":
                     state.append("fit rms > 0.1 mm: check flatness / lens")
                 state += r.get("notes", [])[:1]
@@ -309,11 +311,13 @@ class App:
                 c = row.get(k)
                 if not c:
                     return ""
+                if c.get("too_far"):
+                    return f"too far ({St.fmt(c['mm_per_px'])} mm/px)"
                 return f"{c['found']}/{c['targets']}" + ("" if hide else f"  {St.fmt(c['median'])} / {St.fmt(c['r95'])}")
 
             def diff(k):
                 a, b = row.get(k), row.get("scan")
-                if hide or not a or not b or a["bias"][0] is None or b["bias"][0] is None:
+                if hide or not a or not b or a.get("too_far") or a["bias"][0] is None or b["bias"][0] is None:
                     return ""
                 return f"{a['bias'][0] - b['bias'][0]:+.2f}, {a['bias'][1] - b['bias'][1]:+.2f}"
             self.t_sheets.insert("", "end", iid=row["sheet"], values=(

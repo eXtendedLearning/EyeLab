@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 import re
 import time
 from collections import defaultdict
@@ -34,7 +35,21 @@ REFUSED_EXT = {".pdf": "PDF: save the scan as PNG or TIFF (lossless) instead",
                ".heic": "HEIC: set the phone to save JPEG, or convert to PNG"}
 SHEET_RE = re.compile(r"(?<![A-Za-z0-9])([MPT]\d{3})(?![0-9])")
 EYE_FRAMES_MAX = 10   # review-look frames analysed per trial (evenly spread, most markers first)
+EYE_CAMERA = Path(__file__).resolve().parent.parent / "config" / "cameras" / "beampro_eye.json"
+# Above this the Eye cannot see a 1 mm pen dot: the first real review looks (2026-11-26, sheet at about 48 cm) were at
+# 0.67-0.77 mm/px and found 0-1 of 12 dots. The synthetic Eye test holds to 0.6 mm at 0.45 mm/px; a review look at
+# about 20 cm (sheet filling the frame) gives about 0.3 mm/px.
+EYE_MAX_MM_PER_PX = 0.45
 SCHEMA = "eyelab.campaign.result/1"
+FILE_SETTLE_S = 2.0    # a file that arrived more recently may still be being written
+RUN_SETTLE_S = 10.0    # a run folder is pulled file by file (live.csv can arrive before its frames)
+RETRY_S = 300.0        # a failed analysis is tried again after this (the source may have been incomplete)
+
+
+def _stamp(p: Path) -> float:
+    """When the file or folder arrived here: adb pull and copy keep the device's mtime, ctime is local."""
+    s = p.stat()
+    return max(s.st_mtime, s.st_ctime)
 
 
 @dataclass
@@ -42,9 +57,14 @@ class Source:
     key: str            # path relative to the root, forward slashes (unique id)
     kind: str           # scan | photo | eye
     path: Path          # image, or the run folder for kind eye
-    mtime: float
+    mtime: float        # local arrival: newest of mtime and ctime (adb pull and copies keep the old mtime)
     sheet_hint: Optional[str] = None
     refused: Optional[str] = None
+    version: str = ""   # changes whenever the source does (for a run: arrival and the number of saved frames)
+
+    @property
+    def settle_s(self) -> float:
+        return RUN_SETTLE_S if self.kind == "eye" else FILE_SETTLE_S
 
 
 def ensure_layout(root: Path) -> Path:
@@ -109,8 +129,9 @@ def discover(root: Path) -> List[Source]:
                 continue
             ext = p.suffix.lower()
             if ext in IMAGE_EXT or ext in REFUSED_EXT:
-                out.append(Source(p.relative_to(root).as_posix(), kind, p, p.stat().st_mtime, _hint(p, root),
-                                  REFUSED_EXT.get(ext)))
+                st = _stamp(p)
+                out.append(Source(p.relative_to(root).as_posix(), kind, p, st, _hint(p, root),
+                                  REFUSED_EXT.get(ext), f"{st:.3f}/{p.stat().st_size}"))
     runs = root / "runs"
     if runs.exists():
         for live in sorted(_find(runs, "live.csv")):
@@ -118,8 +139,12 @@ def discover(root: Path) -> List[Source]:
             meta = read_run_meta(d)
             if meta.get("variant") != "mark" and "campaign_sheet" not in meta:
                 continue   # not a campaign trial, or not finished (run.json is written at the end)
-            out.append(Source(d.relative_to(root).as_posix(), "eye", d, max(live.stat().st_mtime,
-                              (d / "run.json").stat().st_mtime), _run_sheet(meta)))
+            fr = d / "frames"
+            parts = [live, d / "run.json", d] + ([fr] if fr.exists() else [])
+            st = max(_stamp(x) for x in parts)
+            nfr = sum(1 for _ in os.scandir(fr)) if fr.exists() else 0
+            out.append(Source(d.relative_to(root).as_posix(), "eye", d, st, _run_sheet(meta),
+                              version=f"{st:.3f}/{nfr}"))
     return out
 
 
@@ -135,13 +160,18 @@ def is_current(root: Path, src: Source) -> bool:
         r = json.loads(p.read_text(encoding="utf-8"))
     except ValueError:
         return False
-    return r.get("schema") == SCHEMA and abs(r.get("source_mtime", -1) - src.mtime) < 1e-3
+    if r.get("schema") != SCHEMA or r.get("source_version") != src.version:
+        return False
+    if "error" in r and not src.refused and time.time() - r.get("analysed_epoch", 0) > RETRY_S:
+        return False   # failed: try again (an adb pull may have been incomplete)
+    return True
 
 
-def pending(root: Path, settle_s: float = 2.0) -> List[Source]:
-    """Sources without a current result; a file changed in the last ``settle_s`` may still be being written."""
+def pending(root: Path, settle_s: Optional[float] = None) -> List[Source]:
+    """Sources without a current result, once they have stopped arriving (``settle_s``, default per kind)."""
     now = time.time()
-    return [s for s in discover(root) if not is_current(root, s) and now - s.mtime >= settle_s]
+    return [s for s in discover(root) if not is_current(root, s)
+            and now - s.mtime >= (s.settle_s if settle_s is None else settle_s)]
 
 
 # ------------------------------------------------------------------ analysis
@@ -181,7 +211,8 @@ def analyse(root: Path, src: Source) -> dict:
     root = Path(root)
     out = result_path(root, src)
     base = {"schema": SCHEMA, "key": src.key, "kind": src.kind, "source_mtime": src.mtime,
-            "analysed": time.strftime("%Y-%m-%d %H:%M:%S")}
+            "source_version": src.version, "analysed": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "analysed_epoch": time.time()}
     try:
         if src.refused:
             raise RuntimeError(src.refused)
@@ -211,12 +242,16 @@ def _analyse_eye(root: Path, src: Source, out: Path) -> dict:
         raise RuntimeError("run.json has no campaign_sheet")
     frames = _review_frames(src.path)
     if not frames:
+        row = read_run_meta(src.path).get("campaign_result", "").split(",")
+        if len(row) > 10 and row[10] == "1":
+            raise RuntimeError(f"trial aborted after {row[7]} targets: no review look")
         raise RuntimeError("no review-look frames saved in this run")
     per: Dict[int, List[Tuple[float, float]]] = defaultdict(list)
     fits, last, last_rect, notes = [], None, None, []
+    calib = str(EYE_CAMERA) if EYE_CAMERA.exists() else None
     for fp in frames:
         try:
-            res, rect = Hm.analyse(fp, src.sheet_hint)
+            res, rect = Hm.analyse(fp, src.sheet_hint, calib=calib)
         except Exception as e:
             notes.append(f"{fp.name}: {e}")
             continue
@@ -236,8 +271,16 @@ def _analyse_eye(root: Path, src: Source, out: Path) -> dict:
     cv2.imwrite(str(out.with_name(out.stem + "_check.jpg")), Hm.annotate(last_rect, last, 10.0),
                 [cv2.IMWRITE_JPEG_QUALITY, 85])
     F = np.array(fits)
-    return {"sheet": last.sheet, **_summary(last.hits, [], int(np.median(F[:, 0])), float(np.median(F[:, 1])),
-                                            float(np.median(F[:, 2])), notes[:5], frames=used)}
+    mmpx = float(np.median(F[:, 2]))
+    if calib is None:
+        notes.insert(0, f"not undistorted: {EYE_CAMERA.name} missing")
+    out = {"sheet": last.sheet, **_summary(last.hits, [], int(np.median(F[:, 0])), float(np.median(F[:, 1])),
+                                           mmpx, notes[:5], frames=used)}
+    if mmpx > EYE_MAX_MM_PER_PX:
+        out["too_far"] = True
+        out["notes"].insert(0, f"too far for dots: {mmpx:.2f} mm/px at the review look (needs <= "
+                               f"{EYE_MAX_MM_PER_PX}); look at the sheet from about 20 cm, sheet filling the frame")
+    return out
 
 
 # ------------------------------------------------------------------ overview
@@ -289,6 +332,10 @@ def by_sheet(results: List[dict], trial_map: Dict[str, dict]) -> List[dict]:
         sh = r.get("sheet")
         if not sh or "error" in r:
             continue
+        if r.get("too_far"):
+            rows.setdefault(sh, {"sheet": sh, **{k: v for k, v in trial_map.get(sh, {}).items() if k != "sheet"}})
+            rows[sh][r["kind"]] = {"too_far": True, "mm_per_px": r.get("mm_per_px")}
+            continue
         row = rows.setdefault(sh, {"sheet": sh, **{k: v for k, v in trial_map.get(sh, {}).items() if k != "sheet"}})
         st = r.get("stats", {})
         row[r["kind"]] = {"found": r.get("found"), "targets": r.get("targets"), "median": st.get("median_mm"),
@@ -301,7 +348,7 @@ def pooled(root: Path, results: List[dict], trial_map: Dict[str, dict]) -> List[
     from . import hits as Hm
     latest: Dict[Tuple[str, str], dict] = {}
     for r in sorted(results, key=lambda r: r.get("analysed", "")):
-        if r.get("sheet") and "error" not in r:
+        if r.get("sheet") and "error" not in r and not r.get("too_far"):
             latest[(r["sheet"], r["kind"])] = r
     groups: Dict[tuple, List[Tuple[float, float]]] = defaultdict(list)
     sheets: Dict[tuple, set] = defaultdict(set)

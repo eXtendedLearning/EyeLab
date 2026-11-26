@@ -8,12 +8,21 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.5.001<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.5.002<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
+
+### Fixed
+
+- (0.5.002) Campaign hits on the first real data (T7.0 §14.5): paper flecks no longer count as pen dots (a dot needs
+  0.22 mm² of black-equivalent ink and a round shape; an unmarked P012 scan went from 12 false hits and 26 extras to
+  none, the marked one from 39 extras to none); adb-pulled runs are analysed only after they have arrived (local
+  arrival time and frame count, not the device's mtime) and failures are retried; Eye review frames undistorted with
+  `beampro_eye.json` and marked "too far" above 0.45 mm/px (the review look at 48 cm gave 0.7-0.8 mm/px, too coarse
+  for 1 mm dots: it needs about 20 cm); aborted trials say so.
 
 ### Added
 

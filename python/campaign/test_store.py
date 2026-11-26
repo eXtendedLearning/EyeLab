@@ -24,7 +24,7 @@ def _fake_run(root: Path, sheet, offsets, n_frames=4):
     (d / "frames").mkdir(parents=True)
     rows = ["seq,step,markers,saved"]
     for k in range(n_frames):
-        img = _photo(sheet, offsets, ppm=2.2, blur=0.6, noise=2.0, persp=0.03, seed=k)
+        img = _photo(sheet, offsets, ppm=2.6, blur=0.6, noise=2.0, persp=0.03, seed=k)   # ~0.38 mm/px
         name = f"frames/y_{k:06d}.pgm"
         cv2.imwrite(str(d / name), img)
         rows.append(f"{k},review,5,{name}")
@@ -40,6 +40,26 @@ def _fake_run(root: Path, sheet, offsets, n_frames=4):
 
 
 class TestStore(unittest.TestCase):
+    def setUp(self):
+        # synthetic frames are not from the Beam Pro Eye: do not undistort them with its calibration
+        self._cam = St.EYE_CAMERA
+        St.EYE_CAMERA = Path("no_such_camera.json")
+
+    def tearDown(self):
+        St.EYE_CAMERA = self._cam
+
+    def test_far_review_look_is_not_a_hit_estimate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = St.ensure_layout(Path(tmp))
+            m = S.sheet("M", 45)
+            d = _fake_run(root, m, _offsets(len(m.targets)), n_frames=2)
+            for f in (d / "frames").iterdir():   # as at 48 cm: about 0.75 mm/px
+                cv2.imwrite(str(f), _photo(m, _offsets(len(m.targets)), ppm=1.35, blur=0.6, noise=2.0, persp=0.03))
+            r = St.analyse(root, St.pending(root, settle_s=0)[0])
+            self.assertTrue(r.get("too_far"), r)
+            res = St.load_results(root)
+            self.assertEqual(St.pooled(root, res, St.trials(root)), [])
+            self.assertTrue(St.by_sheet(res, St.trials(root))[0]["eye"]["too_far"])
     def test_folder_end_to_end(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = St.ensure_layout(Path(tmp) / "data")
@@ -58,11 +78,12 @@ class TestStore(unittest.TestCase):
             for p in (root / "photos").iterdir():
                 os.utime(p, (old, old))
 
-            todo = St.pending(root)
+            self.assertEqual(St.pending(root), [])          # just arrived (ctime is now): still settling
+            todo = St.pending(root, settle_s=0)
             self.assertEqual(sorted(s.kind for s in todo), ["eye", "photo", "scan", "scan"])
             for s in todo:
                 St.analyse(root, s)
-            self.assertEqual(St.pending(root), [])          # analysed once per file version
+            self.assertEqual(St.pending(root, settle_s=0), [])          # analysed once per file version
 
             res = {r["key"]: r for r in St.load_results(root)}
             scan = res["scans/scan_001.png"]
@@ -94,8 +115,29 @@ class TestStore(unittest.TestCase):
 
             # a changed file is analysed again
             p = root / "photos" / "IMG_1.jpg"
-            os.utime(p, (old + 5, old + 5))
-            self.assertEqual([s.key for s in St.pending(root)], ["photos/IMG_1.jpg"])
+            cv2.imwrite(str(p), _photo(m, offs, seed=9))
+            self.assertEqual([s.key for s in St.pending(root, settle_s=0)], ["photos/IMG_1.jpg"])
+
+    def test_run_pulled_before_its_frames_is_analysed_again(self):
+        # adb pull keeps the device's (old) mtimes and live.csv can land before frames/ is complete
+        with tempfile.TemporaryDirectory() as tmp:
+            root = St.ensure_layout(Path(tmp))
+            m = S.sheet("M", 44)
+            offs = _offsets(len(m.targets))
+            d = _fake_run(root, m, offs, n_frames=3)
+            frames = sorted((d / "frames").iterdir())
+            hold = Path(tmp) / "hold"
+            hold.mkdir()
+            for f in frames:
+                f.rename(hold / f.name)
+            src = St.pending(root, settle_s=0)[0]
+            self.assertIn("no review-look frames", St.analyse(root, src)["error"])
+            self.assertEqual(St.pending(root, settle_s=0), [])
+            for f in hold.iterdir():
+                f.rename(d / "frames" / f.name)
+            again = St.pending(root, settle_s=0)
+            self.assertEqual([s.key for s in again], [src.key])
+            self.assertNotIn("error", St.analyse(root, again[0]))
 
     def test_sheet_name_in_path_wins(self):
         with tempfile.TemporaryDirectory() as tmp:

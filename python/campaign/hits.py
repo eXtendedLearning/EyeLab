@@ -162,13 +162,23 @@ def label_mask(sh: S.Sheet, ppmm: float, shape) -> np.ndarray:
     return m
 
 
+MIN_INK_MM2 = 0.22   # black-equivalent ink of a pen dot (scan 2026-11-26: dots 0.28-0.67, paper flecks <= 0.19)
+MAX_ELONGATION = 3.5  # fibres in the paper are long and thin; a pen dot is round (dots 1.1-2.2)
+
+
 def find_dots(rect, sh: S.Sheet, ppmm: float, mm_per_px: float = 0.05, min_d_mm: float = 0.3,
-              max_d_mm: float = 4.0):
-    """Dark blobs that are not printed ink: (x_mm, y_mm, area_mm2).
+              max_d_mm: float = 4.0, min_ink_mm2: float = MIN_INK_MM2):
+    """Pen dots that are not printed ink: (x_mm, y_mm, area_mm2, ink_mm2).
 
     The frame's ink (markers, saddles, bars, text: all at least 15 mm from any target) is masked generously,
     by max(2 mm, 3 source pixels); printed crosses on P sheets only by 0.4 mm + 1.5 source pixels, so a dot in or
     near a cross's open centre survives.
+
+    A candidate is a group of pixels darker than the paper by more than the noise, merged across gaps under 0.6 mm.
+    It is a dot when its **ink** (darkness relative to the local paper, summed: the area it would cover if fully
+    black) is at least ``min_ink_mm2`` and it is not thread-like. The first real scans (P012, 600 dpi) had 39 paper
+    flecks and fibres that the old area-only rule took for dots; their ink is at most 0.19 mm², a 1 mm pen dot's
+    0.28-0.67. Ink is nearly independent of blur, so the rule holds for photos too.
     """
     frame_ink = _dilate(S.render(sh, ppmm, targets=False) < 128, max(2.0, 3 * mm_per_px), ppmm)
     ink = frame_ink
@@ -179,23 +189,35 @@ def find_dots(rect, sh: S.Sheet, ppmm: float, mm_per_px: float = 0.05, min_d_mm:
     work = np.zeros_like(ink)
     x0, y0, x1, y1 = (int(v * ppmm) for v in (52.0, 22.0, 245.0, 188.0))   # inside the frame
     work[y0:y1, x0:x1] = True
-    bg = cv2.medianBlur(rect, max(3, int(round(6 * ppmm)) | 1))
-    diff = cv2.subtract(bg, rect).astype(np.float32)
+    bgi = cv2.medianBlur(rect, max(3, int(round(6 * ppmm)) | 1))
+    diff = cv2.subtract(bgi, rect).astype(np.float32)
+    rel = diff / np.maximum(bgi.astype(np.float32), 1.0)
     vals = diff[work & ~ink]
     thr = max(25.0, float(np.percentile(vals, 50) + 6 * (np.percentile(vals, 84) - np.percentile(vals, 50)) + 1))
-    cand = ((diff > thr) & work & ~ink).astype(np.uint8)
-    n, lab, stats, _ = cv2.connectedComponentsWithStats(cand, 8)
+    cand = (diff > thr) & work & ~ink
+    grp = _dilate(cand, 0.3, ppmm)   # fragments of one dot within 0.6 mm count as one
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(grp.astype(np.uint8), 8)
     out = []
     amin = math.pi * (min_d_mm / 2) ** 2 * ppmm ** 2
     amax = math.pi * (max_d_mm / 2) ** 2 * ppmm ** 2
     for i in range(1, n):
-        a = stats[i, cv2.CC_STAT_AREA]
+        x, y, w, h = (int(stats[i, k]) for k in (cv2.CC_STAT_LEFT, cv2.CC_STAT_TOP, cv2.CC_STAT_WIDTH,
+                                                 cv2.CC_STAT_HEIGHT))
+        m = (lab[y:y + h, x:x + w] == i) & cand[y:y + h, x:x + w]
+        a = int(m.sum())
         if not (amin <= a <= amax):
             continue
-        ys, xs = np.nonzero(lab == i)
-        w = diff[ys, xs]
-        out.append((float((xs * w).sum() / w.sum()) / ppmm, float((ys * w).sum() / w.sum()) / ppmm,
-                    float(a) / ppmm ** 2))
+        ys, xs = np.nonzero(m)
+        wt = rel[y:y + h, x:x + w][ys, xs]
+        ink_mm2 = float(wt.sum()) / ppmm ** 2
+        if ink_mm2 < min_ink_mm2:
+            continue
+        if len(xs) >= 3:
+            ev = np.linalg.eigvalsh(np.cov(np.vstack([xs, ys]).astype(np.float64)))
+            if math.sqrt(max(ev[1], 1e-9) / max(ev[0], 1e-3)) > MAX_ELONGATION:
+                continue
+        out.append((float((xs * wt).sum() / wt.sum() + x) / ppmm, float((ys * wt).sum() / wt.sum() + y) / ppmm,
+                    float(a) / ppmm ** 2, ink_mm2))
     return out
 
 
@@ -219,6 +241,17 @@ def assign(sh: S.Sheet, dots, max_mm: float):
     return hits, extra
 
 
+def load_camera(path) -> Tuple[np.ndarray, np.ndarray]:
+    """Camera matrix and distortion from an OpenCV YAML (camera_matrix, dist_coeffs) or an EyeLab camera JSON
+    (``K``, ``dist``: config/cameras/beampro_eye.json)."""
+    path = str(path)
+    if path.lower().endswith(".json"):
+        d = json.loads(Path(path).read_text(encoding="utf-8"))
+        return np.array(d["K"], np.float64), np.array(d["dist"], np.float64).ravel()
+    fs = cv2.FileStorage(path, cv2.FILE_STORAGE_READ)
+    return fs.getNode("camera_matrix").mat(), fs.getNode("dist_coeffs").mat()
+
+
 def analyse(image_path, sheet: Optional[str] = None, ppmm: float = 10.0, max_mm: float = 40.0,
             calib: Optional[str] = None) -> Tuple[Result, np.ndarray]:
     img = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
@@ -228,8 +261,7 @@ def analyse(image_path, sheet: Optional[str] = None, ppmm: float = 10.0, max_mm:
     if gray.dtype != np.uint8:
         gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     if calib:
-        fs = cv2.FileStorage(calib, cv2.FILE_STORAGE_READ)
-        K, dist = fs.getNode("camera_matrix").mat(), fs.getNode("dist_coeffs").mat()
+        K, dist = load_camera(calib)
         gray = cv2.undistort(gray, K, dist)
     if sheet is None:
         sid = sheet_id(gray)
