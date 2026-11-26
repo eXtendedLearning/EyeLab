@@ -8,12 +8,22 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.5.003<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.5.004<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
+
+### Added
+
+- (0.5.004) Campaign hits GUI, from Jack's list (T7.0 §14.7):
+  - sources grouped in a tree that mirrors the data folder, with per-folder counts; closed folders are remembered;
+  - the image zooms with the mouse wheel and pans by dragging, with **Fit**, **Centre** and **1:1**;
+  - **Manual analysis** per scan or photo: confirm, pin (a click takes a nearby candidate or the centre of the
+    dark spot) or mark not present each target; candidates too faint to count are shown. The review is saved
+    beside the result, re-applied on every re-analysis of the same file version, and not carried over to a rescan
+    (`campaign/review.py`, `manual_gui.py`, `zoomview.py`).
 
 ### Changed
 

@@ -15,7 +15,9 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from . import review as Rv
 from . import store as St
+from .zoomview import ZoomView
 
 SETTINGS = Path.home() / ".eyelab_campaign_gui.json"
 POLL_MS = 2000
@@ -77,8 +79,9 @@ class App:
         self.worker = None
         self.results = []
         self.trials = {}
-        self.preview_img = None
-        self.preview_path = None
+        self.preview_key = None       # (check image path, its mtime) on show
+        self.closed_dirs = _load_settings().get("closed_dirs", [])   # folders the user collapsed
+        self.manual_windows = {}
         self.selected_json = None
         self.sig = None
         tkroot.title(f"EyeLab {version} - campaign hits")
@@ -124,10 +127,12 @@ class App:
         self.nb = ttk.Notebook(left)
         self.nb.pack(fill="both", expand=True)
         self.t_sources = self._tree(self.nb, "Images and trials", [
-            ("key", "source", 330), ("kind", "type", 110), ("sheet", "sheet", 60), ("trial", "participant / cond", 120),
+            ("kind", "type", 110), ("sheet", "sheet", 60), ("trial", "participant / cond", 120),
             ("hits", "hits", 60), ("fit", "fit rms mm", 75), ("mmpx", "mm/px", 60), ("bias", "bias x, y mm", 100),
             ("median", "median", 60), ("r95", "R95", 55), ("max", "max", 55), ("extra", "extra", 45),
-            ("state", "state", 260)])
+            ("state", "state", 260)], tree=True)
+        self.t_sources.bind("<<TreeviewOpen>>", lambda e: self._dir_toggled(False))
+        self.t_sources.bind("<<TreeviewClose>>", lambda e: self._dir_toggled(True))
         self.t_sheets = self._tree(self.nb, "By sheet", [
             ("sheet", "sheet", 60), ("participant", "participant", 80), ("condition", "cond", 50),
             ("display", "display", 60), ("scan", "scan: hits / median / R95", 170),
@@ -140,21 +145,28 @@ class App:
             ("rmse", "RMSE", 55), ("r95", "R95", 55), ("max", "max", 55)])
         for t in (self.t_sources, self.t_sheets):
             t.bind("<<TreeviewSelect>>", self._on_select)
-            t.bind("<Double-1>", self._open_check)
+            t.bind("<Double-1>", self._double)
 
-        self.canvas = tk.Canvas(right, background="#222", highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-        self.canvas.bind("<Configure>", lambda e: self._show_preview())
-        self.canvas.bind("<Double-1>", self._open_check)
+        self.view = ZoomView(right)
+        self.view.pack(fill="both", expand=True)
+        self.manual_btn = ttk.Button(self.view.bar, text="Manual analysis...", command=self.manual,
+                                     state="disabled")
+        self.manual_btn.pack(side="right", padx=2)
+        ttk.Button(self.view.bar, text="Open image", command=self._open_check).pack(side="right", padx=2)
         self.detail = tk.Text(right, height=16, font=("Consolas", 9), wrap="none")
         self.detail.pack(fill="x")
         ttk.Label(right, text="Blue: nominal target. Red: dot found and its error. Orange: dot not assigned. "
-                              "Double-click: open the full image.", foreground="#555").pack(anchor="w")
+                              "Wheel: zoom, drag: pan. Double-click a row: manual analysis.",
+                  foreground="#555").pack(anchor="w")
 
-    def _tree(self, nb, title, cols):
+    def _tree(self, nb, title, cols, tree=False):
         f = ttk.Frame(nb)
         nb.add(f, text=title)
-        t = ttk.Treeview(f, columns=[c[0] for c in cols], show="headings", selectmode="extended")
+        t = ttk.Treeview(f, columns=[c[0] for c in cols], show="tree headings" if tree else "headings",
+                         selectmode="extended")
+        if tree:
+            t.heading("#0", text="source (folders as in the data folder)")
+            t.column("#0", width=320, stretch=True)
         for cid, head, w in cols:
             t.heading(cid, text=head)
             t.column(cid, width=w, anchor="w" if cid in ("key", "state") else "center", stretch=cid in ("key", "state"))
@@ -164,6 +176,8 @@ class App:
         sy.pack(side="right", fill="y")
         t.tag_configure("err", foreground="#b00")
         t.tag_configure("pending", foreground="#888")
+        t.tag_configure("dir", foreground="#234", font=("Segoe UI", 9, "bold"))
+        t.tag_configure("manual", foreground="#0a4fb0")
         return t
 
     # ------------------------------------------------------------------ folder
@@ -198,7 +212,7 @@ class App:
         for t in (self.t_sources, self.t_sheets):
             for iid in t.selection():
                 if t is self.t_sources:
-                    keys.append(iid)
+                    keys += self._keys_under(iid)
                 else:
                     keys += [r["key"] for r in self.results if r.get("sheet") == iid]
         return keys
@@ -265,6 +279,7 @@ class App:
         sel = set(self.t_sources.selection())
         self.t_sources.delete(*self.t_sources.get_children())
         n_err = n_pend = 0
+        dir_count = {}
         for s in sources:
             r = by_key.get(s.key)
             cur = r is not None and r.get("source_version") == s.version
@@ -273,12 +288,12 @@ class App:
             trial = f"{tr.get('participant', '')} {tr.get('condition', '')}".strip()
             if not cur:
                 n_pend += 1
-                vals = (s.key, KIND_NAME[s.kind], sheet, trial, "", "", "", "", "", "", "", "",
+                vals = (KIND_NAME[s.kind], sheet, trial, "", "", "", "", "", "", "", "",
                         s.refused or "waiting for analysis")
                 tag = "err" if s.refused else "pending"
             elif "error" in r:
                 n_err += 1
-                vals = (s.key, KIND_NAME[s.kind], sheet, trial, "", "", "", "", "", "", "", "", r["error"])
+                vals = (KIND_NAME[s.kind], sheet, trial, "", "", "", "", "", "", "", "", r["error"])
                 tag = "err"
             else:
                 st = r.get("stats", {})
@@ -293,13 +308,30 @@ class App:
                     state.insert(0, "TOO FAR for dots")
                 if r.get("fit_rms_mm", 0) > 0.1 and s.kind != "eye":
                     state.append("fit rms > 0.1 mm: check flatness / lens")
-                state += r.get("notes", [])[:1]
-                vals = (s.key, KIND_NAME[s.kind], sheet, trial, f"{r.get('found')}/{r.get('targets')}",
+                man = r.get("manual")
+                if man and not man.get("stale"):
+                    state.insert(0, "MANUAL: " + ", ".join(f"{man[k]} {k}" for k in Rv.STATUSES if man.get(k)))
+                elif man:
+                    state.insert(0, "manual review is for an older file version")
+                state += [n for n in r.get("notes", []) if not n.startswith("manual review")][:1]
+                vals = (KIND_NAME[s.kind], sheet, trial, f"{r.get('found')}/{r.get('targets')}",
                         St.fmt(r.get("fit_rms_mm"), 3), St.fmt(r.get("mm_per_px"), 3), bias,
                         num(st.get("median_mm")), num(st.get("r95_mm")), num(st.get("max_mm")),
                         r.get("extra_dots", ""), "; ".join(state) or "ok")
-                tag = ""
-            self.t_sources.insert("", "end", iid=s.key, values=vals, tags=(tag,))
+                tag = "manual" if r.get("manual") and not r["manual"].get("stale") else ""
+            parent = self._dir_node(s.key.rsplit("/", 1)[0] if "/" in s.key else "")
+            self.t_sources.insert(parent, "end", iid=s.key, text=s.key.rsplit("/", 1)[-1], values=vals,
+                                  tags=(tag,))
+            d = s.key
+            while "/" in d:
+                d = d.rsplit("/", 1)[0]
+                c = dir_count.setdefault(d, [0, 0, 0])
+                c[0] += 1
+                c[1] += tag == "pending"
+                c[2] += tag == "err"
+        for d, (n, pend, err) in dir_count.items():
+            self.t_sources.set("dir:" + d, "state", f"{n} sources" + (f", {pend} waiting" if pend else "") +
+                               (f", {err} failed" if err else ""))
         for k in sel:
             if self.t_sources.exists(k):
                 self.t_sources.selection_add(k)
@@ -338,6 +370,70 @@ class App:
         self.counts.set(f"{len(sources)} sources, {len(self.results)} analysed, {n_pend} waiting, {n_err} failed, "
                         f"{len(self.trials)} trials known")
         self._show_detail()
+        self._show_preview(keep_view=True)
+
+    # ------------------------------------------------------------------ folders in the sources tree
+    def _dir_node(self, d: str) -> str:
+        """The tree node of folder ``d`` (relative, forward slashes), made with its parents; "" for the root."""
+        if not d:
+            return ""
+        iid = "dir:" + d
+        if not self.t_sources.exists(iid):
+            parent = self._dir_node(d.rsplit("/", 1)[0] if "/" in d else "")
+            self.t_sources.insert(parent, "end", iid=iid, text=d.rsplit("/", 1)[-1] + "/",
+                                  open=d not in self.closed_dirs, tags=("dir",))
+        return iid
+
+    def _dir_toggled(self, closed: bool):
+        iid = self.t_sources.focus()
+        if not iid.startswith("dir:"):
+            return
+        d = iid[4:]
+        if closed and d not in self.closed_dirs:
+            self.closed_dirs.append(d)
+        elif not closed and d in self.closed_dirs:
+            self.closed_dirs.remove(d)
+        s = _load_settings()
+        s["closed_dirs"] = self.closed_dirs
+        _save_settings(s)
+
+    def _keys_under(self, iid: str):
+        if not iid.startswith("dir:"):
+            return [iid]
+        out = []
+        for c in self.t_sources.get_children(iid):
+            out += self._keys_under(c)
+        return out
+
+    # ------------------------------------------------------------------ manual analysis
+    def _selected_source(self):
+        """The source of the selected row (a sources row, or a sheet's scan, else its photo)."""
+        if not self.selected_json or not Path(self.selected_json).exists():
+            return None
+        r = json.loads(Path(self.selected_json).read_text(encoding="utf-8"))
+        return next((s for s in St.discover(self.data_root) if s.key == r.get("key")), None)
+
+    def manual(self):
+        from .manual_gui import ManualWindow
+        src = self._selected_source()
+        if src is None:
+            return
+        if src.kind not in Rv.REVIEWABLE:
+            messagebox.showinfo("Manual analysis", "Manual analysis is for scans and photos; the Eye estimate is "
+                                "a median over many frames.")
+            return
+        w = self.manual_windows.get(src.key)
+        if w is not None and w.win.winfo_exists():
+            w.win.lift()
+            return
+        self.manual_windows[src.key] = ManualWindow(self.tk, self.data_root, src, self.hide_var.get(),
+                                                    on_saved=self.refresh)
+
+    def _double(self, event):
+        iid = event.widget.identify_row(event.y)
+        if not iid or iid.startswith("dir:"):
+            return   # a folder: the tree opens or closes it
+        self.manual()
 
     # ------------------------------------------------------------------ preview
     def _on_select(self, event):
@@ -347,12 +443,16 @@ class App:
             return
         iid = sel[0]
         if t is self.t_sources:
+            if iid.startswith("dir:"):
+                return
             r = next((r for r in self.results if r["key"] == iid), None)
         else:   # prefer the scan, then the photo, then the Eye
             cands = [r for r in self.results if r.get("sheet") == iid and "error" not in r]
             order = {"scan": 0, "photo": 1, "eye": 2}
             r = min(cands, key=lambda r: order.get(r["kind"], 9)) if cands else None
         self.selected_json = r["_json"] if r else None
+        ok = r is not None and r.get("kind") in Rv.REVIEWABLE and "error" not in r
+        self.manual_btn.config(state="normal" if ok else "disabled")
         self._show_detail()
         self._show_preview()
 
@@ -394,17 +494,23 @@ class App:
         p = p.with_name(p.stem + "_check.jpg")
         return p if p.exists() else None
 
-    def _show_preview(self):
-        from PIL import Image, ImageTk
-        self.canvas.delete("all")
+    def _show_preview(self, keep_view: bool = False):
+        """The check image in the zoom view; on a refresh only when it changed, keeping the zoom."""
+        from PIL import Image
         p = self._check_path()
         if p is None or self.hide_var.get():
+            if self.preview_key is not None:
+                self.view.clear()
+            self.preview_key = None
             return
-        w, h = max(50, self.canvas.winfo_width()), max(50, self.canvas.winfo_height())
+        key = (str(p), p.stat().st_mtime)
+        if keep_view and key == self.preview_key:
+            return
+        same_image = self.preview_key is not None and self.preview_key[0] == key[0]
+        self.preview_key = key
         im = Image.open(p)
-        im.thumbnail((w, h))
-        self.preview_img = ImageTk.PhotoImage(im)
-        self.canvas.create_image(w // 2, h // 2, image=self.preview_img)
+        im.load()
+        self.view.set_image(im, keep_view=keep_view and same_image)
 
     def _open_check(self, _e=None):
         p = self._check_path()

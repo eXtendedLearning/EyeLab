@@ -222,11 +222,15 @@ def analyse(root: Path, src: Source) -> dict:
             calib = root / "photos" / "camera.yaml"
             res, rect = Hm.analyse(src.path, src.sheet_hint, calib=str(calib) if src.kind == "photo" and
                                    calib.exists() else None)
+            from . import review as Rv
+            manual = Rv.apply(out, src.version, res)   # the person's review of this file version, if any
             Hm.write_csv(res, out.with_suffix(".csv"))
             cv2.imwrite(str(out.with_name(out.stem + "_check.jpg")), Hm.annotate(rect, res, 10.0),
                         [cv2.IMWRITE_JPEG_QUALITY, 85])
             r = {"sheet": res.sheet, **_summary(res.hits, res.extra_dots, res.fit_points, res.fit_rms_mm,
                                                 res.mm_per_px, res.notes)}
+            if manual:
+                r["manual"] = manual
         base.update(r)
     except Exception as e:   # recorded, not retried until the file changes
         base.update({"sheet": src.sheet_hint, "error": f"{type(e).__name__}: {e}"})
