@@ -8,12 +8,21 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.5.000<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.5.001<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
+
+### Added
+
+- (0.5.001) Campaign hits GUI (`campaign.bat`, `python -m campaign gui`; T7.0 §14.5): watches the campaign data folder
+  (`python/campaign_runs/`: `scans/`, `photos/`, `runs/`, `results/`), analyses every new scan, photo or Beam Pro
+  trial (review-look Eye frames, median over up to 10) once per file version, and shows per source, per sheet (scan,
+  photo and Eye side by side) and pooled per participant, condition, display and source; "hide numbers" for when a
+  participant is present; PDFs refused (save scans as PNG). Logic in `campaign/store.py` with tests;
+  `python -m campaign watch` runs it headless.
 
 ## [0.5.000] — 2026-11-25
 

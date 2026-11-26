@@ -1,4 +1,4 @@
-"""python -m campaign <command> (T7.0). Commands: sheets, set, hits, summary."""
+"""python -m campaign <command> (T7.0). Commands: sheets, set, hits, summary, gui, watch."""
 from __future__ import annotations
 
 import argparse
@@ -130,6 +130,25 @@ def cmd_summary(a) -> int:
     return 0
 
 
+def cmd_gui(a) -> int:
+    from .gui import main as gui_main
+    return gui_main(a.root)
+
+
+def cmd_watch(a) -> int:
+    """Headless: analyse what is pending in the data folder once, print one line per source."""
+    from . import store as St
+    root = St.ensure_layout(Path(a.root) if a.root else St.DEFAULT_ROOT)
+    todo = St.pending(root, settle_s=0)
+    for src in todo:
+        r = St.analyse(root, src)
+        st = r.get("stats", {})
+        print(f"{src.key}: " + (r.get("error") or f"{r['sheet']} {r['found']}/{r['targets']} hits, fit rms "
+              f"{r['fit_rms_mm']:.3f} mm, median {St.fmt(st.get('median_mm'))} R95 {St.fmt(st.get('r95_mm'))} mm"))
+    print(f"{len(todo)} analysed in {root}")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m campaign")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -153,8 +172,13 @@ def main(argv=None) -> int:
     m.add_argument("--hits-dir", default=str(REPO / "python" / "campaign_runs" / "hits"))
     m.add_argument("--map", default=str(REPO / "python" / "campaign_runs" / "sheets_used.csv"),
                    help="CSV sheet,participant,condition,display (written from the app's trial logs)")
+    g = sub.add_parser("gui", help="the campaign data folder: auto-analysis and overview (campaign.bat)")
+    g.add_argument("--root", help="data folder (default: the last one used, else python/campaign_runs)")
+    w = sub.add_parser("watch", help="analyse what is new in the data folder once, without the GUI")
+    w.add_argument("--root", help="data folder (default python/campaign_runs)")
     a = ap.parse_args(argv)
-    return {"sheets": cmd_sheets, "set": cmd_set, "hits": cmd_hits, "summary": cmd_summary}[a.cmd](a)
+    return {"sheets": cmd_sheets, "set": cmd_set, "hits": cmd_hits, "summary": cmd_summary, "gui": cmd_gui,
+            "watch": cmd_watch}[a.cmd](a)
 
 
 if __name__ == "__main__":

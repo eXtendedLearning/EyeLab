@@ -1,4 +1,4 @@
-# EyeLab v<!-- eyelab-version -->0.5.000<!-- /eyelab-version -->
+# EyeLab v<!-- eyelab-version -->0.5.001<!-- /eyelab-version -->
 
 **EyeLab** is an XR-based spatial localization system designed to assist engineers performing
 Experimental Modal Analysis (EMA) impact hammer testing. It overlays the measurement geometry
@@ -36,6 +36,7 @@ Current XREAL planning lives in `CONTEXT.md`, `docs/adr/`, and `docs/tasks/`.
 ```
 EyeLab/
 ├── run_eyelab.bat           Windows launcher: checks Python, creates venv, installs deps, starts GUI
+├── campaign.bat            Campaign 0.5 hits GUI: watches python/campaign_runs, analyses scans, photos, trials
 ├── python/
 │   ├── requirements.txt     Pinned dependency floors
 │   ├── eyelab_gui.py        Tkinter GUI — main entry point
