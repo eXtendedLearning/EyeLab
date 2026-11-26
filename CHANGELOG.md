@@ -8,12 +8,25 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.5.004<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.5.005<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
+
+### Fixed
+
+- (0.5.005) Beam Pro app froze at the end of a calibration check: the XREAL SDK's `StopRGBCameraDataCapture()`
+  hung ("SyncClose Wait Timeout"). The Eye camera is now started once (`EyeCamera`) and never stopped (T7.0 §14.8).
+
+### Changed
+
+- (0.5.005) Beam Pro app:
+  - **Per-participant AR display.** The Calibration page chooses between the personal calibration and the device
+    pool. Jack's first personal calibration rated worse than the pool, and both are within one round's tap noise.
+  - **No detection bench in campaign runs.** The bench (about 15 s) no longer runs before trials and calibrations.
+    In the T6 runs it is shown only on the Beam Pro screen.
 
 ### Added
 

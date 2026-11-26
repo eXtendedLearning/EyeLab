@@ -810,14 +810,21 @@ namespace EyeLab.Probes
             if (p.Drawn) p.StartOverlay();
 
             // Part 1: bench on the pushed frames, on a worker thread so the glasses keep drawing.
-            if (p.m_Set != null && p.m_Set.frames != null && p.m_Set.frames.Length > 0)
+            // 0.5.004: the bench (T6.6 parity/timing, about 15 s) is skipped for the campaign variants, and while it runs
+            // the glasses show nothing: the waiting is on the Beam Pro screen only.
+            bool campaignVariant = p.m_Variant == "mark" || p.m_Variant == "pcal" || p.m_Variant == "pcheck";
+            if (campaignVariant)
+            {
+                status("Loading...");
+                run.Meta("bench_status", "skipped (campaign variant)");
+            }
+            else if (p.m_Set != null && p.m_Set.frames != null && p.m_Set.frames.Length > 0)
             {
                 var bench = new Thread(p.Bench) { IsBackground = true, Name = "eyelab-b3a-bench" };
                 bench.Start();
                 while (bench.IsAlive)
                 {
-                    status("Bench: " + p.m_BenchStatus);
-                    show?.Invoke("Detection bench running, please wait", 0f, 0f, "bench");
+                    status("Loading (detection bench): " + p.m_BenchStatus);
                     yield return null;
                 }
                 run.Meta("bench_status", p.m_BenchStatus);
@@ -1094,7 +1101,7 @@ namespace EyeLab.Probes
 
         void StartLive()
         {
-            ulong id = XREALPlugin.StartRGBCameraDataCapture();
+            ulong id = EyeCamera.Ensure();   // 0.5.004: started once, never stopped (the SDK's stop hung the app at a pcheck's end)
             m_Capturing = id != ulong.MaxValue;
             m_Run.Meta("eye_start_capture", id.ToString(CultureInfo.InvariantCulture));
             m_Run.Meta("calibration_resolution", "1280x720 (set.json)");
@@ -1111,7 +1118,6 @@ namespace EyeLab.Probes
             m_Stop = true;
             m_Signal.Set();
             m_Worker?.Join(2000);
-            if (m_Capturing) XREALPlugin.StopRGBCameraDataCapture();
             m_Capturing = false;
         }
 
@@ -1597,7 +1603,6 @@ namespace EyeLab.Probes
         {
             m_Stop = true;
             m_Signal.Set();
-            if (m_Capturing) XREALPlugin.StopRGBCameraDataCapture();
         }
     }
 }

@@ -61,7 +61,7 @@ namespace EyeLab.Probes
         bool m_MarkRun;
         // 0.5.002 (Jack, 2026-11-26): per-participant calibration pages, the T6 runs page, the square toggle, the warning
         GameObject m_PanelT6, m_CalPage, m_CalResultPage, m_ConfirmPage, m_WarnPage;
-        Text m_CalInfo, m_CalResultInfo, m_ConfirmInfo, m_WarnInfo, m_SquareLabel, m_SaveLabel;
+        Text m_CalInfo, m_CalResultInfo, m_ConfirmInfo, m_WarnInfo, m_SquareLabel, m_SaveLabel, m_ChoiceLabel;
         int m_SaveAs = -1;   // participant the pcal result is saved as (chosen on the result page)
 
         // ------------------------------------------------------------------ T6.3 cue scripts (Jack, 2026-11-18)
@@ -801,8 +801,9 @@ namespace EyeLab.Probes
             string found = sh == null ? " (NOT FOUND)" : " (" + (sh.targets?.Length ?? 0) + " targets)";
             string eff = Campaign.EffectiveDisplay(st.condition);
             string display = !Campaign.ShowsCross(st.condition) ? "none: printed crosses"
-                : eff == "person" ? "personal calibration" : eff == "sdk" && Campaign.DisplayFor(st.condition) == "person" ? "SDK (NO CALIBRATION: calibrate first)" : eff;
-            string cal = PersonCal.Exists(st.participant) ? PersonCal.Describe(st.participant) : Campaign.ParticipantId + ": no calibration";
+                : eff == "person" ? "personal calibration" : eff == "all" ? "device pool" : eff == "sdk" && Campaign.DisplayFor(st.condition) == "person" ? "SDK (NO CALIBRATION: calibrate first)" : eff;
+            string cal = (PersonCal.Exists(st.participant) ? PersonCal.Describe(st.participant) : Campaign.ParticipantId + ": no calibration") +
+                         (PersonCal.UsesPool(st.participant) ? "  |  AR set to the device pool (Calibration page)" : "");
             m_CampaignInfo.text = "Participant " + Campaign.ParticipantId + "   |   " + Campaign.ConditionName(st.condition) + "   |   sheet " + sheet + found +
                                   "\nDisplay: " + display + "   |   Put this sheet on the glass, then START\n" + cal;
             for (int i = 0; i < m_ConditionLabels.Length; i++)
@@ -839,6 +840,12 @@ namespace EyeLab.Probes
                 if (!PersonCal.Exists(Campaign.Current.participant)) { SetStatus(Campaign.ParticipantId + " has no saved calibration: make a new one"); return; }
                 StartCoroutine(RunProbe(new ProbeConfig { probe = "pcheck" }));
             }, blue, m_CalPage);
+            m_ChoiceLabel = AddAction(font, "", () =>
+            {
+                int pt = Campaign.Current.participant;
+                PersonCal.SetPool(pt, !PersonCal.UsesPool(pt));
+                RefreshCal();
+            }, new Color(0.3f, 0.22f, 0.08f, 0.9f), m_CalPage);
             AddAction(font, "Back", () => ShowPage(m_Panel), grey, m_CalPage);
 
             m_CalResultPage = Column(canvas);
@@ -867,7 +874,10 @@ namespace EyeLab.Probes
         {
             if (m_CalInfo == null) return;
             int pt = Campaign.Current.participant;
-            m_CalInfo.text = "Participant " + Campaign.ParticipantId + "\n" + PersonCal.Describe(pt) +
+            bool pool = PersonCal.UsesPool(pt);
+            if (m_ChoiceLabel != null)
+                m_ChoiceLabel.text = "AR display for " + Campaign.ParticipantId + ": " + (pool ? "DEVICE POOL (tap for personal)" : "PERSONAL calibration (tap for device pool)");
+            m_CalInfo.text = "Participant " + Campaign.ParticipantId + "\n" + PersonCal.Describe(pt) + (pool ? "  |  AR uses the device pool" : "") +
                              "\nA40 flat on the glass. NEW: crosshair taps on the top-left square pair, then a check on the whole sheet.";
         }
 

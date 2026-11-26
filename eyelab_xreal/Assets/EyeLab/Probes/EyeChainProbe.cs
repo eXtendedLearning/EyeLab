@@ -80,7 +80,7 @@ namespace EyeLab.Probes
             m_Run.Meta("eye_save_every", m_SaveEvery.ToString(CultureInfo.InvariantCulture));
             m_Run.Meta("eye_save_scale", m_Scale.ToString(CultureInfo.InvariantCulture));
             m_Run.Meta("display_refresh_hz", DisplayRefresh());
-            ulong id = XREALPlugin.StartRGBCameraDataCapture();
+            ulong id = EyeCamera.Ensure();   // 0.5.004: never stopped (the SDK's stop can hang the main thread)
             m_Capturing = id != ulong.MaxValue;
             m_Run.Meta("eye_start_capture", id.ToString(CultureInfo.InvariantCulture));
             m_T0 = Time.realtimeSinceStartup;
@@ -219,7 +219,6 @@ namespace EyeLab.Probes
         {
             if (!Running) return;
             Running = false;
-            if (m_Capturing) XREALPlugin.StopRGBCameraDataCapture();
             m_Capturing = false;
             m_Run.Meta("eye_frames", m_Seq.ToString(CultureInfo.InvariantCulture));
             m_Run.Meta("eye_drained", m_Drained.ToString(CultureInfo.InvariantCulture));
@@ -232,9 +231,6 @@ namespace EyeLab.Probes
             done?.Invoke();
         }
 
-        void OnDestroy()
-        {
-            if (m_Capturing) XREALPlugin.StopRGBCameraDataCapture();
-        }
+        void OnDestroy() { }   // the Eye camera stays on (EyeCamera)
     }
 }

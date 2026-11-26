@@ -117,7 +117,8 @@ namespace EyeLab.Probes
         public static string ConditionName(string c) { int i = Array.IndexOf(Conditions, c); return i >= 0 ? ConditionNames[i] : c; }
 
         /// <summary>The eye model the overlay uses in this condition: SDK for S, else the protocol's (pooled by default).</summary>
-        public static string DisplayFor(string condition) => condition == "S" ? "sdk" : Proto.display_ar;
+        public static string DisplayFor(string condition) =>
+            condition == "S" ? "sdk" : Proto.display_ar == "person" && PersonCal.UsesPool(Current.participant) ? "all" : Proto.display_ar;
 
         /// <summary>AR-SDK is only for the participants the protocol names (P13 = Jack).</summary>
         public static bool SdkAllowed(int participant) => Proto.sdk_participants != null && Array.IndexOf(Proto.sdk_participants, participant) >= 0;
@@ -216,6 +217,7 @@ namespace EyeLab.Probes
                      (EffectiveDisplay(Current.condition) != DisplayFor(Current.condition) ? " (wanted " + DisplayFor(Current.condition) + ": no calibration for " + ParticipantId + ")" : "")
                      : "none (printed)");
             if (PersonCal.Exists(Current.participant)) run.Meta("campaign_person_cal", PersonCal.Describe(Current.participant));
+            run.Meta("campaign_display_choice", PersonCal.UsesPool(Current.participant) ? "device pool (" + PersonCal.ChoicePath(Current.participant) + ")" : "personal when calibrated");
             run.Meta("campaign_protocol", JsonUtility.ToJson(Proto));
             var b = new System.Text.StringBuilder();
             foreach (SheetTarget t in ActiveSheet.targets)
@@ -322,6 +324,26 @@ namespace EyeLab.Probes
         public static string JsonPath(int participant) => Path.Combine(Dir, Name(participant) + ".json");
         public static string TapsPath(int participant) => Path.Combine(Dir, Name(participant) + "_taps.csv");
         public static bool Exists(int participant) => File.Exists(JsonPath(participant));
+
+        /// <summary>0.5.004 (Jack, 2026-11-26): a participant can be set to draw AR with the device pool ("all", the
+        /// T6.12 store) instead of a personal calibration: <c>Pnn_display.txt</c> = "pool". Jack's first personal
+        /// calibration looked worse on A40 than the pool.</summary>
+        public static string ChoicePath(int participant) => Path.Combine(Dir, Name(participant) + "_display.txt");
+
+        public static bool UsesPool(int participant)
+        {
+            try { return File.Exists(ChoicePath(participant)) && File.ReadAllText(ChoicePath(participant)).Trim() == "pool"; }
+            catch (Exception) { return false; }
+        }
+
+        public static void SetPool(int participant, bool pool)
+        {
+            Directory.CreateDirectory(Dir);
+            string path = ChoicePath(participant);
+            if (File.Exists(path)) File.Delete(path);
+            File.WriteAllText(path, pool ? "pool" : "person");
+            Debug.Log("[EyeLab campaign] " + Name(participant) + " AR display: " + (pool ? "device pool" : "personal calibration"));
+        }
 
         public static EyeModel.Saved Load(int participant)
         {
