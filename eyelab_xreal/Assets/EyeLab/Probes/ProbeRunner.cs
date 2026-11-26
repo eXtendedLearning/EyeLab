@@ -59,6 +59,10 @@ namespace EyeLab.Probes
         Text m_CampaignInfo, m_MarkInfo;
         Text[] m_ConditionLabels;
         bool m_MarkRun;
+        // 0.5.002 (Jack, 2026-11-26): per-participant calibration pages, the T6 runs page, the square toggle, the warning
+        GameObject m_PanelT6, m_CalPage, m_CalResultPage, m_ConfirmPage, m_WarnPage;
+        Text m_CalInfo, m_CalResultInfo, m_ConfirmInfo, m_WarnInfo, m_SquareLabel, m_SaveLabel;
+        int m_SaveAs = -1;   // participant the pcal result is saved as (chosen on the result page)
 
         // ------------------------------------------------------------------ T6.3 cue scripts (Jack, 2026-11-18)
         static readonly CueStep[] LoopCues =
@@ -158,7 +162,11 @@ namespace EyeLab.Probes
             if (m_SpaamPage != null) m_SpaamPage.SetActive(page == m_SpaamPage);
             if (m_CampaignPage != null) m_CampaignPage.SetActive(page == m_CampaignPage);
             if (m_MarkPage != null) m_MarkPage.SetActive(page == m_MarkPage);
+            foreach (GameObject g in new[] { m_PanelT6, m_CalPage, m_CalResultPage, m_ConfirmPage, m_WarnPage })
+                if (g != null) g.SetActive(page == g);
             if (page == m_CampaignPage) RefreshCampaign();
+            if (page == m_CalPage) RefreshCal();
+            if (page == m_CalResultPage) RefreshCalResult();
         }
 
         void Update()
@@ -174,10 +182,11 @@ namespace EyeLab.Probes
                 if (m_SpaamTap.activeSelf != (!check && !rate)) m_SpaamTap.SetActive(!check && !rate);
                 double age = DetectProbe.BoardAgeMs;
                 string mode = DetectProbe.ActiveMode;
+                string[] names = DetectProbe.ActiveVariant == "pcal" || DetectProbe.ActiveVariant == "pcheck" ? PersonModeNames : ModeNames;
                 for (int i = 0; i < m_ModeLabels.Length; i++)
                 {
                     m_ModeLabels[i].fontStyle = DetectProbe.EyeModes[i] == mode ? FontStyle.Bold : FontStyle.Normal;
-                    string label = ModeNames[i] + (DetectProbe.ModeAvailable(DetectProbe.EyeModes[i]) ? "" : " (none)");
+                    string label = names[i] + (DetectProbe.ModeAvailable(DetectProbe.EyeModes[i]) ? "" : " (none)");
                     if (m_ModeLabels[i].text != label) m_ModeLabels[i].text = label;
                 }
                 string tapText = DetectProbe.ActiveVariant == "camcal" ? "NEXT: tap when set" : "ALIGNED: tap anywhere here";
@@ -246,8 +255,11 @@ namespace EyeLab.Probes
             if (p == "camcal") yield return Detect(cfg, "camcal");
             if (p == "eyecheck") yield return Detect(cfg, "eyecheck");
             if (p == "mark") yield return Detect(cfg, "mark");
+            if (p == "pcal") yield return Detect(cfg, "pcal");
+            if (p == "pcheck") yield return Detect(cfg, "pcheck");
             m_Glasses?.ClearCue();
-            ShowPage(p == "mark" ? m_CampaignPage : m_Panel);
+            m_SaveAs = Campaign.Current.participant;
+            ShowPage(p == "mark" ? m_CampaignPage : p == "pcal" ? m_CalResultPage : p == "pcheck" ? m_CalPage : m_Panel);
             m_Busy = false;
         }
 
@@ -304,7 +316,7 @@ namespace EyeLab.Probes
             {
                 run.Meta("config", JsonUtility.ToJson(cfg));
                 GlassesMeta(run);
-                bool spaam = variant == "spaam" || variant == "eyecal" || variant == "eyecheck" || variant == "camcal";
+                bool spaam = variant == "spaam" || variant == "eyecal" || variant == "eyecheck" || variant == "camcal" || variant == "pcal" || variant == "pcheck";
                 bool overlay = variant == "overlay" || variant == "align" || spaam;
                 if (variant == "overlay") ShowPage(m_OverlayRatePanel);
                 if (variant == "align") { m_AlignRun = true; ShowPage(m_AlignPage); }
@@ -549,11 +561,10 @@ namespace EyeLab.Probes
             m_Status.alignment = TextAnchor.MiddleCenter;
             m_Glasses = GlassesView.Create(font);
 
+            // 0.5.002 (Jack, 2026-11-26): three buttons; the T6 runs moved to Other runs > T6 runs
             m_Panel = Column(canvas.transform);
+            AddAction(font, "CALIBRATION: per participant, on A40", () => ShowPage(m_CalPage), new Color(0.12f, 0.3f, 0.15f, 0.9f));
             AddAction(font, "CAMPAIGN 0.5: hammering trials", () => ShowPage(m_CampaignPage), new Color(0.1f, 0.25f, 0.45f, 0.9f));
-            AddButton(font, "T6.13  Camera calibration + tape check  (4 min)", new ProbeConfig { probe = "camcal" });
-            AddButton(font, "T6.12  Eye calibration: taps, fit, check  (6 min)", new ProbeConfig { probe = "eyecal" });
-            AddButton(font, "T6.12  Check only, saved calibration  (3 min)", new ProbeConfig { probe = "eyecheck" });
             AddAction(font, "Other runs", () => ShowPage(m_Panel2), new Color(0.22f, 0.22f, 0.25f, 0.9f));
             AddAction(font, "Quit EyeLab", () => { Debug.Log("[EyeLab probe] quit button"); Application.Quit(); });
 
@@ -564,17 +575,27 @@ namespace EyeLab.Probes
             AddAction(font, "I see text + square", () => AnswerGlasses("all"), new Color(0.12f, 0.3f, 0.15f, 0.9f), row);
             AddAction(font, "Text only", () => AnswerGlasses("text only"), new Color(0.35f, 0.3f, 0.1f, 0.9f), row);
             AddAction(font, "Nothing", () => AnswerGlasses("nothing"), new Color(0.45f, 0.1f, 0.1f, 0.9f), row);
-            AddAction(font, "Place square ahead", () => m_Glasses?.PlaceReference(), new Color(0.1f, 0.25f, 0.45f, 0.9f), m_Panel2);
-            AddButton(font, "T6.11  Eye calibration taps (SPAAM): board  (4 min)", new ProbeConfig { probe = "spaam" }, m_Panel2);
-            AddButton(font, "T6.10  Align the overlay by eye: board, plate L  (5 min)", new ProbeConfig { probe = "align" }, m_Panel2);
-            AddButton(font, "T6.9  Overlay in the glasses: plate L, board  (2 min)", new ProbeConfig { probe = "overlay" }, m_Panel2);
-            AddButton(font, "T6.8  Lean detection: board, plate L tilted  (2 min)", new ProbeConfig { probe = "lean" }, m_Panel2);
-            AddButton(font, "T6.7  Detection budget: plate A, plate L, board  (2.5 min)", new ProbeConfig { probe = "budget" }, m_Panel2);
-            AddButton(font, "T6.6  Detection, plate A, threads  (100 s)", new ProbeConfig { probe = "detect" }, m_Panel2);
-            AddButton(font, "T6.5  Rendering, rate each setting  (85 s)", new ProbeConfig { probe = "render" }, m_Panel2);
-            AddButton(font, "T6.3  Head loop + Eye  (95 s)", new ProbeConfig { probe = "loop" }, m_Panel2);
-            AddButton(font, "T6.3  Motion sync  (40 s)", new ProbeConfig { probe = "sync" }, m_Panel2);
-            AddButton(font, "T6.3  Stereo pan  (35 s)", new ProbeConfig { probe = "pan" }, m_Panel2);
+            Transform sq = Row(m_Panel2.transform);
+            AddAction(font, "Place square ahead", () => { m_Glasses?.PlaceReference(); SetSquareLabel(); }, new Color(0.1f, 0.25f, 0.45f, 0.9f), sq);
+            m_SquareLabel = AddAction(font, "", () => { m_Glasses?.SetReference(!(m_Glasses?.ReferenceOn ?? false)); SetSquareLabel(); },
+                                      new Color(0.1f, 0.25f, 0.45f, 0.9f), sq);
+            SetSquareLabel();
+            AddAction(font, "T6 runs (Eye calibration, overlay, detection...)", () => ShowPage(m_PanelT6), new Color(0.22f, 0.22f, 0.25f, 0.9f), m_Panel2);
+            m_PanelT6 = Column(canvas.transform);
+            AddButton(font, "T6.13  Camera calibration + tape check  (4 min)", new ProbeConfig { probe = "camcal" }, m_PanelT6);
+            AddButton(font, "T6.12  Eye calibration: taps, fit, check  (6 min)", new ProbeConfig { probe = "eyecal" }, m_PanelT6);
+            AddButton(font, "T6.12  Check only, saved calibration  (3 min)", new ProbeConfig { probe = "eyecheck" }, m_PanelT6);
+            AddButton(font, "T6.11  Eye calibration taps (SPAAM): board  (4 min)", new ProbeConfig { probe = "spaam" }, m_PanelT6);
+            AddButton(font, "T6.10  Align the overlay by eye: board, plate L  (5 min)", new ProbeConfig { probe = "align" }, m_PanelT6);
+            AddButton(font, "T6.9  Overlay in the glasses: plate L, board  (2 min)", new ProbeConfig { probe = "overlay" }, m_PanelT6);
+            AddButton(font, "T6.8  Lean detection: board, plate L tilted  (2 min)", new ProbeConfig { probe = "lean" }, m_PanelT6);
+            AddButton(font, "T6.7  Detection budget: plate A, plate L, board  (2.5 min)", new ProbeConfig { probe = "budget" }, m_PanelT6);
+            AddButton(font, "T6.6  Detection, plate A, threads  (100 s)", new ProbeConfig { probe = "detect" }, m_PanelT6);
+            AddButton(font, "T6.5  Rendering, rate each setting  (85 s)", new ProbeConfig { probe = "render" }, m_PanelT6);
+            AddButton(font, "T6.3  Head loop + Eye  (95 s)", new ProbeConfig { probe = "loop" }, m_PanelT6);
+            AddButton(font, "T6.3  Motion sync  (40 s)", new ProbeConfig { probe = "sync" }, m_PanelT6);
+            AddButton(font, "T6.3  Stereo pan  (35 s)", new ProbeConfig { probe = "pan" }, m_PanelT6);
+            AddAction(font, "Back", () => ShowPage(m_Panel2), new Color(0.22f, 0.22f, 0.25f, 0.9f), m_PanelT6);
             AddButton(font, "Timecode 60 s", new ProbeConfig { probe = "timecode" }, m_Panel2);
             AddButton(font, "Head 6DoF 2 min", new ProbeConfig { probe = "head" }, m_Panel2);
             AddButton(font, "Head 6DoF + Eye 2 min", new ProbeConfig { probe = "head_eye" }, m_Panel2);
@@ -611,6 +632,7 @@ namespace EyeLab.Probes
             BuildAlignPage(canvas.transform, font, overlayColors);
             BuildSpaamPage(canvas.transform, font, overlayColors);
             BuildCampaignPages(canvas.transform, font);
+            BuildCalibrationPages(canvas.transform, font);
             ShowPage(m_Panel);
             Debug.Log("[EyeLab probe] buttons built on " + (canvas.gameObject.name));
         }
@@ -665,6 +687,7 @@ namespace EyeLab.Probes
         /// crosshair; "last tap was bad" marks the previous one for the fit to drop; in chk_L, which eye sees the crosshair.
         /// </summary>
         static readonly string[] ModeNames = { "SDK", "This round", "All rounds" };
+        static readonly string[] PersonModeNames = { "SDK", "Personal", "Device pool" };
 
         void BuildSpaamPage(Transform canvas, Font font, Color[] colors)
         {
@@ -745,9 +768,20 @@ namespace EyeLab.Probes
             AddAction(font, "Abort trial", Campaign.Abort, red, r4);
         }
 
-        void StartTrial()
+        void StartTrial() => StartTrial(false);
+
+        void StartTrial(bool warned)
         {
             if (m_Busy) return;
+            string c = Campaign.Current.condition;
+            if (!warned && Campaign.ShowsCross(c) && Campaign.EffectiveDisplay(c) != Campaign.DisplayFor(c))
+            {
+                // 0.5.002: no personal calibration: say so before the trial, not after
+                m_WarnInfo.text = $"{Campaign.ParticipantId} has NO calibration.\nWithout it the crosshair is drawn with the SDK display, " +
+                                  "and the results will be bad (about 13 mm off for Jack).\nCalibrate first, or start anyway.";
+                ShowPage(m_WarnPage);
+                return;
+            }
             if (!Campaign.Prepare(out string why)) { SetStatus("Cannot start: " + why); RefreshCampaign(); return; }
             SetStatus($"Trial {Campaign.ParticipantId} {Campaign.ConditionName(Campaign.Current.condition)} {Campaign.CurrentSheetName}: {why}");
             StartCoroutine(RunProbe(new ProbeConfig { probe = "mark" }));
@@ -756,15 +790,120 @@ namespace EyeLab.Probes
         void RefreshCampaign()
         {
             if (m_CampaignInfo == null) return;
+            Campaign.Reload();
+            bool sdkOk = Campaign.SdkAllowed(Campaign.Current.participant);
+            if (!sdkOk && Campaign.Current.condition == "S") Campaign.SetCondition("A");
+            for (int i = 0; i < Campaign.Conditions.Length; i++)
+                if (Campaign.Conditions[i] == "S") m_ConditionLabels[i].transform.parent.gameObject.SetActive(sdkOk);
             Campaign.State st = Campaign.Current;
             string sheet = Campaign.CurrentSheetName;
             Campaign.Sheet sh = Campaign.LoadSheet(sheet);
             string found = sh == null ? " (NOT FOUND)" : " (" + (sh.targets?.Length ?? 0) + " targets)";
-            string display = Campaign.ShowsCross(st.condition) ? Campaign.DisplayFor(st.condition) : "none: printed crosses";
+            string eff = Campaign.EffectiveDisplay(st.condition);
+            string display = !Campaign.ShowsCross(st.condition) ? "none: printed crosses"
+                : eff == "person" ? "personal calibration" : eff == "sdk" && Campaign.DisplayFor(st.condition) == "person" ? "SDK (NO CALIBRATION: calibrate first)" : eff;
+            string cal = PersonCal.Exists(st.participant) ? PersonCal.Describe(st.participant) : Campaign.ParticipantId + ": no calibration";
             m_CampaignInfo.text = "Participant " + Campaign.ParticipantId + "   |   " + Campaign.ConditionName(st.condition) + "   |   sheet " + sheet + found +
-                                  "\nDisplay: " + display + "   |   Put this sheet on the glass, then START";
+                                  "\nDisplay: " + display + "   |   Put this sheet on the glass, then START\n" + cal;
             for (int i = 0; i < m_ConditionLabels.Length; i++)
                 m_ConditionLabels[i].fontStyle = Campaign.Conditions[i] == st.condition ? FontStyle.Bold : FontStyle.Normal;
+        }
+
+        // ------------------------------------------------------------------ 0.5.002: calibration per participant
+        /// <summary>
+        /// Calibration page: the participant (shared with the campaign page), NEW calibration (pcal: taps on A40's top-left
+        /// square pair, fit, check on the whole grid) or LOAD + CHECK of the saved one (pcheck). After a new calibration,
+        /// the result page saves it as a participant (asking before it overwrites one), redoes it or discards it.
+        /// </summary>
+        void BuildCalibrationPages(Transform canvas, Font font)
+        {
+            Color grey = new Color(0.22f, 0.22f, 0.25f, 0.9f), green = new Color(0.12f, 0.3f, 0.15f, 0.9f);
+            Color blue = new Color(0.1f, 0.25f, 0.45f, 0.9f), red = new Color(0.45f, 0.1f, 0.1f, 0.9f);
+            Text Info(GameObject page, int h)
+            {
+                Text x = MakeText(page.transform, font, Vector2.zero, Vector2.one, 28);
+                x.alignment = TextAnchor.MiddleCenter;
+                x.gameObject.AddComponent<LayoutElement>().preferredHeight = h;
+                return x;
+            }
+
+            m_CalPage = Column(canvas);
+            m_CalInfo = Info(m_CalPage, 170);
+            Transform r1 = Row(m_CalPage.transform);
+            AddAction(font, "Participant -", () => { Campaign.SetParticipant(-1); RefreshCal(); }, grey, r1);
+            AddAction(font, "Participant +", () => { Campaign.SetParticipant(+1); RefreshCal(); }, grey, r1);
+            AddAction(font, "NEW CALIBRATION on A40  (about 4 min)", () => { if (!m_Busy) StartCoroutine(RunProbe(new ProbeConfig { probe = "pcal" })); }, green, m_CalPage);
+            AddAction(font, "LOAD + CHECK saved calibration  (2 min)", () =>
+            {
+                if (m_Busy) return;
+                if (!PersonCal.Exists(Campaign.Current.participant)) { SetStatus(Campaign.ParticipantId + " has no saved calibration: make a new one"); return; }
+                StartCoroutine(RunProbe(new ProbeConfig { probe = "pcheck" }));
+            }, blue, m_CalPage);
+            AddAction(font, "Back", () => ShowPage(m_Panel), grey, m_CalPage);
+
+            m_CalResultPage = Column(canvas);
+            m_CalResultInfo = Info(m_CalResultPage, 220);
+            Transform r2 = Row(m_CalResultPage.transform);
+            AddAction(font, "Save as -", () => { m_SaveAs = Mathf.Max(0, m_SaveAs - 1); RefreshCalResult(); }, grey, r2);
+            AddAction(font, "Save as +", () => { m_SaveAs = Mathf.Min(99, m_SaveAs + 1); RefreshCalResult(); }, grey, r2);
+            m_SaveLabel = AddAction(font, "SAVE", () => SaveCal(false), green, m_CalResultPage);
+            Transform r3 = Row(m_CalResultPage.transform);
+            AddAction(font, "REDO calibration", () => { if (!m_Busy) StartCoroutine(RunProbe(new ProbeConfig { probe = "pcal" })); }, blue, r3);
+            AddAction(font, "Discard", () => { SetStatus("Calibration discarded"); ShowPage(m_CalPage); }, red, r3);
+
+            m_ConfirmPage = Column(canvas);
+            m_ConfirmInfo = Info(m_ConfirmPage, 220);
+            AddAction(font, "YES, overwrite", () => SaveCal(true), red, m_ConfirmPage);
+            AddAction(font, "No, go back", () => ShowPage(m_CalResultPage), grey, m_ConfirmPage);
+
+            m_WarnPage = Column(canvas);
+            m_WarnInfo = Info(m_WarnPage, 220);
+            AddAction(font, "Calibrate this participant first", () => ShowPage(m_CalPage), green, m_WarnPage);
+            AddAction(font, "Start anyway (SDK display)", () => { ShowPage(m_CampaignPage); StartTrial(true); }, red, m_WarnPage);
+            AddAction(font, "Cancel", () => ShowPage(m_CampaignPage), grey, m_WarnPage);
+        }
+
+        void RefreshCal()
+        {
+            if (m_CalInfo == null) return;
+            int pt = Campaign.Current.participant;
+            m_CalInfo.text = "Participant " + Campaign.ParticipantId + "\n" + PersonCal.Describe(pt) +
+                             "\nA40 flat on the glass. NEW: crosshair taps on the top-left square pair, then a check on the whole sheet.";
+        }
+
+        void RefreshCalResult()
+        {
+            if (m_CalResultInfo == null) return;
+            if (m_SaveAs < 0) m_SaveAs = Campaign.Current.participant;
+            string who = PersonCal.Name(m_SaveAs);
+            m_CalResultInfo.text = (DetectProbe.PcalResult != null ? "New calibration\n" : "No calibration fitted\n") + DetectProbe.PcalText +
+                                   "\nSave as " + who + (PersonCal.Exists(m_SaveAs) ? " (has one: you will be asked before it is replaced)" : "");
+            m_SaveLabel.text = DetectProbe.PcalResult != null ? "SAVE as " + who : "Nothing to save: REDO";
+        }
+
+        void SaveCal(bool confirmed)
+        {
+            if (DetectProbe.PcalResult == null) { SetStatus("Nothing to save: redo the calibration"); return; }
+            if (!confirmed && PersonCal.Exists(m_SaveAs))
+            {
+                m_ConfirmInfo.text = PersonCal.Name(m_SaveAs) + " already has a calibration:\n" + PersonCal.Describe(m_SaveAs) + "\nReplace it with the new one?";
+                ShowPage(m_ConfirmPage);
+                return;
+            }
+            try
+            {
+                PersonCal.Save(m_SaveAs, DetectProbe.PcalResult, DetectProbe.PcalTaps);
+                Debug.Log("[EyeLab probe] calibration saved: " + PersonCal.Describe(m_SaveAs) + (confirmed ? " (overwrote)" : ""));
+                if (Campaign.Current.participant != m_SaveAs) Campaign.SetParticipant(m_SaveAs - Campaign.Current.participant);
+                SetStatus("Saved: " + PersonCal.Describe(m_SaveAs));
+                ShowPage(m_CalPage);
+            }
+            catch (System.Exception e) { SetStatus("Not saved: " + e.Message); ShowPage(m_CalResultPage); }
+        }
+
+        void SetSquareLabel()
+        {
+            if (m_SquareLabel != null) m_SquareLabel.text = "Square: " + ((m_Glasses?.ReferenceOn ?? false) ? "ON (tap for off)" : "OFF (tap for on)");
         }
 
         void UpdateMark()

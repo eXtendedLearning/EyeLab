@@ -8,12 +8,30 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.5.002<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.5.003<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
 
 ## [Unreleased]
+
+### Changed
+
+- (0.5.003) Beam Pro app, from Jack's list after the first home sessions (T7.0 §14.6):
+  - The main page has three buttons: **CALIBRATION**, **CAMPAIGN 0.5** and **Other runs**.
+  - **CALIBRATION** works per participant on A40:
+    - **New** (`pcal`): crosshair taps on the top-left square pair, 4 per eye at 35 and 60 cm; the fit runs on the
+      device from this round only; then a check on all 20 A40 grid saddles.
+    - After the check, the participant can **save** (with confirmation before overwriting), **redo** or **discard**.
+      A saved calibration goes to `files/calibration/participants/Pnn.json` (+ `_taps.csv`).
+    - **Load + check** (`pcheck`) runs the same check with the saved calibration.
+  - **AR** draws with the participant's own calibration (`display_ar: "person"`).
+    - **AR-SDK** is offered only to `sdk_participants` (default `[13]`).
+    - An AR trial for a participant with no calibration warns that the SDK display will be used and the results will
+      be bad, and offers to calibrate first.
+  - The T6 runs moved to **Other runs > T6 runs**.
+  - The blue reference square no longer appears on its own; **Square: ON/OFF** sits next to "Place square ahead".
+  - The review look is now cued at 20 cm (0.5.002 found 48 cm too coarse for the Eye estimate).
 
 ### Fixed
 

@@ -367,6 +367,61 @@ namespace EyeLab.Probes
             return c;
         }
 
+        // ------------------------------------------------------------------ 0.5.002 (pcal, pcheck): per participant on A40
+        /// <summary>The A40 sheet flat on the table; the tap point is grid saddle 1, where the top-left pair of black squares
+        /// touch. Two viewing distances: about 35 cm (bent over the sheet, as when hitting) and 60 cm (standing).</summary>
+        public static readonly int[] PcalDepthsCm = { 35, 60 };
+
+        static List<CueStep> PcalCheckCues() => new List<CueStep>
+        {
+            new CueStep("c35_place", "Check. Look at the A40 sheet from about thirty five centimetres. A green crosshair should sit on every " +
+                                     "point where two black squares touch, and green bars on the four big markers.", 12f, "A40 at about 35 cm", ticks: true),
+            new CueStep("c35", "Switch between S D K and personal on the screen, look with both eyes, and rate each.", 30f, "35 cm: switch, look, RATE each"),
+            new CueStep("c60_place", "Stand up, about sixty centimetres from the sheet.", 10f, "A40 at about 60 cm", ticks: true),
+            new CueStep("c60", "Switch, look and rate each.", 30f, "60 cm: switch, look, RATE each"),
+        };
+
+        public static List<CueStep> PcalCues()
+        {
+            var c = new List<CueStep>
+            {
+                new CueStep("s_ready", "Calibration. The A40 sheet flat on the glass. You will put a green crosshair on the point where the two " +
+                                       "black squares at the top left touch, one eye at a time, and tap the screen.", 14f,
+                            "A40 flat: top-left pair of squares", ticks: true),
+            };
+            foreach (int cm in PcalDepthsCm)
+            {
+                string words = cm == 35 ? "thirty five centimetres, bent over it as when hitting" : "sixty centimetres, standing";
+                c.Add(new CueStep($"d{cm}_place", $"Look at the sheet from about {words}.", 10f, $"Sheet at about {cm} cm", ticks: true));
+                foreach (string eye in new[] { "L", "R" })
+                {
+                    string name = eye == "L" ? "Left" : "Right", other = eye == "L" ? "right" : "left";
+                    for (int k = 1; k <= SpaamPerEye; k++)
+                    {
+                        string say = k == 1
+                            ? $"{name} eye. Close your {other} eye. Move your head until the crosshair centre is where the two top left squares touch, then tap."
+                            : "Next.";
+                        c.Add(new CueStep($"d{cm}_{eye}_{k}", say, SpaamTapTimeout,
+                                          $"{name.ToUpperInvariant()} eye: crosshair on the top-left square pair, TAP ({k}/{SpaamPerEye})"));
+                    }
+                }
+            }
+            c.Add(new CueStep(FitStep, "Fitting your eyes. The result is on the screen.", 8f, "Fitting: see the Beam Pro screen"));
+            c.AddRange(PcalCheckCues());
+            return c;
+        }
+
+        public static List<CueStep> PcheckCues()
+        {
+            var c = new List<CueStep>
+            {
+                new CueStep("s_ready", "Calibration check. The A40 sheet flat on the glass. The crosshairs use your saved calibration.", 8f,
+                            "A40 flat on the glass", ticks: true),
+            };
+            c.AddRange(PcalCheckCues());
+            return c;
+        }
+
         static bool CheckStep(string id) => id != null && (id.StartsWith("l_") || (id.Length > 1 && id[0] == 'c' && char.IsDigit(id[1])));
 
         /// <summary>A tap step's eye and crosshair position: "d60_L_3" gives ("L", position 3); chk_L the left eye's centre.</summary>
@@ -389,6 +444,7 @@ namespace EyeLab.Probes
             stepId = stepId ?? "";
             if (variant == "spaam") return new Plan("roi", 1, NiceRoi, "board25");
             if (variant == "mark") return new Plan("roi", 1, NiceRoi, MarkTarget);   // campaign 0.5: the F40 frame of every sheet
+            if (variant == "pcal" || variant == "pcheck") return new Plan("roi", 1, NiceRoi, MarkTarget);   // 0.5.002: calibration on A40
             if (variant == "camcal") return new Plan("full", 2, 0, "board25");   // full frames: the board goes to the edges, tilted
             if (variant == "eyecal" || variant == "eyecheck")
                 return new Plan("roi", 1, NiceRoi, stepId.StartsWith("l_") ? "plate_L" : "board25");
@@ -662,7 +718,7 @@ namespace EyeLab.Probes
             string f(float v) => v.ToString("R", ci);
             p.m_Taps++;
             bool ok = p.TapPoint(p.m_Cross.Eye, hp, hq, out Vector3 pe, out int nb);
-            if (ok && p.m_Variant == "eyecal")
+            if (ok && (p.m_Variant == "eyecal" || p.m_Variant == "pcal"))
                 p.m_RoundTaps.Add(new EyeModel.Tap
                 {
                     Wearing = Path.GetFileName(p.m_Run.Dir), Camera = p.CameraName, Eye = p.m_Cross.Eye, Step = p.m_Step, Px = pe.x, Py = pe.y, Pz = pe.z,
@@ -687,11 +743,12 @@ namespace EyeLab.Probes
         void SpaamOnStep(string stepId)
         {
             m_StepStart = Time.realtimeSinceStartup;
-            if (m_Variant == "eyecal" || m_Variant == "eyecheck")
+            if (m_Variant == "eyecal" || m_Variant == "eyecheck" || m_Variant == "pcal" || m_Variant == "pcheck")
             {
                 m_OverlayOn = CheckStep(stepId);
                 if (!m_OverlayOn) m_Overlay?.Hide();
-                if (stepId == FitStep) Fit();
+                if (m_Variant == "pcal" || m_Variant == "pcheck") m_Mark?.SetPoints(m_OverlayOn ? m_GridCv : null);
+                if (stepId == FitStep) { if (m_Variant == "pcal") PcalFit(); else Fit(); }
             }
             if (m_Cross == null) return;
             if (SpaamStep(stepId, out string eye, out Vector2 deg)) m_Cross.Show(eye, deg);
@@ -727,7 +784,7 @@ namespace EyeLab.Probes
             var go = new GameObject("EyeLab DetectProbe");
             var p = go.AddComponent<DetectProbe>();
             p.m_Run = run;
-            p.m_Variant = Array.IndexOf(new[] { "budget", "lean", "overlay", "align", "spaam", "eyecal", "eyecheck", "camcal", "mark" }, variant) >= 0 ? variant : "detect";
+            p.m_Variant = Array.IndexOf(new[] { "budget", "lean", "overlay", "align", "spaam", "eyecal", "eyecheck", "camcal", "mark", "pcal", "pcheck" }, variant) >= 0 ? variant : "detect";
             run.Meta("variant", p.m_Variant);
             string info;
             try { info = ArucoNative.Info(); }
@@ -773,17 +830,22 @@ namespace EyeLab.Probes
 
             // Part 2: live on the Eye.
             p.StartLive();
-            if (p.m_Variant == "eyecal" || p.m_Variant == "eyecheck" || p.m_Variant == "mark") p.StartEyeModel();
+            bool pcal = p.m_Variant == "pcal" || p.m_Variant == "pcheck";
+            if (p.m_Variant == "eyecal" || p.m_Variant == "eyecheck" || p.m_Variant == "mark" || pcal) p.StartEyeModel();
             if (p.m_Variant == "mark") p.StartMark();
-            if (p.m_Variant == "spaam" || p.m_Variant == "eyecal")
+            if (pcal) p.StartPcal();
+            if (p.m_Variant == "spaam" || p.m_Variant == "eyecal" || p.m_Variant == "pcal")
             {
                 p.m_Cross = SpaamCrosshair.Create(run);
+                string real = p.m_Variant == "pcal"
+                    ? $"plate_A40 grid saddle 1, top-left pair of squares ({p.m_CalPointCv.x:F4}, {p.m_CalPointCv.y:F4}, {p.m_CalPointCv.z:F4}) m in the sheet frame"
+                    : $"board25 centre of the middle square ({p.BoardCentreText}) m in the board frame";
                 run.Meta("spaam", $"crosshair at {SpaamCrosshair.DistanceM} m along (tan x, tan y, 1) in the SDK eye's frame; positions (deg) " +
                                   string.Join(" ", Array.ConvertAll(SpaamCrosshair.Positions, v => $"({v.x:F0},{v.y:F0})")) +
-                                  $"; real point: board25 centre of the middle square ({p.BoardCentreText}) m in the board frame; head pose = Unity camera at the tap");
+                                  $"; real point: {real}; head pose = Unity camera at the tap");
             }
             float nextStatus = 0f;
-            List<CueStep> cues = p.m_Variant == "mark" ? Campaign.Cues() : p.m_Variant == "camcal" ? CamcalCues() : p.m_Variant == "eyecal" ? EyecalCues() : p.m_Variant == "eyecheck" ? EyecheckCues() : p.m_Variant == "spaam" ? SpaamCues() : p.m_Variant == "align" ? AlignCues() : p.m_Variant == "overlay" ? OverlayCues() : p.m_Variant == "lean" ? LeanCues()
+            List<CueStep> cues = p.m_Variant == "pcal" ? PcalCues() : p.m_Variant == "pcheck" ? PcheckCues() : p.m_Variant == "mark" ? Campaign.Cues() : p.m_Variant == "camcal" ? CamcalCues() : p.m_Variant == "eyecal" ? EyecalCues() : p.m_Variant == "eyecheck" ? EyecheckCues() : p.m_Variant == "spaam" ? SpaamCues() : p.m_Variant == "align" ? AlignCues() : p.m_Variant == "overlay" ? OverlayCues() : p.m_Variant == "lean" ? LeanCues()
                                : p.m_Variant == "budget" ? BudgetCues() : DetectCues();
             s_Active = p;
             yield return CuePlayer.Ensure().Play(run, cues, (text, left, frac, counter) =>
@@ -798,7 +860,7 @@ namespace EyeLab.Probes
                 p.m_Step = step.Id;
                 p.m_ThreadsWanted = PlanFor(p.m_Variant, step.Id).Threads;
                 if (p.m_Variant == "align" && p.m_Overlay != null) p.m_Overlay.SetStyle(step.Id.Contains("_solid"));
-                if (p.m_Variant == "spaam" || p.m_Variant == "eyecal" || p.m_Variant == "eyecheck" || p.m_Variant == "camcal") p.SpaamOnStep(step.Id);
+                if (p.m_Variant == "spaam" || p.m_Variant == "eyecal" || p.m_Variant == "eyecheck" || p.m_Variant == "camcal" || pcal) p.SpaamOnStep(step.Id);
                 if (p.m_Variant == "mark") p.MarkOnStep(step.Id);
             });
             p.StopLive();
@@ -1075,7 +1137,8 @@ namespace EyeLab.Probes
         // ---- overlay (T6.9, T6.10) ----------------------------------------------------------------------------------
 
         /// <summary>The variants that draw the pose in the glasses.</summary>
-        bool Drawn => m_Variant == "overlay" || m_Variant == "align" || m_Variant == "eyecal" || m_Variant == "eyecheck" || m_Variant == "mark";
+        bool Drawn => m_Variant == "overlay" || m_Variant == "align" || m_Variant == "eyecal" || m_Variant == "eyecheck" || m_Variant == "mark" ||
+                      m_Variant == "pcal" || m_Variant == "pcheck";
 
         /// <summary>The board rule (12+ markers trusted) applies to every variant from T6.9 on; T6.11 run 1 lacked it.</summary>
         bool BoardRule => Drawn || m_Variant == "spaam" || m_Variant == "camcal";
@@ -1114,13 +1177,101 @@ namespace EyeLab.Probes
         void StartMark()
         {
             m_Mark = MarkCross.Create(Campaign.Proto);
-            string mode = Campaign.ShowsCross(Campaign.Current.condition) ? Campaign.DisplayFor(Campaign.Current.condition) : "sdk";
+            string want = Campaign.ShowsCross(Campaign.Current.condition) ? Campaign.DisplayFor(Campaign.Current.condition) : "sdk";
+            string mode = want;
+            if (want == "person")
+            {
+                // 0.5.002: the participant's own calibration, in the "round" slot
+                mode = PersonCal.Load(Campaign.Current.participant, out m_RoundL, out m_RoundR) ? "round" : "sdk";
+                m_Run.Meta("campaign_person_model", m_RoundL != null ? $"L {EyeModel.Mm(m_RoundL)}, R {EyeModel.Mm(m_RoundR)}" : "none: SDK display");
+            }
             SetMode(mode);
-            m_Run.Meta("campaign_eye_mode", m_Mode + (m_Mode != mode ? " (wanted " + mode + ", not available)" : ""));
+            string got = m_Mode == "round" ? "person " + Campaign.ParticipantId : m_Mode;
+            m_Run.Meta("campaign_eye_mode", got + (got != want && !(want == "person" && m_Mode == "round") ? " (wanted " + want + ", not available)" : ""));
             m_Run.Meta("campaign_cross", $"gap {Campaign.Proto.cross_gap_mm} mm, arm {Campaign.Proto.cross_arm_mm} mm, line {Campaign.Proto.cross_line_mm} mm, shader {m_Mark.ShaderName}");
             bool hasTarget = false;
             if (m_Set?.targets != null) foreach (Target t in m_Set.targets) if (t.name == MarkTarget) hasTarget = true;
             m_Run.Meta("campaign_set_target", hasTarget ? MarkTarget : MarkTarget + " MISSING from files/b3a/set.json: push the campaign set");
+        }
+
+        // ---- 0.5.002: participant calibration on A40 (pcal) and its check (pcheck) ---------------------------------
+
+        Vector3 m_CalPointCv = new Vector3(-0.08f, 0.06f, 0f);   // A40 grid saddle 1 (sheet frame), from Resources/campaign/sheets/A40
+        Vector3 CalPointUnity => new Vector3(m_CalPointCv.x, -m_CalPointCv.y, m_CalPointCv.z);   // F applied
+        readonly List<Vector3> m_GridCv = new List<Vector3>();
+
+        /// <summary>The finished pcal's model and taps, for the Save / Redo page (null until a fit succeeded).</summary>
+        public static EyeModel.Saved PcalResult { get; private set; }
+        public static List<EyeModel.Tap> PcalTaps { get; private set; } = new List<EyeModel.Tap>();
+        public static string PcalText { get; private set; } = "";
+
+        void StartPcal()
+        {
+            Campaign.Reload();
+            Campaign.Sheet a40 = Campaign.LoadSheet("A40");
+            if (a40?.saddles != null)
+                foreach (Campaign.SheetSaddle s in a40.saddles)
+                {
+                    if (s.model_m == null || s.model_m.Length < 3) continue;
+                    var v = new Vector3(s.model_m[0], s.model_m[1], s.model_m[2]);
+                    m_GridCv.Add(v);
+                    if (s.id == 1) m_CalPointCv = v;
+                }
+            var ci = CultureInfo.InvariantCulture;
+            m_Run.Meta("pcal_point_m", $"{m_CalPointCv.x.ToString("R", ci)} {m_CalPointCv.y.ToString("R", ci)} 0 (A40 saddle 1); grid {m_GridCv.Count} saddles");
+            m_Mark = MarkCross.Create(Campaign.Proto);
+            m_Run.Meta("pcal_participant", Campaign.ParticipantId);
+            if (m_Variant == "pcal")
+            {
+                PcalResult = null;
+                PcalTaps = new List<EyeModel.Tap>();
+                PcalText = "";
+                m_RoundL = m_RoundR = null;
+                CalText = "New calibration for " + Campaign.ParticipantId + ": taps on the top-left square pair";
+                SetMode("sdk");
+            }
+            else
+            {
+                bool ok = PersonCal.Load(Campaign.Current.participant, out m_RoundL, out m_RoundR);
+                CalText = PersonCal.Describe(Campaign.Current.participant);
+                m_Run.Meta("pcheck_model", ok ? $"L {EyeModel.Mm(m_RoundL)}, R {EyeModel.Mm(m_RoundR)}" : "none");
+                SetMode(ok ? "round" : "sdk");
+            }
+        }
+
+        /// <summary>This round's taps only, per eye (a person's own model; the device pool is left alone).</summary>
+        void PcalFit()
+        {
+            var ci = CultureInfo.InvariantCulture;
+            var l = new List<EyeModel.Tap>();
+            var r = new List<EyeModel.Tap>();
+            foreach (var t in m_RoundTaps) (t.Eye == "L" ? l : r).Add(t);
+            m_RoundL = EyeModel.Fit(l);
+            m_RoundR = EyeModel.Fit(r);
+            double ll = EyeModel.LeaveOneOutMm(l), lr = EyeModel.LeaveOneOutMm(r);
+            double sl = EyeModel.SdkMm(l), sr = EyeModel.SdkMm(r);
+            m_Run.Meta("pcal_L", $"{EyeModel.Mm(m_RoundL)}; {l.Count} taps; leave-one-out median {ll.ToString("F2", ci)} mm; SDK median {sl.ToString("F2", ci)} mm");
+            m_Run.Meta("pcal_R", $"{EyeModel.Mm(m_RoundR)}; {r.Count} taps; leave-one-out median {lr.ToString("F2", ci)} mm; SDK median {sr.ToString("F2", ci)} mm");
+            PcalTaps = new List<EyeModel.Tap>(m_RoundTaps);
+            if (m_RoundL != null && m_RoundR != null)
+            {
+                var s = new EyeModel.Saved
+                {
+                    left_taps = l.Count, right_taps = r.Count, wearings = 1, left_loo_mm = (float)ll, right_loo_mm = (float)lr,
+                    source = $"pcal {Path.GetFileName(m_Run.Dir)} on A40 saddle 1", camera = CameraName,
+                };
+                EyeModel.Fill(s, m_RoundL, m_RoundR);
+                PcalResult = s;
+                PcalText = $"Left: {l.Count} taps, fresh-tap error {ll:F1} mm (SDK {sl:F1} mm)\nRight: {r.Count} taps, fresh-tap error {lr:F1} mm (SDK {sr:F1} mm)";
+                SetMode("round");
+            }
+            else
+            {
+                PcalResult = null;
+                PcalText = $"Not enough taps with the sheet in view (left {l.Count}, right {r.Count}; 3 per eye needed): REDO";
+            }
+            CalText = PcalText;
+            m_Run.Meta("pcal_fit", PcalText.Replace("\n", " | "));
         }
 
         void MarkOnStep(string stepId)
@@ -1214,13 +1365,13 @@ namespace EyeLab.Probes
         void Apply(in Done d)
         {
             if (d.Accepted) m_LastTrustedNs = d.End;
-            if (d.Accepted && d.HeadOk && (m_Variant == "eyecal" || m_Variant == "spaam") && d.Target == "board25")
+            if (d.Accepted && d.HeadOk && (((m_Variant == "eyecal" || m_Variant == "spaam") && d.Target == "board25") || (m_Variant == "pcal" && d.Target == MarkTarget)))
             {
                 PoseOverlay.CvToUnity(d.R.R0, d.R.R1, d.R.R2, d.R.T0, d.R.T1, d.R.T2, out Vector3 bP, out Quaternion bQ);
                 PoseOverlay.NativeHeadToUnity(d.Head, out Vector3 bhP, out Quaternion bhQ);
                 PoseOverlay.InHead(m_RgbFromHead, bP, bQ, out Vector3 biP, out Quaternion biQ);
                 PoseOverlay.Chain(bhP, bhQ, null, biP, biQ, out Vector3 wP, out Quaternion wQ);
-                m_BoardCentres.Add((d.CamTs, wP + wQ * BoardCentreUnity));
+                m_BoardCentres.Add((d.CamTs, wP + wQ * (m_Variant == "pcal" ? CalPointUnity : BoardCentreUnity)));
                 if (m_BoardCentres.Count > 200) m_BoardCentres.RemoveRange(0, m_BoardCentres.Count - 200);
             }
             if (m_Overlay == null || !d.Accepted || !d.HeadOk || d.Mode == "off" || !m_OverlayOn) return;
@@ -1230,7 +1381,11 @@ namespace EyeLab.Probes
             PoseOverlay.Chain(headP, headQ, m_Offset, inP, inQ, out Vector3 p, out Quaternion q);
             if (PlanFor(m_Variant, m_Step).Mode == "off") return;   // the step changed to off while this frame ran
             if (m_Variant == "mark") m_Mark?.Place(p, q);
-            else m_Overlay.Show(d.Target, p, q, headP);
+            else
+            {
+                m_Overlay.Show(d.Target, p, q, headP);
+                if (m_Variant == "pcal" || m_Variant == "pcheck") m_Mark?.Place(p, q);   // the grid's crosshairs
+            }
             m_HasLast = true;
             m_LastTarget = d.Target;
             m_LastHeadP = headP; m_LastHeadQ = headQ; m_LastInP = inP; m_LastInQ = inQ;

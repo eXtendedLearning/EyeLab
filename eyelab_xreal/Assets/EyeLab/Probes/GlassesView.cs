@@ -14,8 +14,9 @@ namespace EyeLab.Probes
     /// <item>clears the XR camera to black (see-through);</item>
     /// <item>drives the camera from the XR head device just before rendering, so world content stays put;</item>
     /// <item>shows the status as a short head-locked line 2 m ahead, a little low;</item>
-    /// <item>puts a 40 cm square and cross 1.5 m ahead in the world when tracking first comes up: if 6DoF holds,
-    /// it stays where it is while walking around it (B2's visual check).</item>
+    /// <item>puts a 40 cm square and cross 1.5 m ahead in the world on request ("Square on/off", "Place square ahead"
+    /// on the Other runs page): if 6DoF holds, it stays where it is while walking around it (B2's visual check). Off by
+    /// default from 0.5.002 (Jack, 2026-11-26): it sat in the view during the campaign.</item>
     /// </list>
     /// </summary>
     public sealed class GlassesView : MonoBehaviour
@@ -25,6 +26,19 @@ namespace EyeLab.Probes
         RectTransform m_Bar;
         Transform m_Reference;
         bool m_Placed, m_Rendered;
+        bool m_RefOn;        // the user wants the square shown (off by default, 0.5.002)
+        bool m_OverlayLayout;
+
+        public bool ReferenceOn => m_RefOn;
+
+        /// <summary>Square on or off; on the first "on" it is placed 1.5 m ahead.</summary>
+        public void SetReference(bool on)
+        {
+            m_RefOn = on;
+            if (on && !m_Placed) { PlaceReference(); return; }
+            if (m_Reference != null && m_Placed) m_Reference.gameObject.SetActive(on && !m_OverlayLayout);
+            Debug.Log("[EyeLab probe] world reference " + (on ? "on" : "off"));
+        }
         int m_PoseFrames;
 
         /// <summary>Seconds since app start of the first glasses frame and the first head pose (T6.3: Jack saw nothing for a minute).</summary>
@@ -75,7 +89,8 @@ namespace EyeLab.Probes
         public void SetOverlayLayout(bool on)
         {
             if (m_Cue != null) m_Cue.transform.parent.localPosition = new Vector3(0f, on ? 0.36f : -0.06f, 2f);
-            if (m_Reference != null && m_Placed && m_Reference.parent != m_Cam.transform) m_Reference.gameObject.SetActive(!on);
+            m_OverlayLayout = on;
+            if (m_Reference != null && m_Placed && m_Reference.parent != m_Cam.transform) m_Reference.gameObject.SetActive(!on && m_RefOn);
         }
 
         /// <summary>Put the room-fixed square 1.5 m ahead of where the head now looks (button "Place square").</summary>
@@ -86,7 +101,8 @@ namespace EyeLab.Probes
             fwd.Normalize();
             m_Reference.position = m_Cam.transform.position + fwd * 1.5f;
             m_Reference.rotation = Quaternion.LookRotation(fwd, Vector3.up);
-            m_Reference.gameObject.SetActive(true);
+            m_RefOn = true;
+            m_Reference.gameObject.SetActive(!m_OverlayLayout);
             m_Placed = true;
             PlacedAt = Time.realtimeSinceStartup;
             Debug.Log($"[EyeLab probe] world reference placed at {m_Reference.position} (t {PlacedAt:F1} s)");
@@ -161,7 +177,6 @@ namespace EyeLab.Probes
                 FirstPoseAt = Time.realtimeSinceStartup;
                 Debug.Log($"[EyeLab probe] glasses view: head pose drives the camera from t {FirstPoseAt:F1} s");
             }
-            if (!m_Placed && m_PoseFrames > 30) PlaceReference();   // let tracking settle for about half a second
         }
 
         Text HeadLockedText(Font font)

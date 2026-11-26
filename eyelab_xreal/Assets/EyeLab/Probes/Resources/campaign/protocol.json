@@ -9,6 +9,7 @@
  "cross_line_mm": 1.2,
  "cross_depth_mm": 0.5,
  "cross_rgb": [0.35, 1.0, 0.45],
- "display_ar": "all",
+ "display_ar": "person",
+ "sdk_participants": [13],
  "speak_numbers": true
 }

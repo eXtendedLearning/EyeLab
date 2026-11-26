@@ -273,6 +273,28 @@ namespace EyeLab.Probes
             return worst;
         }
 
+        /// <summary>The parameters of one eye ("L" or "R") back from a saved model (inverse of <see cref="Fill"/>).</summary>
+        public static double[] FromSaved(Saved s, string eye)
+        {
+            double T(float deg) => Math.Tan(deg * Math.PI / 180);
+            return eye == "L"
+                ? new double[] { s.left_cx_mm / 1000.0, s.left_cy_mm / 1000.0, s.left_cz_mm / 1000.0, s.left_scale, T(s.left_px_deg), T(s.left_py_deg) }
+                : new double[] { s.right_cx_mm / 1000.0, s.right_cy_mm / 1000.0, s.right_cz_mm / 1000.0, s.right_scale, T(s.right_px_deg), T(s.right_py_deg) };
+        }
+
+        /// <summary>Taps written to <paramref name="path"/> (replacing it) in the store's format.</summary>
+        public static void WriteTaps(string path, IEnumerable<Tap> taps)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            var ci = CultureInfo.InvariantCulture;
+            var b = new StringBuilder(TapsHeader).Append('\n');
+            foreach (Tap t in taps)
+                b.Append(string.Join(",", t.Wearing, t.Camera, t.Eye, t.Step, t.Px.ToString("R", ci), t.Py.ToString("R", ci), t.Pz.ToString("R", ci),
+                                     t.U.ToString("R", ci), t.V.ToString("R", ci))).Append('\n');
+            if (File.Exists(path)) File.Delete(path);   // a pushed file may be the shell's; the folder is the app's
+            File.WriteAllText(path, b.ToString());
+        }
+
         public static void Fill(Saved s, double[] l, double[] r)
         {
             s.left_cx_mm = (float)(l[0] * 1000); s.left_cy_mm = (float)(l[1] * 1000); s.left_cz_mm = (float)(l[2] * 1000);
