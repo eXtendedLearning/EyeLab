@@ -8,7 +8,7 @@ Versions are `MAJOR.MINOR.BUILD` (e.g. `0.2.014`): BUILD is a development counte
 Versioning (zero-padded BUILD). The source is `python/eyelab_version.py`;
 policy in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Current build: <!-- eyelab-version -->0.5.007<!-- /eyelab-version -->** (stamped by
+**Current build: <!-- eyelab-version -->0.5.008<!-- /eyelab-version -->** (stamped by
 `tools/bump_version.py`; do not edit by hand). Builds before 0.2.001 carried no number.
 New entries under `[Unreleased]` may be tagged with the build that introduced
 them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014 "`.
@@ -21,6 +21,10 @@ them, e.g. `(0.2.014)`, so a feature can be found with `git log --grep "^0.2.014
   hung ("SyncClose Wait Timeout"). The Eye camera is now started once (`EyeCamera`) and never stopped (T7.0 §14.8).
 
 ### Changed
+
+- (0.5.008) Beam Pro participant calibration on seven A40 points (corners, middles, one near the centre),
+  left then right eye, crosshair at ±5° by ±3° and the centre, one distance (40 cm): in T01-T03 every target was hit
+  within 4° of the display centre, where the old taps (±8°, ±4°, one point) never put the crosshair (T7.0 §14.11).
 
 - (0.5.007) Rotation test T03 (P13, personal calibration): median 4.02 mm, R95 5.72 mm; with the sheet turned the
   errors stay together in neither the sheet nor the viewer frame, so there is no constant offset to remove; about 3 mm

@@ -368,9 +368,46 @@ namespace EyeLab.Probes
         }
 
         // ------------------------------------------------------------------ 0.5.002 (pcal, pcheck): per participant on A40
-        /// <summary>The A40 sheet flat on the table; the tap point is grid saddle 1, where the top-left pair of black squares
-        /// touch. Two viewing distances: about 35 cm (bent over the sheet, as when hitting) and 60 cm (standing).</summary>
-        public static readonly int[] PcalDepthsCm = { 35, 60 };
+        /// <summary>One calibration point (0.5.008): an A40 grid saddle (where two black squares touch) and where its crosshair
+        /// sits in the display (degrees; + = right, up).</summary>
+        public readonly struct PcalPoint
+        {
+            public readonly int Saddle;
+            public readonly string Name, Say;
+            public readonly Vector2 Deg;
+            public PcalPoint(int saddle, string name, string say, Vector2 deg) { Saddle = saddle; Name = name; Say = say; Deg = deg; }
+        }
+
+        /// <summary>
+        /// 0.5.008 (Jack, after T01-T03): seven points over the A40 grid instead of one. In T01-T03 every target was hit with
+        /// it within 4 degrees of the display centre (u -4..0, v -2.5..+3.5), while 0.5.003's taps put the crosshair only at
+        /// (±8, ±4) degrees on the top-left pair. Now the six outer points of the 5 x 4 grid (top left, middle, right; bottom
+        /// right, middle, left) and one near the centre, each with the crosshair where that point appears when looking at the
+        /// middle of the sheet (±5 by ±3 degrees, the centre at 0, 0), at the hitting distance. A display model has no
+        /// depth term (eye positions are the SDK's), so one distance is enough.
+        /// </summary>
+        public static readonly PcalPoint[] PcalPoints =
+        {
+            new PcalPoint(1, "top left", "the top left pair", new Vector2(-5f, 3f)),
+            new PcalPoint(3, "top middle", "the top middle pair", new Vector2(0f, 3f)),
+            new PcalPoint(5, "top right", "the top right pair", new Vector2(5f, 3f)),
+            new PcalPoint(20, "bottom right", "the bottom right pair", new Vector2(5f, -3f)),
+            new PcalPoint(18, "bottom middle", "the bottom middle pair", new Vector2(0f, -3f)),
+            new PcalPoint(16, "bottom left", "the bottom left pair", new Vector2(-5f, -3f)),
+            new PcalPoint(8, "centre", "the middle pair of the second row", new Vector2(0f, 0f)),
+        };
+
+        /// <summary>"p3_L": point 3 (1-based), left eye.</summary>
+        static bool PcalStep(string stepId, out int k, out string eye)
+        {
+            k = 0;
+            eye = "";
+            string[] parts = (stepId ?? "").Split('_');
+            if (parts.Length != 2 || parts[0].Length < 2 || parts[0][0] != 'p' || (parts[1] != "L" && parts[1] != "R")) return false;
+            if (!int.TryParse(parts[0].Substring(1), NumberStyles.Integer, CultureInfo.InvariantCulture, out k) || k < 1 || k > PcalPoints.Length) return false;
+            eye = parts[1];
+            return true;
+        }
 
         static List<CueStep> PcalCheckCues() => new List<CueStep>
         {
@@ -385,25 +422,23 @@ namespace EyeLab.Probes
         {
             var c = new List<CueStep>
             {
-                new CueStep("s_ready", "Calibration. The A40 sheet flat on the glass. You will put a green crosshair on the point where the two " +
-                                       "black squares at the top left touch, one eye at a time, and tap the screen.", 14f,
-                            "A40 flat: top-left pair of squares", ticks: true),
+                new CueStep("s_ready", "Calibration. The A40 sheet flat on the glass. Seven points where two black squares touch, " +
+                                       "each with the left eye, then the right eye. Put the crosshair centre on the point and tap the screen.", 14f,
+                            "A40 flat: 7 square pairs, left eye then right eye", ticks: true),
+                new CueStep("p_place", "Stand where you hit from, bent over the sheet at about forty centimetres, as when hitting.", 10f,
+                            "Sheet at about 40 cm, as when hitting", ticks: true),
             };
-            foreach (int cm in PcalDepthsCm)
+            for (int k = 1; k <= PcalPoints.Length; k++)
             {
-                string words = cm == 35 ? "thirty five centimetres, bent over it as when hitting" : "sixty centimetres, standing";
-                c.Add(new CueStep($"d{cm}_place", $"Look at the sheet from about {words}.", 10f, $"Sheet at about {cm} cm", ticks: true));
+                PcalPoint pt = PcalPoints[k - 1];
                 foreach (string eye in new[] { "L", "R" })
                 {
                     string name = eye == "L" ? "Left" : "Right", other = eye == "L" ? "right" : "left";
-                    for (int k = 1; k <= SpaamPerEye; k++)
-                    {
-                        string say = k == 1
-                            ? $"{name} eye. Close your {other} eye. Move your head until the crosshair centre is where the two top left squares touch, then tap."
-                            : "Next.";
-                        c.Add(new CueStep($"d{cm}_{eye}_{k}", say, SpaamTapTimeout,
-                                          $"{name.ToUpperInvariant()} eye: crosshair on the top-left square pair, TAP ({k}/{SpaamPerEye})"));
-                    }
+                    string say = k == 1 && eye == "L"
+                        ? $"{pt.Say}. Left eye: close your right eye. Move your head until the crosshair centre is where the two squares touch, then tap."
+                        : eye == "L" ? $"{pt.Say}. Left eye." : $"Same point. Right eye: close your left eye.";
+                    c.Add(new CueStep($"p{k}_{eye}", say, SpaamTapTimeout,
+                                      $"{pt.Name.ToUpperInvariant()} pair: {name.ToUpperInvariant()} eye ({other} closed), crosshair on it, TAP ({k}/{PcalPoints.Length})"));
                 }
             }
             c.Add(new CueStep(FitStep, "Fitting your eyes. The result is on the screen.", 8f, "Fitting: see the Beam Pro screen"));
@@ -430,6 +465,7 @@ namespace EyeLab.Probes
             eye = "";
             deg = Vector2.zero;
             if (stepId == "chk_L") { eye = "L"; return true; }
+            if (PcalStep(stepId, out int pk, out string pe)) { eye = pe; deg = PcalPoints[pk - 1].Deg; return true; }
             string[] parts = (stepId ?? "").Split('_');
             if (parts.Length != 3 || parts[0].Length < 2 || parts[0][0] != 'd' || (parts[1] != "L" && parts[1] != "R")) return false;
             if (!int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int k) || k < 1 || k > SpaamCrosshair.Positions.Length) return false;
@@ -748,6 +784,12 @@ namespace EyeLab.Probes
                 m_OverlayOn = CheckStep(stepId);
                 if (!m_OverlayOn) m_Overlay?.Hide();
                 if (m_Variant == "pcal" || m_Variant == "pcheck") m_Mark?.SetPoints(m_OverlayOn ? m_GridCv : null);
+                if (m_Variant == "pcal" && PcalStep(stepId, out int pk, out _) && m_SaddlesCv.TryGetValue(PcalPoints[pk - 1].Saddle, out Vector3 sv))
+                {
+                    // 0.5.008: this step's point; the tap takes the median of the last 2 s, so the previous point's samples go
+                    if (sv != m_CalPointCv) m_BoardCentres.Clear();
+                    m_CalPointCv = sv;
+                }
                 if (stepId == FitStep) { if (m_Variant == "pcal") PcalFit(); else Fit(); }
             }
             if (m_Cross == null) return;
@@ -845,7 +887,7 @@ namespace EyeLab.Probes
             {
                 p.m_Cross = SpaamCrosshair.Create(run);
                 string real = p.m_Variant == "pcal"
-                    ? $"plate_A40 grid saddle 1, top-left pair of squares ({p.m_CalPointCv.x:F4}, {p.m_CalPointCv.y:F4}, {p.m_CalPointCv.z:F4}) m in the sheet frame"
+                    ? "plate_A40 grid saddles, one per step, crosshair positions per point (pcal_points)"
                     : $"board25 centre of the middle square ({p.BoardCentreText}) m in the board frame";
                 run.Meta("spaam", $"crosshair at {SpaamCrosshair.DistanceM} m along (tan x, tan y, 1) in the SDK eye's frame; positions (deg) " +
                                   string.Join(" ", Array.ConvertAll(SpaamCrosshair.Positions, v => $"({v.x:F0},{v.y:F0})")) +
@@ -1205,6 +1247,7 @@ namespace EyeLab.Probes
         Vector3 m_CalPointCv = new Vector3(-0.08f, 0.06f, 0f);   // A40 grid saddle 1 (sheet frame), from Resources/campaign/sheets/A40
         Vector3 CalPointUnity => new Vector3(m_CalPointCv.x, -m_CalPointCv.y, m_CalPointCv.z);   // F applied
         readonly List<Vector3> m_GridCv = new List<Vector3>();
+        readonly Dictionary<int, Vector3> m_SaddlesCv = new Dictionary<int, Vector3>();
 
         /// <summary>The finished pcal's model and taps, for the Save / Redo page (null until a fit succeeded).</summary>
         public static EyeModel.Saved PcalResult { get; private set; }
@@ -1221,10 +1264,20 @@ namespace EyeLab.Probes
                     if (s.model_m == null || s.model_m.Length < 3) continue;
                     var v = new Vector3(s.model_m[0], s.model_m[1], s.model_m[2]);
                     m_GridCv.Add(v);
+                    m_SaddlesCv[s.id] = v;
                     if (s.id == 1) m_CalPointCv = v;
                 }
             var ci = CultureInfo.InvariantCulture;
-            m_Run.Meta("pcal_point_m", $"{m_CalPointCv.x.ToString("R", ci)} {m_CalPointCv.y.ToString("R", ci)} 0 (A40 saddle 1); grid {m_GridCv.Count} saddles");
+            var pts = new StringBuilder();
+            for (int k = 0; k < PcalPoints.Length; k++)
+            {
+                PcalPoint pt = PcalPoints[k];
+                bool has = m_SaddlesCv.TryGetValue(pt.Saddle, out Vector3 v);
+                pts.Append($"{(k > 0 ? "; " : "")}p{k + 1} {pt.Name} saddle {pt.Saddle} " + (has ? $"({v.x.ToString("R", ci)} {v.y.ToString("R", ci)})" : "MISSING") +
+                           $" at ({pt.Deg.x.ToString("R", ci)}, {pt.Deg.y.ToString("R", ci)}) deg");
+            }
+            m_Run.Meta("pcal_points", pts.ToString());
+            m_Run.Meta("pcal_point_m", $"{m_CalPointCv.x.ToString("R", ci)} {m_CalPointCv.y.ToString("R", ci)} 0 (A40 saddle 1, the first point); grid {m_GridCv.Count} saddles");
             m_Mark = MarkCross.Create(Campaign.Proto);
             m_Run.Meta("pcal_participant", Campaign.ParticipantId);
             if (m_Variant == "pcal")
@@ -1233,7 +1286,7 @@ namespace EyeLab.Probes
                 PcalTaps = new List<EyeModel.Tap>();
                 PcalText = "";
                 m_RoundL = m_RoundR = null;
-                CalText = "New calibration for " + Campaign.ParticipantId + ": taps on the top-left square pair";
+                CalText = "New calibration for " + Campaign.ParticipantId + ": " + PcalPoints.Length + " square pairs, left eye then right eye";
                 SetMode("sdk");
             }
             else
@@ -1264,7 +1317,7 @@ namespace EyeLab.Probes
                 var s = new EyeModel.Saved
                 {
                     left_taps = l.Count, right_taps = r.Count, wearings = 1, left_loo_mm = (float)ll, right_loo_mm = (float)lr,
-                    source = $"pcal {Path.GetFileName(m_Run.Dir)} on A40 saddle 1", camera = CameraName,
+                    source = $"pcal {Path.GetFileName(m_Run.Dir)} on A40, {PcalPoints.Length} saddles", camera = CameraName,
                 };
                 EyeModel.Fill(s, m_RoundL, m_RoundR);
                 PcalResult = s;

@@ -846,7 +846,7 @@ namespace EyeLab.Probes
             Transform r1 = Row(m_CalPage.transform);
             AddAction(font, "Participant -", () => { Campaign.SetParticipant(-1); RefreshCal(); }, grey, r1);
             AddAction(font, "Participant +", () => { Campaign.SetParticipant(+1); RefreshCal(); }, grey, r1);
-            AddAction(font, "NEW CALIBRATION on A40  (about 4 min)", () => { if (!m_Busy) StartCoroutine(RunProbe(new ProbeConfig { probe = "pcal" })); }, green, m_CalPage);
+            AddAction(font, "NEW CALIBRATION on A40, 7 points  (about 4 min)", () => { if (!m_Busy) StartCoroutine(RunProbe(new ProbeConfig { probe = "pcal" })); }, green, m_CalPage);
             AddAction(font, "LOAD + CHECK saved calibration  (2 min)", () =>
             {
                 if (m_Busy) return;
@@ -891,7 +891,7 @@ namespace EyeLab.Probes
             if (m_ChoiceLabel != null)
                 m_ChoiceLabel.text = "AR display for " + Campaign.ParticipantId + ": " + (pool ? "DEVICE POOL (tap for personal)" : "PERSONAL calibration (tap for device pool)");
             m_CalInfo.text = "Participant " + Campaign.ParticipantId + "\n" + PersonCal.Describe(pt) + (pool ? "  |  AR uses the device pool" : "") +
-                             "\nA40 flat on the glass. NEW: crosshair taps on the top-left square pair, then a check on the whole sheet.";
+                             "\nA40 flat on the glass. NEW: crosshair taps on 7 square pairs (corners, middles, centre) at about 40 cm, then a check on the whole sheet.";
         }
 
         void RefreshCalResult()
